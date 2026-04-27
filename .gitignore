@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.vitest/
+*.log
+*.tmp
+*.changes
+*.image

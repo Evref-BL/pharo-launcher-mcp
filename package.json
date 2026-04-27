@@ -1,0 +1,52 @@
+{
+  "name": "@evref-bl/pharo-launcher-mcp",
+  "version": "0.1.1",
+  "description": "MCP server for controlling Pharo Launcher images, templates, VMs, and processes.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "mcp",
+    "pharo",
+    "pharo-launcher",
+    "pharolauncher",
+    "smalltalk"
+  ],
+  "bin": {
+    "pharo-launcher-mcp": "dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "bin",
+    "docs/development.md",
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run test:unit",
+    "test:unit": "vitest run --exclude src/**/*.integration.test.ts",
+    "test:integration": "vitest run src/integration/live.integration.test.ts src/integration/lifecycle.integration.test.ts --testTimeout=900000",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "verify:env": "powershell -ExecutionPolicy Bypass -File ./scripts/verify-environment.ps1",
+    "live:profile": "powershell -ExecutionPolicy Bypass -File ./scripts/prepare-live-profile.ps1",
+    "live:smoke": "powershell -ExecutionPolicy Bypass -File ./scripts/live-smoke.ps1"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  }
+}
