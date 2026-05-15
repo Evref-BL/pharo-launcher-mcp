@@ -35,7 +35,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run test:unit",
     "test:unit": "vitest run --exclude src/**/*.integration.test.ts",
-    "test:integration": "vitest run src/integration/live.integration.test.ts src/integration/lifecycle.integration.test.ts --testTimeout=900000",
+    "test:integration": "vitest run src/integration/live.integration.test.ts src/integration/lifecycle.integration.test.ts src/integration/copy.integration.test.ts --testTimeout=900000",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "verify:env": "powershell -ExecutionPolicy Bypass -File ./scripts/verify-environment.ps1",
     "live:profile": "powershell -ExecutionPolicy Bypass -File ./scripts/prepare-live-profile.ps1",

@@ -132,6 +132,52 @@ describe("result normalizer", () => {
     });
   });
 
+  it("uses the list name filter when PharoLauncher omits image file metadata", () => {
+    const result = normalizeLauncherResult(
+      "pharo_launcher_image_list",
+      ["image", "list", "--nameFilter", "MCP13Copy", "--ston"],
+      {
+        ...cliResult,
+        stdout:
+          "OrderedCollection[PhLImage{#originTemplate:PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']},#launchConfigurations:OrderedCollection[],#shouldRunInitializationScript:true}]",
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: [
+        {
+          name: "MCP13Copy",
+          originTemplate: {
+            name: "Pharo 13.0 - 64bit (stable)",
+          },
+        },
+      ],
+    });
+  });
+
+  it("uses the image info argument when PharoLauncher omits image file metadata", () => {
+    const result = normalizeLauncherResult(
+      "pharo_launcher_image_info",
+      ["image", "info", "--ston", "MCP13Copy"],
+      {
+        ...cliResult,
+        stdout:
+          "OrderedCollection[PhLImage{#originTemplate:PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']},#launchConfigurations:OrderedCollection[],#shouldRunInitializationScript:true}]",
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        name: "MCP13Copy",
+        originTemplate: {
+          name: "Pharo 13.0 - 64bit (stable)",
+        },
+      },
+    });
+  });
+
   it("extracts LauncherTemplate models", () => {
     const templates = parseLauncherTemplatesFromSton(
       "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']}]",

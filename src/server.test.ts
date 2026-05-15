@@ -7,6 +7,9 @@ function parseJsonResult(result: Awaited<ReturnType<typeof callTool>>) {
 }
 
 describe("callTool", () => {
+  const taskImageSton =
+    "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13',#url:URL['https://example.test/latest.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['Task','Task.image']}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'130-x64'}}]}]";
+
   it("returns health without invoking PharoLauncher", async () => {
     const runner: LauncherCliRunner = async () => {
       throw new Error("runner should not be called");
@@ -63,14 +66,17 @@ describe("callTool", () => {
     expect(body.ok).toBe(false);
   });
 
-  it("runs typed launcher tools through the runner", async () => {
+  it("verifies copied images with list and info before reporting success", async () => {
     const calls: readonly string[][] = [];
     const runner: LauncherCliRunner = async (args) => {
       (calls as string[][]).push([...args]);
 
       return {
         exitCode: 0,
-        stdout: "[]",
+        stdout:
+          args[0] === "image" && args[1] === "copy"
+            ? "Copied"
+            : taskImageSton,
         stderr: "",
         durationMs: 4,
         timedOut: false,
@@ -95,7 +101,7 @@ describe("callTool", () => {
         format: "text",
       },
       raw: {
-        stdout: "[]",
+        stdout: "Copied",
         stderr: "",
         format: "text",
       },
@@ -104,8 +110,128 @@ describe("callTool", () => {
         durationMs: 4,
         exitCode: 0,
       },
+      data: {
+        message: "Copied",
+        targetImageName: "Task",
+        listedImage: {
+          name: "Task",
+        },
+        inspectedImage: {
+          name: "Task",
+        },
+      },
+      copyVerification: {
+        ok: true,
+        targetImageName: "Task",
+        attempts: 1,
+      },
     });
-    expect(calls).toEqual([["image", "copy", "Base", "Task"]]);
+    expect(calls).toEqual([
+      ["image", "copy", "Base", "Task"],
+      ["image", "list", "--nameFilter", "Task", "--ston"],
+      ["image", "info", "--ston", "Task"],
+    ]);
+  });
+
+  it("fails copied images that are not discoverable", async () => {
+    const calls: readonly string[][] = [];
+    const runner: LauncherCliRunner = async (args) => {
+      (calls as string[][]).push([...args]);
+
+      return {
+        exitCode: 0,
+        stdout:
+          args[0] === "image" && args[1] === "copy"
+            ? "Copied"
+            : "OrderedCollection[]",
+        stderr: "",
+        durationMs: 4,
+        timedOut: false,
+      };
+    };
+
+    const result = await callTool(
+      "pharo_launcher_image_copy",
+      {
+        imageName: "Base",
+        newImageName: "Task",
+      },
+      {
+        runner,
+        imageCopyVerificationTimeoutMs: 0,
+        imageCopyVerificationPollMs: 0,
+      },
+    );
+    const body = parseJsonResult(result);
+
+    expect(result.isError).toBe(true);
+    expect(body).toMatchObject({
+      ok: false,
+      diagnostic:
+        "Image copy command exited successfully, but target image Task was not listable and inspectable: Copied image did not appear in image list.",
+      raw: {
+        stdout: "Copied",
+        stderr: "",
+      },
+      copyVerification: {
+        ok: false,
+        targetImageName: "Task",
+        attempts: 1,
+        list: {
+          ok: true,
+          data: [],
+          raw: {
+            stdout: "OrderedCollection[]",
+          },
+        },
+      },
+    });
+    expect(calls).toEqual([
+      ["image", "copy", "Base", "Task"],
+      ["image", "list", "--nameFilter", "Task", "--ston"],
+    ]);
+  });
+
+  it("runs typed launcher read tools through the runner", async () => {
+    const calls: readonly string[][] = [];
+    const runner: LauncherCliRunner = async (args) => {
+      (calls as string[][]).push([...args]);
+
+      return {
+        exitCode: 0,
+        stdout: "[]",
+        stderr: "",
+        durationMs: 4,
+        timedOut: false,
+      };
+    };
+
+    const result = await callTool(
+      "pharo_launcher_image_list",
+      { format: "ston" },
+      { runner },
+    );
+
+    expect(result.isError).toBeUndefined();
+    const body = parseJsonResult(result);
+    expect(body).toMatchObject({
+      ok: true,
+      parser: {
+        status: "parsed",
+        format: "ston",
+      },
+      raw: {
+        stdout: "[]",
+        stderr: "",
+        format: "ston",
+      },
+      command: {
+        args: ["image", "list", "--ston"],
+        durationMs: 4,
+        exitCode: 0,
+      },
+    });
+    expect(calls).toEqual([["image", "list", "--ston"]]);
   });
 
   it("returns normalized data for read tools", async () => {
