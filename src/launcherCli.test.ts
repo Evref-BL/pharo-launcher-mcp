@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { PharoLauncherConfig } from "./config.js";
-import { buildLauncherCliInvocation, runLauncherCli } from "./launcherCli.js";
+import {
+  buildLauncherCliInvocation,
+  isDetachedImageLaunch,
+  launcherArgsForDetachedImageLaunch,
+  runLauncherCli,
+} from "./launcherCli.js";
 
 function launcherConfig(
   config: Omit<PharoLauncherConfig, "installationLauncherImage">,
@@ -161,6 +166,27 @@ describe("buildLauncherCliInvocation", () => {
     expect(invocation.env.PHARO_LAUNCHER_MCP_IMAGES_DIR).toBe(
       "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated\\images",
     );
+  });
+
+  it("recognizes and strips launcher detached image launches for process-level detaching", () => {
+    const args = [
+      "image",
+      "launch",
+      "--script",
+      "bootstrap.st",
+      "--detached",
+      "Task",
+    ];
+
+    expect(isDetachedImageLaunch(args)).toBe(true);
+    expect(launcherArgsForDetachedImageLaunch(args)).toEqual([
+      "image",
+      "launch",
+      "--script",
+      "bootstrap.st",
+      "Task",
+    ]);
+    expect(isDetachedImageLaunch(["image", "list"])).toBe(false);
   });
 
   it("captures stdout, stderr, exit code, and duration", async () => {

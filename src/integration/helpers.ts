@@ -6,6 +6,7 @@ import {
   loadPharoLauncherConfig,
   type PharoLauncherConfig,
 } from "../config.js";
+import { defaultLauncherDir as platformDefaultLauncherDir } from "../platform.js";
 import { callTool, type CallToolOptions } from "../server.js";
 
 export interface IntegrationProfile {
@@ -19,19 +20,7 @@ export interface ParsedToolResult {
 }
 
 function defaultLauncherDir(): string {
-  if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA;
-    if (localAppData) {
-      return path.join(localAppData, "Pharo Launcher");
-    }
-
-    const userProfile = process.env.USERPROFILE;
-    if (userProfile) {
-      return path.join(userProfile, "AppData", "Local", "Pharo Launcher");
-    }
-  }
-
-  return path.join(os.homedir(), ".local", "share", "Pharo Launcher");
+  return platformDefaultLauncherDir(process.env, process.platform);
 }
 
 function copyIfExists(source: string, destination: string): void {

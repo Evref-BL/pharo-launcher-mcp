@@ -65,6 +65,20 @@ function scriptCommandAndArgs(
   };
 }
 
+export function isDetachedImageLaunch(args: readonly string[]): boolean {
+  return (
+    args[0] === "image" &&
+    args[1] === "launch" &&
+    args.includes("--detached")
+  );
+}
+
+export function launcherArgsForDetachedImageLaunch(
+  args: readonly string[],
+): string[] {
+  return args.filter((arg) => arg !== "--detached");
+}
+
 export function buildLauncherCliInvocation(
   args: readonly string[],
   config: PharoLauncherConfig = loadPharoLauncherConfig(),
@@ -136,10 +150,33 @@ export function runLauncherCli(
 ): Promise<LauncherCliResult> {
   const timeoutMs = options.timeoutMs ?? 30_000;
   const startTime = Date.now();
+  const detachedImageLaunch = isDetachedImageLaunch(args);
+  const invocationArgs = detachedImageLaunch
+    ? launcherArgsForDetachedImageLaunch(args)
+    : args;
   const invocation = buildLauncherCliInvocation(
-    args,
+    invocationArgs,
     options.config ?? loadPharoLauncherConfig(),
   );
+
+  if (detachedImageLaunch) {
+    const child = spawn(invocation.command, invocation.args, {
+      cwd: invocation.cwd,
+      env: invocation.env,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+
+    return Promise.resolve({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      durationMs: Date.now() - startTime,
+      timedOut: false,
+    });
+  }
 
   return new Promise((resolve, reject) => {
     const child = spawn(invocation.command, invocation.args, {
