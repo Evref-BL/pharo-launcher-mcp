@@ -149,12 +149,11 @@ Refresh the copied launcher control image:
 These helpers are not a substitute for cross-platform verification on macOS and
 Linux.
 
-## DevNexus Runner Safety
+## Cleanup Hook Boundary
 
 Use `docs/cleanup-hook-boundary.md` when mapping launcher status, stop,
-timeout, and cleanup hooks for DevNexus-controlled live smoke tests. That
-boundary distinguishes read-only planning checks from host inspection and
-mutation.
+timeout, and cleanup hooks for isolated live checks. That boundary
+distinguishes read-only planning checks from host inspection and mutation.
 
 ## Local Probes
 

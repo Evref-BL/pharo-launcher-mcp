@@ -1,8 +1,9 @@
-# Cleanup Hook Boundary For DevNexus Runner Safety
+# Cleanup Hook Boundary
 
-This boundary maps which pharo-launcher-mcp surfaces can be used by a future
-DevNexus isolated runner. It does not authorize a live image launch in the
-current dogfood cycle.
+This boundary maps pharo-launcher-mcp status, timeout, stop, and cleanup
+surfaces for caller-managed isolated live checks. It documents the launcher
+server's contract only; callers own higher-level project policy, approval,
+artifact retention, and cleanup orchestration.
 
 ## Read-Only Inspection
 
@@ -18,7 +19,7 @@ These checks are safe for planning and static verification:
   invoking Pharo Launcher
 
 These checks inspect the host or invoke Pharo Launcher and therefore need an
-explicit runner approval in DevNexus dogfood cycles:
+explicit approval from the caller before they run:
 
 - `pharo_launcher_version`
 - `pharo_launcher_validate_installation`
@@ -30,7 +31,7 @@ They are non-mutating, but they still cross the live host boundary.
 
 ## Status Signals
 
-The existing launcher result envelope carries the status data a runner needs:
+The existing launcher result envelope carries status data for callers:
 
 - `ok`
 - `parser.status`
@@ -41,7 +42,7 @@ The existing launcher result envelope carries the status data a runner needs:
 - command `timedOut`
 - optional `timeoutReason`
 
-For cleanup decisions, a runner must prefer normalized image and process data.
+For cleanup decisions, callers must prefer normalized image and process data.
 Raw output is diagnostic evidence, not ownership proof.
 
 ## Stop And Cleanup Hooks
@@ -52,23 +53,23 @@ The mutation hooks that can participate in cleanup are:
 - `pharo_launcher_image_delete` with `confirm: true`
 - `pharo_launcher_image_recreate` with `confirm: true`, only for explicitly
   disposable images
-- profile-root cleanup by the runner after logs and diagnostics are retained
+- profile-root cleanup by the caller after logs and diagnostics are retained
 
-The runner must pass either a recorded pid or an owned image name. Ambiguous
+The caller must pass either a recorded pid or an owned image name. Ambiguous
 cleanup input is not allowed. It must never use these hooks against the user's
 source image, default profile, unrelated images, unrelated VMs, or a process
 that cannot be tied to the smoke run.
 
 ## Timeout Boundary
 
-Every launcher call must have a bounded timeout supplied by the runner or by
-the server default. A timeout means the runner records the phase as failed,
+Every launcher call must have a bounded timeout supplied by the caller or by
+the server default. A timeout means the caller records the phase as failed,
 retains command metadata, and continues with owned cleanup. A timeout does not
 authorize broader host cleanup.
 
 ## Profile And Artifact Boundary
 
-A future runner must use a disposable profile rooted by
+A future isolated live check must use a disposable profile rooted by
 `PHARO_LAUNCHER_MCP_STATE_ROOT` or the explicit profile path variables:
 
 - `PHARO_LAUNCHER_MCP_LAUNCHER_IMAGE`
@@ -83,11 +84,11 @@ pids, and timeout reasons before deleting disposable directories.
 
 ## Follow-Up Policy
 
-No launcher-side blocking hook gap is currently identified for an isolated
-PLexus smoke. pharo-launcher-mcp exposes the needed status, timeout, image
-delete, and process kill primitives. PLexus or DevNexus must still orchestrate
-ownership, approval, artifact retention, and idempotent cleanup.
+No launcher-side blocking hook gap is currently identified for caller-managed
+isolated live checks. pharo-launcher-mcp exposes the needed status, timeout,
+image delete, and process kill primitives. Callers still own higher-level
+ownership, approval, artifact retention, and idempotent cleanup policy.
 
-If a future runner needs one atomic cleanup/report command instead of composing
-the existing primitives, create a pharo-launcher-mcp follow-up work item before
-enabling the live smoke. Do not bypass the safety gate with raw host commands.
+If a future caller needs one atomic cleanup/report command instead of composing
+the existing primitives, create a pharo-launcher-mcp follow-up work item. Do
+not bypass the safety gate with raw host commands.
