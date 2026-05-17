@@ -26,6 +26,15 @@ export interface PharoLauncherConfig {
   profile?: PharoLauncherProfileConfig;
 }
 
+function isAbsolutePlatformPath(
+  value: string,
+  platform: NodeJS.Platform,
+): boolean {
+  return platform === "win32"
+    ? path.win32.isAbsolute(value)
+    : path.posix.isAbsolute(value);
+}
+
 function shouldUseProfile(env: NodeJS.ProcessEnv): boolean {
   return Boolean(
     env.PHARO_LAUNCHER_MCP_PROFILE ||
@@ -37,6 +46,37 @@ function shouldUseProfile(env: NodeJS.ProcessEnv): boolean {
       env.PHARO_LAUNCHER_MCP_INIT_SCRIPTS_DIR ||
       env.PHARO_LAUNCHER_MCP_LOGS_DIR,
   );
+}
+
+function profileLauncherConfigurationPath(
+  profile: PharoLauncherProfileConfig,
+  platform: NodeJS.Platform,
+): string {
+  return joinPlatformPath(
+    platform,
+    profile.stateRoot,
+    "launcher",
+    "pharo-launcher-cli-config.ston",
+  );
+}
+
+function launcherConfigurationPath(
+  env: NodeJS.ProcessEnv,
+  profile: PharoLauncherProfileConfig | undefined,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const configured = env.PHARO_LAUNCHER_MCP_LAUNCHER_CONFIGURATION;
+  if (!configured) {
+    return profile
+      ? profileLauncherConfigurationPath(profile, platform)
+      : undefined;
+  }
+
+  if (profile && !isAbsolutePlatformPath(configured, platform)) {
+    return joinPlatformPath(platform, profile.stateRoot, "launcher", configured);
+  }
+
+  return configured;
 }
 
 function loadProfileConfig(
@@ -88,6 +128,11 @@ export function loadPharoLauncherConfig(
     env.PHARO_LAUNCHER_IMAGE ??
     joinPlatformPath(platform, launcherDir, "PharoLauncher.image");
   const profile = loadProfileConfig(env, platform);
+  const launcherConfiguration = launcherConfigurationPath(
+    env,
+    profile,
+    platform,
+  );
 
   return {
     launcherDir,
@@ -97,12 +142,7 @@ export function loadPharoLauncherConfig(
     ...(env.PHARO_LAUNCHER_SCRIPT
       ? { launcherScript: env.PHARO_LAUNCHER_SCRIPT }
       : {}),
-    ...(env.PHARO_LAUNCHER_MCP_LAUNCHER_CONFIGURATION
-      ? {
-          launcherConfiguration:
-            env.PHARO_LAUNCHER_MCP_LAUNCHER_CONFIGURATION,
-        }
-      : {}),
+    ...(launcherConfiguration ? { launcherConfiguration } : {}),
     ...(profile ? { profile } : {}),
   };
 }

@@ -27,6 +27,7 @@ $sourceChanges = [System.IO.Path]::ChangeExtension($sourceImage, ".changes")
 $launcherProfileDir = Join-Path $StateRoot "launcher"
 $profileImage = Join-Path $launcherProfileDir "PharoLauncher.image"
 $profileChanges = [System.IO.Path]::ChangeExtension($profileImage, ".changes")
+$profileConfiguration = Join-Path $launcherProfileDir "pharo-launcher-cli-config.ston"
 
 $profileDirs = @(
   $StateRoot,
@@ -79,6 +80,7 @@ $envFile = Join-Path $StateRoot "profile.env.ps1"
 `$env:PHARO_LAUNCHER_MCP_TEMPLATE_SOURCES_DIR="$(Join-Path $StateRoot "templates")"
 `$env:PHARO_LAUNCHER_MCP_INIT_SCRIPTS_DIR="$(Join-Path $StateRoot "init-scripts")"
 `$env:PHARO_LAUNCHER_MCP_LOGS_DIR="$(Join-Path $StateRoot "logs")"
+`$env:PHARO_LAUNCHER_MCP_LAUNCHER_CONFIGURATION="$profileConfiguration"
 "@ | Set-Content -LiteralPath $envFile -Encoding UTF8
 
 Write-Host ""

@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import {
   loadPharoLauncherConfig,
+  type PharoLauncherProfileConfig,
   type PharoLauncherConfig,
 } from "./config.js";
 import { resolveLauncherScript } from "./launcherScript.js";
@@ -36,6 +39,102 @@ export interface BuildLauncherCliInvocationOptions {
   platform?: NodeJS.Platform;
   bashPath?: string;
   comspec?: string;
+}
+
+function comparablePath(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function isPathInside(parent: string, candidate: string): boolean {
+  const normalizedParent = comparablePath(parent);
+  const normalizedCandidate = comparablePath(candidate);
+  const relative = path.relative(normalizedParent, normalizedCandidate);
+  return (
+    relative === "" ||
+    (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+function stonFilePath(filePath: string): string {
+  const normalized = path.resolve(filePath).replaceAll("\\", "/");
+  const stonPath = /^[A-Za-z]:\//.test(normalized)
+    ? `/${normalized}`
+    : normalized;
+  return stonPath.replaceAll("'", "''");
+}
+
+function safeFileSegment(value: string): string {
+  const cleaned = value.replaceAll(/[^A-Za-z0-9._-]+/g, "-");
+  return cleaned.length > 0 ? cleaned : "image";
+}
+
+function detachedLaunchLogPaths(
+  config: PharoLauncherConfig,
+  args: readonly string[],
+  startTime: number,
+): { stdoutPath: string; stderrPath: string } {
+  const logsDir =
+    config.profile?.logsDir ?? path.join(process.cwd(), ".pharo-launcher-mcp", "logs");
+  const imageName = safeFileSegment(args.at(-1) ?? "image");
+  const stamp = new Date(startTime).toISOString().replaceAll(/[:.]/g, "-");
+  const baseName = `${stamp}-${imageName}-launch`;
+
+  return {
+    stdoutPath: path.join(logsDir, `${baseName}.out.log`),
+    stderrPath: path.join(logsDir, `${baseName}.err.log`),
+  };
+}
+
+export function profileLauncherConfigurationContent(
+  profile: PharoLauncherProfileConfig,
+): string {
+  return [
+    "PharoLauncherCLIConfiguration {",
+    `\t#imagesDirectory : FILE [ '${stonFilePath(profile.imagesDir)}' ],`,
+    `\t#vmsDirectory : FILE [ '${stonFilePath(profile.vmsDir)}' ],`,
+    "\t#launchImageFromALoginShell : true,",
+    `\t#initScriptsDirectory : FILE [ '${stonFilePath(profile.initScriptsDir)}' ],`,
+    `\t#templateSourcesFileLocation : FILE [ '${stonFilePath(profile.templateSourcesDir)}' ]`,
+    "}",
+    "",
+  ].join("\n");
+}
+
+export function ensureProfileLauncherConfiguration(
+  config: PharoLauncherConfig,
+): void {
+  if (!config.profile || !config.launcherConfiguration) {
+    return;
+  }
+
+  const configurationPath = path.resolve(config.launcherConfiguration);
+  const stateRoot = path.resolve(config.profile.stateRoot);
+  if (!isPathInside(stateRoot, configurationPath)) {
+    throw new Error(
+      `Refusing launcher profile configuration outside PHARO_LAUNCHER_MCP_STATE_ROOT: ${configurationPath}`,
+    );
+  }
+
+  for (const directory of [
+    path.dirname(config.profile.launcherImage),
+    config.profile.imagesDir,
+    config.profile.vmsDir,
+    config.profile.templateSourcesDir,
+    config.profile.initScriptsDir,
+    config.profile.logsDir,
+    path.dirname(configurationPath),
+  ]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+
+  const content = profileLauncherConfigurationContent(config.profile);
+  if (
+    !fs.existsSync(configurationPath) ||
+    fs.readFileSync(configurationPath, "utf8") !== content
+  ) {
+    fs.writeFileSync(configurationPath, content, "utf8");
+  }
 }
 
 function scriptCommandAndArgs(
@@ -154,28 +253,44 @@ export function runLauncherCli(
   const invocationArgs = detachedImageLaunch
     ? launcherArgsForDetachedImageLaunch(args)
     : args;
-  const invocation = buildLauncherCliInvocation(
-    invocationArgs,
-    options.config ?? loadPharoLauncherConfig(),
-  );
+  const config = options.config ?? loadPharoLauncherConfig();
+  ensureProfileLauncherConfiguration(config);
+  const invocation = buildLauncherCliInvocation(invocationArgs, config);
 
   if (detachedImageLaunch) {
-    const child = spawn(invocation.command, invocation.args, {
-      cwd: invocation.cwd,
-      env: invocation.env,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.unref();
+    const logPaths = detachedLaunchLogPaths(config, args, startTime);
+    fs.mkdirSync(path.dirname(logPaths.stdoutPath), { recursive: true });
+    const stdoutFd = fs.openSync(logPaths.stdoutPath, "a");
+    let stderrFd: number | undefined;
 
-    return Promise.resolve({
-      exitCode: 0,
-      stdout: "",
-      stderr: "",
-      durationMs: Date.now() - startTime,
-      timedOut: false,
-    });
+    try {
+      stderrFd = fs.openSync(logPaths.stderrPath, "a");
+      const child = spawn(invocation.command, invocation.args, {
+        cwd: invocation.cwd,
+        env: invocation.env,
+        detached: true,
+        stdio: ["ignore", stdoutFd, stderrFd],
+        windowsHide: true,
+      });
+      child.unref();
+
+      return Promise.resolve({
+        exitCode: 0,
+        stdout: [
+          `Detached PharoLauncher CLI pid ${child.pid ?? "unknown"}.`,
+          `stdout: ${logPaths.stdoutPath}`,
+          `stderr: ${logPaths.stderrPath}`,
+        ].join("\n"),
+        stderr: "",
+        durationMs: Date.now() - startTime,
+        timedOut: false,
+      });
+    } finally {
+      fs.closeSync(stdoutFd);
+      if (stderrFd !== undefined) {
+        fs.closeSync(stderrFd);
+      }
+    }
   }
 
   return new Promise((resolve, reject) => {

@@ -10,7 +10,10 @@ import {
   rawCommandTool,
   ToolInputError,
 } from "./commandCatalog.js";
-import type { PharoLauncherConfig } from "./config.js";
+import {
+  loadPharoLauncherConfig,
+  type PharoLauncherConfig,
+} from "./config.js";
 import {
   getPharoLauncherConfigReport,
   getPharoLauncherHealth,
@@ -23,6 +26,7 @@ import {
   runNativeProcessTool,
   shouldUseNativeProcessTool,
 } from "./processTools.js";
+import { repairCopiedImageMetadata } from "./imageMetadata.js";
 import { normalizeLauncherResult } from "./resultNormalizer.js";
 import type { LauncherCliResult } from "./launcherCli.js";
 import type { LauncherCommandResult, LauncherImage } from "./models.js";
@@ -259,9 +263,15 @@ async function imageCopyResult(
     return jsonResult(normalized, true);
   }
 
+  const metadataRepair = repairCopiedImageMetadata(
+    options.config ?? loadPharoLauncherConfig(),
+    args[2],
+    newImageName,
+  );
   const verification = await verifyCopiedImage(runner, newImageName, options);
   const copyResult: LauncherCommandResult & {
     diagnostic?: string;
+    metadataRepair: ReturnType<typeof repairCopiedImageMetadata>;
     copyVerification: ImageCopyVerification;
   } = {
     ...normalized,
@@ -278,6 +288,7 @@ async function imageCopyResult(
           },
         }
       : {}),
+    metadataRepair,
     ...(!verification.ok
       ? {
           diagnostic: `Image copy command exited successfully, but target image ${newImageName} was not listable and inspectable: ${verification.diagnostic}`,

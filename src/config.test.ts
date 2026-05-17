@@ -109,7 +109,9 @@ describe("loadPharoLauncherConfig", () => {
     expect(config.launcherImage).toBe(
       "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated\\launcher\\PharoLauncher.image",
     );
-    expect(config.launcherConfiguration).toBe("isolated");
+    expect(config.launcherConfiguration).toBe(
+      "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated\\launcher\\isolated",
+    );
     expect(config.profile).toEqual({
       name: "isolated",
       stateRoot: "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated",
@@ -123,5 +125,39 @@ describe("loadPharoLauncherConfig", () => {
         "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated\\init-scripts",
       logsDir: "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated\\logs",
     });
+  });
+
+  it("defaults profile launcher configuration to the profile launcher directory", () => {
+    const config = loadPharoLauncherConfig(
+      {
+        LOCALAPPDATA: "C:\\Users\\Ada\\AppData\\Local",
+        PHARO_LAUNCHER_MCP_PROFILE: "isolated",
+        PHARO_LAUNCHER_MCP_STATE_ROOT:
+          "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated",
+      },
+      "win32",
+    );
+
+    expect(config.launcherConfiguration).toBe(
+      "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated\\launcher\\pharo-launcher-cli-config.ston",
+    );
+  });
+
+  it("keeps absolute profile launcher configuration paths", () => {
+    const config = loadPharoLauncherConfig(
+      {
+        LOCALAPPDATA: "C:\\Users\\Ada\\AppData\\Local",
+        PHARO_LAUNCHER_MCP_PROFILE: "isolated",
+        PHARO_LAUNCHER_MCP_STATE_ROOT:
+          "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated",
+        PHARO_LAUNCHER_MCP_LAUNCHER_CONFIGURATION:
+          "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated\\launcher\\custom.ston",
+      },
+      "win32",
+    );
+
+    expect(config.launcherConfiguration).toBe(
+      "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated\\launcher\\custom.ston",
+    );
   });
 });

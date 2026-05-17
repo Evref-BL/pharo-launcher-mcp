@@ -1,9 +1,14 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { PharoLauncherConfig } from "./config.js";
 import {
   buildLauncherCliInvocation,
+  ensureProfileLauncherConfiguration,
   isDetachedImageLaunch,
   launcherArgsForDetachedImageLaunch,
+  profileLauncherConfigurationContent,
   runLauncherCli,
 } from "./launcherCli.js";
 
@@ -129,7 +134,8 @@ describe("buildLauncherCliInvocation", () => {
         launcherImage:
           "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated\\launcher\\PharoLauncher.image",
         launcherScript: "C:\\PL\\pharo-launcher.cmd",
-        launcherConfiguration: "isolated",
+        launcherConfiguration:
+          "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated\\launcher\\pharo-launcher-cli-config.ston",
         profile: {
           name: "isolated",
           stateRoot: "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated",
@@ -156,7 +162,7 @@ describe("buildLauncherCliInvocation", () => {
       "/c",
       "C:\\PL\\pharo-launcher.cmd",
       "--configuration",
-      "isolated",
+      "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated\\launcher\\pharo-launcher-cli-config.ston",
       "image",
       "list",
     ]);
@@ -166,6 +172,82 @@ describe("buildLauncherCliInvocation", () => {
     expect(invocation.env.PHARO_LAUNCHER_MCP_IMAGES_DIR).toBe(
       "C:\\dev\\code\\git\\.pharo-launcher-mcp\\profiles\\isolated\\images",
     );
+  });
+
+  it("writes profile launcher configuration before live invocation", () => {
+    const stateRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-profile-"),
+    );
+    const configPath = path.join(
+      stateRoot,
+      "launcher",
+      "pharo-launcher-cli-config.ston",
+    );
+    const profile = {
+      name: "isolated",
+      stateRoot,
+      launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+      imagesDir: path.join(stateRoot, "images"),
+      vmsDir: path.join(stateRoot, "vms"),
+      templateSourcesDir: path.join(stateRoot, "templates"),
+      initScriptsDir: path.join(stateRoot, "init-scripts"),
+      logsDir: path.join(stateRoot, "logs"),
+    };
+
+    ensureProfileLauncherConfiguration(
+      launcherConfig({
+        launcherDir: "C:\\PL",
+        launcherVm: "C:\\PL\\PharoConsole.exe",
+        launcherImage: profile.launcherImage,
+        launcherConfiguration: configPath,
+        profile,
+      }),
+    );
+
+    expect(fs.readFileSync(configPath, "utf8")).toBe(
+      profileLauncherConfigurationContent(profile),
+    );
+    expect(fs.existsSync(profile.imagesDir)).toBe(true);
+    expect(fs.existsSync(profile.vmsDir)).toBe(true);
+    expect(fs.existsSync(profile.templateSourcesDir)).toBe(true);
+    expect(fs.existsSync(profile.initScriptsDir)).toBe(true);
+    expect(fs.existsSync(profile.logsDir)).toBe(true);
+
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  });
+
+  it("rejects profile launcher configuration outside the profile root", () => {
+    const stateRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-profile-"),
+    );
+    const outsideRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-outside-"),
+    );
+    const profile = {
+      name: "isolated",
+      stateRoot,
+      launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+      imagesDir: path.join(stateRoot, "images"),
+      vmsDir: path.join(stateRoot, "vms"),
+      templateSourcesDir: path.join(stateRoot, "templates"),
+      initScriptsDir: path.join(stateRoot, "init-scripts"),
+      logsDir: path.join(stateRoot, "logs"),
+    };
+
+    expect(() =>
+      ensureProfileLauncherConfiguration(
+        launcherConfig({
+          launcherDir: "C:\\PL",
+          launcherVm: "C:\\PL\\PharoConsole.exe",
+          launcherImage: profile.launcherImage,
+          launcherConfiguration: path.join(outsideRoot, "config.ston"),
+          profile,
+        }),
+      ),
+    ).toThrow(/outside PHARO_LAUNCHER_MCP_STATE_ROOT/);
+
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+    fs.rmSync(outsideRoot, { recursive: true, force: true });
   });
 
   it("recognizes and strips launcher detached image launches for process-level detaching", () => {
@@ -187,6 +269,69 @@ describe("buildLauncherCliInvocation", () => {
       "Task",
     ]);
     expect(isDetachedImageLaunch(["image", "list"])).toBe(false);
+  });
+
+  it("redirects detached launcher output to profile log files", async () => {
+    const stateRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-detached-"),
+    );
+    const scriptPath =
+      process.platform === "win32"
+        ? path.join(stateRoot, "launcher.cmd")
+        : path.join(stateRoot, "launcher.sh");
+    const profile = {
+      name: "isolated",
+      stateRoot,
+      launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+      imagesDir: path.join(stateRoot, "images"),
+      vmsDir: path.join(stateRoot, "vms"),
+      templateSourcesDir: path.join(stateRoot, "templates"),
+      initScriptsDir: path.join(stateRoot, "init-scripts"),
+      logsDir: path.join(stateRoot, "logs"),
+    };
+
+    fs.writeFileSync(
+      scriptPath,
+      process.platform === "win32"
+        ? "@echo off\r\necho launched %*\r\n"
+        : "#!/usr/bin/env sh\necho launched \"$@\"\n",
+      "utf8",
+    );
+    if (process.platform !== "win32") {
+      fs.chmodSync(scriptPath, 0o755);
+    }
+
+    const result = await runLauncherCli(
+      ["image", "launch", "--detached", "Task"],
+      {
+        config: launcherConfig({
+          launcherDir: stateRoot,
+          launcherVm: "unused",
+          launcherImage: profile.launcherImage,
+          launcherScript: scriptPath,
+          launcherConfiguration: path.join(
+            stateRoot,
+            "launcher",
+            "pharo-launcher-cli-config.ston",
+          ),
+          profile,
+        }),
+        timeoutMs: 2_000,
+      },
+    );
+
+    const stdoutPath = result.stdout.match(/^stdout: (.+)$/m)?.[1];
+    const stderrPath = result.stdout.match(/^stderr: (.+)$/m)?.[1];
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Detached PharoLauncher CLI pid");
+    expect(stdoutPath).toContain(profile.logsDir);
+    expect(stderrPath).toContain(profile.logsDir);
+    expect(fs.existsSync(stdoutPath ?? "")).toBe(true);
+    expect(fs.existsSync(stderrPath ?? "")).toBe(true);
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    fs.rmSync(stateRoot, { recursive: true, force: true });
   });
 
   it("captures stdout, stderr, exit code, and duration", async () => {

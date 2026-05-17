@@ -85,7 +85,12 @@ PHARO_LAUNCHER_MCP_LOGS_DIR=/path/to/logs
 ```
 
 `PHARO_LAUNCHER_MCP_LAUNCHER_CONFIGURATION`, when set, is passed to Pharo Launcher as
-`--configuration <value>`.
+`--configuration <value>`. In profile mode, a relative value is resolved under
+the profile launcher directory. When it is not set, pharo-launcher-mcp writes
+and uses `<state-root>/launcher/pharo-launcher-cli-config.ston`. That generated
+configuration points Pharo Launcher at the profile images, VMs, template
+sources, and initialization script directories so image create and copy commands
+do not fall back to the host default image repository.
 
 ## Tools
 
