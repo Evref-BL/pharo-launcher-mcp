@@ -366,7 +366,7 @@ describe("PharoLauncher discovery", () => {
     ]);
   });
 
-  it("reports an empty scoped inventory without treating it as a failure", async () => {
+  it("reports an empty scoped template inventory as actionable", async () => {
     const config = tempProfileConfig();
     const runner: LauncherCliRunner = async () => ({
       exitCode: 0,
@@ -378,7 +378,7 @@ describe("PharoLauncher discovery", () => {
 
     const report = await getPharoLauncherInventory(runner, config);
 
-    expect(report.ok).toBe(true);
+    expect(report.ok).toBe(false);
     expect(report.templates.installed).toEqual([]);
     expect(report.templates.downloadable).toEqual([]);
     expect(report.templates.downloadableKnown).toBe(true);
@@ -386,7 +386,17 @@ describe("PharoLauncher discovery", () => {
     expect(report.images.existingKnown).toBe(true);
     expect(report.images.declared).toEqual([]);
     expect(report.versions).toEqual([]);
-    expect(report.diagnostics).toEqual([]);
+    expect(report.diagnostics).toEqual([
+      expect.objectContaining({
+        severity: "error",
+        code: "template_inventory_empty",
+        message: expect.stringContaining("no installed or downloadable templates"),
+        action: expect.stringContaining(
+          "pharo_launcher_template_update",
+        ),
+        path: config.profile.templateSourcesDir,
+      }),
+    ]);
   });
 
   it("returns actionable diagnostics for missing profile paths without probing the launcher", async () => {

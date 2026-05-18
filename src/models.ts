@@ -3,6 +3,8 @@ export type LauncherOutputFormat = "ston" | "text";
 export interface LauncherCommandResult<T = unknown> {
   ok: boolean;
   data?: T;
+  diagnostic?: string;
+  action?: string;
   parser: {
     status: "parsed" | "unsupported" | "failed" | "skipped";
     format: LauncherOutputFormat;

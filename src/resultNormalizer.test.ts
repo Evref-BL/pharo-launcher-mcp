@@ -78,6 +78,36 @@ describe("result normalizer", () => {
     });
   });
 
+  it("normalizes default template category failures as bootstrap diagnostics", () => {
+    const result = normalizeLauncherResult(
+      "pharo_launcher_template_list",
+      ["template", "list", "--ston"],
+      {
+        ...cliResult,
+        exitCode: 1,
+        stdout: "",
+        stderr:
+          "Image template category 'Official distributions' not found. Categories are: OrderedCollection[]",
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostic:
+        "Pharo Launcher could not list default templates because the active template source inventory is empty or not bootstrapped.",
+      action: expect.stringContaining(
+        "PHARO_LAUNCHER_MCP_TEMPLATE_SOURCES_DIR",
+      ),
+      parser: {
+        status: "skipped",
+        format: "ston",
+      },
+      raw: {
+        stderr: expect.stringContaining("Official distributions"),
+      },
+    });
+  });
+
   it("extracts LauncherImage models from STON output", () => {
     const images = parseLauncherImagesFromSton(
       "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['MCP13','MCP13.image'],#origin:#launcherImagesLocation}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'130-x64',#blessing:'stable'}}]}]",

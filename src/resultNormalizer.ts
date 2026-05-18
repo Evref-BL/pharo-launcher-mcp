@@ -24,6 +24,31 @@ function hasImageName(value: LauncherImage): boolean {
   return typeof value.name === "string" && value.name.length > 0;
 }
 
+function templateSourceBootstrapDiagnostic(
+  toolName: string,
+  args: readonly string[],
+  result: LauncherCliResult,
+): Pick<LauncherCommandResult, "diagnostic" | "action"> | undefined {
+  if (toolName !== "pharo_launcher_template_list") {
+    return undefined;
+  }
+
+  const output = `${result.stdout}\n${result.stderr}`;
+  if (
+    !/Image template category '.*' not found/i.test(output) ||
+    args.includes("--templateCategory")
+  ) {
+    return undefined;
+  }
+
+  return {
+    diagnostic:
+      "Pharo Launcher could not list default templates because the active template source inventory is empty or not bootstrapped.",
+    action:
+      "Inspect pharo_launcher_inventory diagnostics, verify PHARO_LAUNCHER_MCP_TEMPLATE_SOURCES_DIR, and refresh or seed the active profile template sources before planning image creation.",
+  };
+}
+
 function withImageName(value: unknown, imageName: string | undefined): unknown {
   if (!imageName) {
     return value;
@@ -86,10 +111,12 @@ export function normalizeLauncherResult(
     parseResult.status === "parsed"
       ? commandContextData(toolName, args, parsedData)
       : parsedData;
+  const diagnostic = templateSourceBootstrapDiagnostic(toolName, args, result);
 
   return {
     ok,
     ...(ok && data !== undefined ? { data } : {}),
+    ...(diagnostic ?? {}),
     parser: {
       status: parseResult.status,
       format: parseResult.format,
