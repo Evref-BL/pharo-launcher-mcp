@@ -10,6 +10,7 @@ import {
   validatePharoLauncherInstallation,
   type LauncherCliRunner,
 } from "./discovery.js";
+import { loadPharoLauncherConfig } from "./config.js";
 
 const tempDirs: string[] = [];
 
@@ -78,6 +79,29 @@ function tempProfileConfig() {
   };
 }
 
+function tempMacOSAppBundle() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pharo-launcher-app-"));
+  tempDirs.push(root);
+  const appPath = path.join(root, "PharoLauncher.app");
+  const executablePath = path.join(appPath, "Contents", "MacOS", "Pharo");
+  const imagePath = path.join(
+    appPath,
+    "Contents",
+    "Resources",
+    "PharoLauncher.image",
+  );
+  fs.mkdirSync(path.dirname(executablePath), { recursive: true });
+  fs.mkdirSync(path.dirname(imagePath), { recursive: true });
+  fs.writeFileSync(executablePath, "");
+  fs.writeFileSync(imagePath, "");
+
+  return {
+    appPath,
+    executablePath,
+    imagePath,
+  };
+}
+
 afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -96,6 +120,43 @@ describe("PharoLauncher discovery", () => {
     expect(report.launcherScript.path).toBe(config.launcherScript);
     expect(report.launcherScript.source).toBe("env");
     expect(report.launcherScript.exists).toBe(true);
+  });
+
+  it("reports installation discovery source and attempted candidates", () => {
+    const appBundle = tempMacOSAppBundle();
+    const config = loadPharoLauncherConfig(
+      {
+        HOME: "/Users/ada",
+      },
+      "darwin",
+      {
+        macOSAppBundleCandidates: [
+          {
+            source: "macos-user-app",
+            path: "/Users/ada/Applications/PharoLauncher.app",
+          },
+          {
+            source: "macos-system-app",
+            path: appBundle.appPath,
+          },
+        ],
+      },
+    );
+    const report = getPharoLauncherConfigReport(config);
+
+    expect(report.discovery.source).toBe("macos-system-app");
+    expect(report.discovery.selected).toMatchObject({
+      source: "macos-system-app",
+      launcherDir: { path: appBundle.appPath, exists: true },
+      launcherVm: { path: appBundle.executablePath, exists: true },
+      installationLauncherImage: { path: appBundle.imagePath, exists: true },
+      usable: true,
+    });
+    expect(report.discovery.candidates.map((candidate) => candidate.source)).toEqual([
+      "macos-user-app",
+      "macos-system-app",
+      "platform-default",
+    ]);
   });
 
   it("reports launcher profile paths when a profile is active", () => {

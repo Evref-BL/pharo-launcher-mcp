@@ -30,13 +30,21 @@ into a project.
 ## Configuration
 
 pharo-launcher-mcp resolves Pharo Launcher paths from environment variables
-first. If they are not set, it uses host defaults:
+first. If they are not set, it uses host defaults. On macOS it first checks
+regular PharoLauncher.app install locations, then falls back to the application
+support layout:
 
 | Host OS | Launcher directory | VM path | Bundled wrapper |
 | --- | --- | --- | --- |
 | Windows | `%LOCALAPPDATA%\Pharo Launcher` | `<launcher-dir>\PharoConsole.exe` | `pharo-launcher.cmd` |
-| macOS | `$HOME/Library/Application Support/Pharo Launcher` | `<launcher-dir>/pharo-vm/Pharo.app/Contents/MacOS/Pharo` | `pharo-launcher.sh` |
+| macOS app bundle | `$HOME/Applications/PharoLauncher.app` or `/Applications/PharoLauncher.app` | `<app>/Contents/MacOS/Pharo` | `pharo-launcher.sh` |
+| macOS fallback data dir | `$HOME/Library/Application Support/Pharo Launcher` | `<launcher-dir>/pharo-vm/Pharo.app/Contents/MacOS/Pharo` | `pharo-launcher.sh` |
 | Linux | `$HOME/.local/share/Pharo Launcher` | `<launcher-dir>/pharo-vm/pharo` | `pharo-launcher.sh` |
+
+For macOS app-bundle installs, the control image is resolved from
+`<app>/Contents/Resources/PharoLauncher.image`. `pharo_launcher_config` and
+`pharo_launcher_health` report the selected discovery source and all attempted
+installation candidates.
 
 Override paths when needed:
 

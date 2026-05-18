@@ -1,5 +1,41 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach } from "vitest";
 import { describe, expect, it } from "vitest";
 import { loadPharoLauncherConfig } from "./config.js";
+
+const tempDirs: string[] = [];
+
+function tempMacOSAppBundle(source: "macos-user-app" | "macos-system-app") {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pharo-launcher-app-"));
+  tempDirs.push(root);
+  const appPath = path.join(root, "PharoLauncher.app");
+  const executablePath = path.join(appPath, "Contents", "MacOS", "Pharo");
+  const imagePath = path.join(
+    appPath,
+    "Contents",
+    "Resources",
+    "PharoLauncher.image",
+  );
+  fs.mkdirSync(path.dirname(executablePath), { recursive: true });
+  fs.mkdirSync(path.dirname(imagePath), { recursive: true });
+  fs.writeFileSync(executablePath, "");
+  fs.writeFileSync(imagePath, "");
+
+  return {
+    source,
+    path: appPath,
+    executablePath,
+    imagePath,
+  };
+}
+
+afterEach(() => {
+  for (const tempDir of tempDirs.splice(0)) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
 
 describe("loadPharoLauncherConfig", () => {
   it("uses explicit PharoLauncher environment variables", () => {
@@ -10,12 +46,19 @@ describe("loadPharoLauncherConfig", () => {
       PHARO_LAUNCHER_SCRIPT: "C:\\PL\\pharo-launcher.cmd",
     });
 
-    expect(config).toEqual({
+    expect(config).toMatchObject({
       launcherDir: "C:\\PL",
       launcherVm: "C:\\PL\\PharoConsole.exe",
       installationLauncherImage: "C:\\PL\\PharoLauncher.image",
       launcherImage: "C:\\PL\\PharoLauncher.image",
       launcherScript: "C:\\PL\\pharo-launcher.cmd",
+      discovery: {
+        source: "env",
+        selected: {
+          source: "env",
+          launcherDir: "C:\\PL",
+        },
+      },
     });
   });
 
@@ -42,6 +85,7 @@ describe("loadPharoLauncherConfig", () => {
         HOME: "/Users/ada",
       },
       "darwin",
+      { macOSAppBundleCandidates: [] },
     );
 
     expect(config.launcherDir).toBe(
@@ -52,6 +96,86 @@ describe("loadPharoLauncherConfig", () => {
     );
     expect(config.installationLauncherImage).toBe(
       "/Users/ada/Library/Application Support/Pharo Launcher/PharoLauncher.image",
+    );
+    expect(config.discovery?.source).toBe("platform-default");
+  });
+
+  it("discovers a macOS system PharoLauncher.app bundle before application support fallback", () => {
+    const systemApp = tempMacOSAppBundle("macos-system-app");
+    const config = loadPharoLauncherConfig(
+      {
+        HOME: "/Users/ada",
+      },
+      "darwin",
+      {
+        macOSAppBundleCandidates: [
+          {
+            source: "macos-system-app",
+            path: systemApp.path,
+          },
+        ],
+      },
+    );
+
+    expect(config.discovery?.source).toBe("macos-system-app");
+    expect(config.launcherDir).toBe(systemApp.path);
+    expect(config.launcherVm).toBe(systemApp.executablePath);
+    expect(config.installationLauncherImage).toBe(systemApp.imagePath);
+  });
+
+  it("prefers a macOS user PharoLauncher.app bundle over the system app bundle", () => {
+    const userApp = tempMacOSAppBundle("macos-user-app");
+    const systemApp = tempMacOSAppBundle("macos-system-app");
+    const config = loadPharoLauncherConfig(
+      {
+        HOME: "/Users/ada",
+      },
+      "darwin",
+      {
+        macOSAppBundleCandidates: [
+          {
+            source: "macos-user-app",
+            path: userApp.path,
+          },
+          {
+            source: "macos-system-app",
+            path: systemApp.path,
+          },
+        ],
+      },
+    );
+
+    expect(config.discovery?.source).toBe("macos-user-app");
+    expect(config.launcherDir).toBe(userApp.path);
+    expect(config.launcherVm).toBe(userApp.executablePath);
+    expect(config.installationLauncherImage).toBe(userApp.imagePath);
+  });
+
+  it("keeps explicit macOS launcher paths ahead of app bundle discovery", () => {
+    const systemApp = tempMacOSAppBundle("macos-system-app");
+    const config = loadPharoLauncherConfig(
+      {
+        HOME: "/Users/ada",
+        PHARO_LAUNCHER_DIR: "/custom/Pharo Launcher",
+        PHARO_LAUNCHER_VM: "/custom/vm/pharo",
+        PHARO_LAUNCHER_IMAGE: "/custom/PharoLauncher.image",
+      },
+      "darwin",
+      {
+        macOSAppBundleCandidates: [
+          {
+            source: "macos-system-app",
+            path: systemApp.path,
+          },
+        ],
+      },
+    );
+
+    expect(config.discovery?.source).toBe("env");
+    expect(config.launcherDir).toBe("/custom/Pharo Launcher");
+    expect(config.launcherVm).toBe("/custom/vm/pharo");
+    expect(config.installationLauncherImage).toBe(
+      "/custom/PharoLauncher.image",
     );
   });
 
@@ -83,12 +207,15 @@ describe("loadPharoLauncherConfig", () => {
       "linux",
     );
 
-    expect(config).toEqual({
+    expect(config).toMatchObject({
       launcherDir: "/opt/Pharo Launcher",
       launcherVm: "/opt/Pharo Launcher/vm/pharo",
       installationLauncherImage: "/opt/Pharo Launcher/PharoLauncher.image",
       launcherImage: "/opt/Pharo Launcher/PharoLauncher.image",
       launcherScript: "/opt/bin/pharo-launcher",
+      discovery: {
+        source: "env",
+      },
     });
   });
 

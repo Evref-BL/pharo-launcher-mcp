@@ -19,6 +19,8 @@ describe("launcher platform defaults", () => {
       launcherDir: "C:\\Users\\Ada\\AppData\\Local\\Pharo Launcher",
       launcherVm:
         "C:\\Users\\Ada\\AppData\\Local\\Pharo Launcher\\PharoConsole.exe",
+      launcherImage:
+        "C:\\Users\\Ada\\AppData\\Local\\Pharo Launcher\\PharoLauncher.image",
       bundledScriptName: "pharo-launcher.cmd",
     });
   });

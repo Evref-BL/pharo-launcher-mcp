@@ -5,6 +5,7 @@ export type LauncherScriptName = "pharo-launcher.cmd" | "pharo-launcher.sh";
 export interface LauncherPlatformDefaults {
   launcherDir: string;
   launcherVm: string;
+  launcherImage: string;
   bundledScriptName: LauncherScriptName;
 }
 
@@ -63,6 +64,10 @@ export function defaultLauncherVm(
   }
 
   if (platform === "darwin") {
+    if (launcherDir.endsWith(".app")) {
+      return paths.join(launcherDir, "Contents", "MacOS", "Pharo");
+    }
+
     return paths.join(
       launcherDir,
       "pharo-vm",
@@ -74,6 +79,24 @@ export function defaultLauncherVm(
   }
 
   return paths.join(launcherDir, "pharo-vm", "pharo");
+}
+
+export function defaultLauncherImage(
+  launcherDir: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const paths = pathApi(platform);
+
+  if (platform === "darwin" && launcherDir.endsWith(".app")) {
+    return paths.join(
+      launcherDir,
+      "Contents",
+      "Resources",
+      "PharoLauncher.image",
+    );
+  }
+
+  return paths.join(launcherDir, "PharoLauncher.image");
 }
 
 export function bundledLauncherScriptName(
@@ -91,6 +114,7 @@ export function launcherPlatformDefaults(
   return {
     launcherDir,
     launcherVm: defaultLauncherVm(launcherDir, platform),
+    launcherImage: defaultLauncherImage(launcherDir, platform),
     bundledScriptName: bundledLauncherScriptName(platform),
   };
 }

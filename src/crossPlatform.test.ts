@@ -46,6 +46,9 @@ describe("cross-platform pharo-launcher-mcp contract", () => {
       const config = loadPharoLauncherConfig(
         platformCase.env,
         platformCase.platform,
+        platformCase.platform === "darwin"
+          ? { macOSAppBundleCandidates: [] }
+          : {},
       );
       const scripts = candidateLauncherScriptPaths({
         env: {},
