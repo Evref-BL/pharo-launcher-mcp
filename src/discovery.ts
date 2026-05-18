@@ -716,15 +716,33 @@ function addCommandDiagnostic(
     return undefined;
   }
 
-  const diagnostic = `${label} failed with exit code ${result.command.exitCode ?? "unknown"}.`;
+  const diagnostic =
+    result.diagnostic ??
+    `${label} failed with exit code ${result.command.exitCode ?? "unknown"}.`;
   diagnostics.push({
     severity: "error",
     code,
     message: diagnostic,
     action:
+      result.action ??
       "Run pharo_launcher_validate_installation and inspect the command stderr before planning image creation.",
   });
   return diagnostic;
+}
+
+function addEmptyTemplateInventoryDiagnostic(
+  diagnostics: PharoLauncherInventoryDiagnostic[],
+  config: PharoLauncherConfig,
+): void {
+  diagnostics.push({
+    severity: "error",
+    code: "template_inventory_empty",
+    message:
+      "The active launcher profile has no installed or downloadable templates, so image creation cannot choose a template.",
+    action:
+      "Run pharo_launcher_template_update, verify the active profile template source root, and seed or repair template-source bootstrap state before planning image creation.",
+    ...(config.profile ? { path: config.profile.templateSourcesDir } : {}),
+  });
 }
 
 function addProbeErrorDiagnostic(
@@ -906,6 +924,13 @@ export async function getPharoLauncherInventory(
   }
 
   const allTemplates = [...installedTemplates, ...downloadableTemplates];
+  if (
+    downloadableKnown &&
+    installedTemplates.length === 0 &&
+    downloadableTemplates.length === 0
+  ) {
+    addEmptyTemplateInventoryDiagnostic(diagnostics, config);
+  }
 
   return {
     ok: !diagnostics.some((diagnostic) => diagnostic.severity === "error"),
