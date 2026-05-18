@@ -17,8 +17,10 @@ import {
 import {
   getPharoLauncherConfigReport,
   getPharoLauncherHealth,
+  getPharoLauncherInventory,
   getPharoLauncherVersion,
   type LauncherCliRunner,
+  type PharoLauncherDeclaredImage,
   validatePharoLauncherInstallation,
 } from "./discovery.js";
 import { runLauncherCli } from "./launcherCli.js";
@@ -38,6 +40,34 @@ const imageCopyVerificationPollMs = 1_000;
 const emptyInputSchema = {
   type: "object",
   properties: {},
+  additionalProperties: false,
+} as const;
+const stringSchema = { type: "string", minLength: 1 } as const;
+const booleanSchema = { type: "boolean" } as const;
+const declaredImageSchema = {
+  type: "object",
+  properties: {
+    imageId: stringSchema,
+    imageName: stringSchema,
+    projectId: stringSchema,
+    workspaceId: stringSchema,
+    targetId: stringSchema,
+    active: booleanSchema,
+    status: stringSchema,
+  },
+  required: ["imageId"],
+  additionalProperties: false,
+} as const;
+const inventoryInputSchema = {
+  type: "object",
+  properties: {
+    declaredImages: {
+      type: "array",
+      items: declaredImageSchema,
+      description:
+        "Project/workspace-declared image handles supplied by a scoped caller.",
+    },
+  },
   additionalProperties: false,
 } as const;
 
@@ -64,6 +94,12 @@ const tools = [
     description:
       "Validate resolved paths and run a harmless PharoLauncher --version call.",
     inputSchema: emptyInputSchema,
+  },
+  {
+    name: "pharo_launcher_inventory",
+    description:
+      "Return read-only scoped Pharo Launcher templates, versions, active profile roots, existing images, and caller-declared image handles for safe lifecycle planning.",
+    inputSchema: inventoryInputSchema,
   },
   ...launcherCommandTools,
   rawCommandTool,
@@ -101,6 +137,88 @@ function runnerOptions(
     ...(options.config ? { config: options.config } : {}),
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   };
+}
+
+function inputObject(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+
+  return input as Record<string, unknown>;
+}
+
+function optionalString(
+  input: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = input[key];
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "string" || value.length === 0) {
+    throw new ToolInputError(`${key} must be a non-empty string`);
+  }
+
+  return value;
+}
+
+function optionalBoolean(
+  input: Record<string, unknown>,
+  key: string,
+): boolean | undefined {
+  const value = input[key];
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "boolean") {
+    throw new ToolInputError(`${key} must be a boolean`);
+  }
+
+  return value;
+}
+
+function declaredImagesFromInput(input: unknown): PharoLauncherDeclaredImage[] {
+  const object = inputObject(input);
+  const declaredImages = object.declaredImages;
+  if (declaredImages === undefined) {
+    return [];
+  }
+
+  if (!Array.isArray(declaredImages)) {
+    throw new ToolInputError("declaredImages must be an array");
+  }
+
+  return declaredImages.map((candidate, index) => {
+    const image = inputObject(candidate);
+    const imageId = optionalString(image, "imageId");
+    if (!imageId) {
+      throw new ToolInputError(`declaredImages[${index}].imageId is required`);
+    }
+
+    return {
+      imageId,
+      ...(optionalString(image, "imageName")
+        ? { imageName: optionalString(image, "imageName") }
+        : {}),
+      ...(optionalString(image, "projectId")
+        ? { projectId: optionalString(image, "projectId") }
+        : {}),
+      ...(optionalString(image, "workspaceId")
+        ? { workspaceId: optionalString(image, "workspaceId") }
+        : {}),
+      ...(optionalString(image, "targetId")
+        ? { targetId: optionalString(image, "targetId") }
+        : {}),
+      ...(optionalBoolean(image, "active") !== undefined
+        ? { active: optionalBoolean(image, "active") }
+        : {}),
+      ...(optionalString(image, "status")
+        ? { status: optionalString(image, "status") }
+        : {}),
+    };
+  });
 }
 
 async function runLauncherToolCommand(
@@ -347,6 +465,28 @@ export async function callTool(
         options.config,
       );
       return jsonResult(result, !result.ok);
+    }
+
+    case "pharo_launcher_inventory": {
+      try {
+        const result = await getPharoLauncherInventory(
+          runner,
+          options.config,
+          {
+            declaredImages: declaredImagesFromInput(argumentsValue),
+            ...(options.timeoutMs !== undefined
+              ? { timeoutMs: options.timeoutMs }
+              : {}),
+          },
+        );
+        return jsonResult(result, !result.ok);
+      } catch (error) {
+        if (error instanceof ToolInputError) {
+          return jsonResult({ error: error.message }, true);
+        }
+
+        throw error;
+      }
     }
 
     default:

@@ -102,6 +102,7 @@ Health and configuration:
 | `pharo_launcher_config` | Report the active Pharo Launcher configuration. |
 | `pharo_launcher_version` | Run `--version`. |
 | `pharo_launcher_validate_installation` | Check resolved paths and run `--version`. |
+| `pharo_launcher_inventory` | Report scoped template/version/profile inventory, existing images, and caller-declared image handles for lifecycle planning. |
 
 Image tools:
 
