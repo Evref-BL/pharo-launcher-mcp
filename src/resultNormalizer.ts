@@ -49,6 +49,25 @@ function templateSourceBootstrapDiagnostic(
   };
 }
 
+function scopedFromBuildVmStoreDiagnostic(
+  toolName: string,
+  result: LauncherCliResult,
+): Pick<LauncherCommandResult, "diagnostic" | "action"> | undefined {
+  if (
+    toolName !== "pharo_launcher_image_create_from_build" ||
+    !result.stderr.includes("profile-scoped image create fromBuild")
+  ) {
+    return undefined;
+  }
+
+  return {
+    diagnostic:
+      "Profile-scoped fromBuild was refused because Pharo Launcher can launch with the default VM store instead of the configured profile VM directory.",
+    action:
+      "Use a non-fromBuild creation path with explicit launch control, or fix Pharo Launcher to initialize PhLVirtualMachineManager from the CLI configuration before fromBuild launch.",
+  };
+}
+
 function withImageName(value: unknown, imageName: string | undefined): unknown {
   if (!imageName) {
     return value;
@@ -112,11 +131,13 @@ export function normalizeLauncherResult(
       ? commandContextData(toolName, args, parsedData)
       : parsedData;
   const diagnostic = templateSourceBootstrapDiagnostic(toolName, args, result);
+  const commandDiagnostic =
+    diagnostic ?? scopedFromBuildVmStoreDiagnostic(toolName, result);
 
   return {
     ok,
     ...(ok && data !== undefined ? { data } : {}),
-    ...(diagnostic ?? {}),
+    ...(commandDiagnostic ?? {}),
     parser: {
       status: parseResult.status,
       format: parseResult.format,

@@ -178,6 +178,26 @@ export function launcherArgsForDetachedImageLaunch(
   return args.filter((arg) => arg !== "--detached");
 }
 
+function isImageCreateFromBuild(args: readonly string[]): boolean {
+  return args[0] === "image" && args[1] === "create" && args[2] === "fromBuild";
+}
+
+function profileScopedFromBuildDiagnostic(
+  args: readonly string[],
+  config: PharoLauncherConfig,
+): string | undefined {
+  if (!config.profile || !isImageCreateFromBuild(args)) {
+    return undefined;
+  }
+
+  return [
+    "Refusing profile-scoped image create fromBuild before invoking Pharo Launcher.",
+    "Pharo Launcher currently applies the CLI profile imagesDirectory during creation, but fromBuild automatically launches the image without initializing PhLVirtualMachineManager from the CLI configuration.",
+    `That launch can download or run VMs outside PHARO_LAUNCHER_MCP_VMS_DIR (${config.profile.vmsDir}).`,
+    "Use a non-fromBuild creation path with explicit launch control, or fix Pharo Launcher to initialize the VM manager from the CLI configuration before fromBuild launch.",
+  ].join("\n");
+}
+
 export function buildLauncherCliInvocation(
   args: readonly string[],
   config: PharoLauncherConfig = loadPharoLauncherConfig(),
@@ -254,6 +274,20 @@ export function runLauncherCli(
     ? launcherArgsForDetachedImageLaunch(args)
     : args;
   const config = options.config ?? loadPharoLauncherConfig();
+  const scopedFromBuildDiagnostic = profileScopedFromBuildDiagnostic(
+    invocationArgs,
+    config,
+  );
+  if (scopedFromBuildDiagnostic) {
+    return Promise.resolve({
+      exitCode: 1,
+      stdout: "",
+      stderr: scopedFromBuildDiagnostic,
+      durationMs: Date.now() - startTime,
+      timedOut: false,
+    });
+  }
+
   ensureProfileLauncherConfiguration(config);
   const invocation = buildLauncherCliInvocation(invocationArgs, config);
 
