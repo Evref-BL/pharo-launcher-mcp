@@ -43,13 +43,17 @@ The production code handles Windows, macOS, and Linux explicitly:
 
 - Windows defaults to `%LOCALAPPDATA%\Pharo Launcher`,
   `PharoConsole.exe`, and `pharo-launcher.cmd`.
-- macOS defaults to `$HOME/Library/Application Support/Pharo Launcher`,
-  the app-bundle VM path, and `pharo-launcher.sh`.
+- macOS discovery checks `$HOME/Applications/PharoLauncher.app` and
+  `/Applications/PharoLauncher.app` before falling back to
+  `$HOME/Library/Application Support/Pharo Launcher`. App-bundle installs use
+  `Contents/MacOS/Pharo` and `Contents/Resources/PharoLauncher.image`.
 - Linux defaults to `$HOME/.local/share/Pharo Launcher`, `pharo-vm/pharo`,
   and `pharo-launcher.sh`.
 
 `src/crossPlatform.test.ts` covers configuration defaults, bundled wrapper
 selection, and native process backend selection for all three platforms.
+`src/config.test.ts` covers macOS app-bundle discovery, fallback, and explicit
+environment override precedence.
 
 ## Process Backend
 

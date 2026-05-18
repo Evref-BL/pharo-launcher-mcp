@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { loadPharoLauncherConfig, type PharoLauncherConfig } from "./config.js";
+import {
+  loadPharoLauncherConfig,
+  type PharoLauncherConfig,
+  type PharoLauncherInstallationCandidate,
+  type PharoLauncherInstallationSource,
+} from "./config.js";
 import { runLauncherCli, type LauncherCliResult } from "./launcherCli.js";
 import {
   resolveLauncherScriptDetails,
@@ -30,7 +35,22 @@ export interface PharoLauncherProfileReport {
   logsDir: PathStatus;
 }
 
+export interface PharoLauncherInstallationCandidateReport {
+  source: PharoLauncherInstallationSource;
+  launcherDir: PathStatus;
+  launcherVm: PathStatus;
+  installationLauncherImage: PathStatus;
+  usable: boolean;
+}
+
+export interface PharoLauncherInstallationDiscoveryReport {
+  source: PharoLauncherInstallationSource;
+  selected: PharoLauncherInstallationCandidateReport;
+  candidates: PharoLauncherInstallationCandidateReport[];
+}
+
 export interface PharoLauncherConfigReport {
+  discovery: PharoLauncherInstallationDiscoveryReport;
   launcherDir: PathStatus;
   launcherVm: PathStatus;
   installationLauncherImage: PathStatus;
@@ -297,6 +317,49 @@ function getProfileReport(
   };
 }
 
+function installationCandidateReport(
+  candidate: PharoLauncherInstallationCandidate,
+): PharoLauncherInstallationCandidateReport {
+  const launcherDir = pathStatus(candidate.launcherDir);
+  const launcherVm = pathStatus(candidate.launcherVm);
+  const installationLauncherImage = pathStatus(
+    candidate.installationLauncherImage,
+  );
+
+  return {
+    source: candidate.source,
+    launcherDir,
+    launcherVm,
+    installationLauncherImage,
+    usable:
+      launcherDir.exists &&
+      launcherVm.exists &&
+      installationLauncherImage.exists,
+  };
+}
+
+function installationDiscoveryReport(
+  config: PharoLauncherConfig,
+): PharoLauncherInstallationDiscoveryReport {
+  const fallbackCandidate: PharoLauncherInstallationCandidate = {
+    source: "env",
+    launcherDir: config.launcherDir,
+    launcherVm: config.launcherVm,
+    installationLauncherImage: config.installationLauncherImage,
+  };
+  const discovery = config.discovery ?? {
+    source: fallbackCandidate.source,
+    selected: fallbackCandidate,
+    candidates: [fallbackCandidate],
+  };
+
+  return {
+    source: discovery.source,
+    selected: installationCandidateReport(discovery.selected),
+    candidates: discovery.candidates.map(installationCandidateReport),
+  };
+}
+
 function getInventoryProfile(
   config: PharoLauncherConfig,
 ): PharoLauncherInventoryProfile | undefined {
@@ -422,6 +485,7 @@ export function getPharoLauncherConfigReport(
   config: PharoLauncherConfig = loadPharoLauncherConfig(),
 ): PharoLauncherConfigReport {
   return {
+    discovery: installationDiscoveryReport(config),
     launcherDir: pathStatus(config.launcherDir),
     launcherVm: pathStatus(config.launcherVm),
     installationLauncherImage: pathStatus(config.installationLauncherImage),
