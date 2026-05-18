@@ -1,9 +1,31 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { LauncherCliRunner } from "./discovery.js";
 import { callTool } from "./server.js";
 
 function parseJsonResult(result: Awaited<ReturnType<typeof callTool>>) {
   return JSON.parse(result.content[0]?.text ?? "{}") as Record<string, unknown>;
+}
+
+function tempLauncherConfig() {
+  const launcherDir = fs.mkdtempSync(path.join(os.tmpdir(), "pharo-launcher-mcp-"));
+  const launcherVm = path.join(launcherDir, "PharoConsole.exe");
+  const launcherImage = path.join(launcherDir, "PharoLauncher.image");
+  const launcherScript = path.join(launcherDir, "pharo-launcher.cmd");
+
+  fs.writeFileSync(launcherVm, "");
+  fs.writeFileSync(launcherImage, "");
+  fs.writeFileSync(launcherScript, "");
+
+  return {
+    launcherDir,
+    launcherVm,
+    installationLauncherImage: launcherImage,
+    launcherImage,
+    launcherScript,
+  };
 }
 
 describe("callTool", () => {
@@ -64,6 +86,71 @@ describe("callTool", () => {
 
     expect(result.isError).toBe(true);
     expect(body.ok).toBe(false);
+  });
+
+  it("exposes inventory with caller-declared image handles", async () => {
+    const config = tempLauncherConfig();
+    const calls: readonly string[][] = [];
+    const runner: LauncherCliRunner = async (args) => {
+      (calls as string[][]).push([...args]);
+
+      return {
+        exitCode: 0,
+        stdout:
+          args[0] === "template"
+            ? "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13',#category:'stable',#url:URL['https://example.test/130/latest.zip']}]"
+            : "OrderedCollection[]",
+        stderr: "",
+        durationMs: 4,
+        timedOut: false,
+      };
+    };
+
+    const result = await callTool(
+      "pharo_launcher_inventory",
+      {
+        declaredImages: [
+          {
+            imageId: "dev",
+            imageName: "Workspace-dev",
+            workspaceId: "workspace",
+          },
+        ],
+      },
+      { runner, config },
+    );
+    const body = parseJsonResult(result);
+
+    fs.rmSync(config.launcherDir, { recursive: true, force: true });
+    expect(result.isError).toBeUndefined();
+    expect(body).toMatchObject({
+      ok: true,
+      service: "pharo-launcher-mcp",
+      templates: {
+        installed: [],
+        downloadable: [
+          {
+            name: "Pharo 13",
+            category: "stable",
+            pharoVersion: "130",
+          },
+        ],
+      },
+      images: {
+        existing: [],
+        declared: [
+          {
+            imageId: "dev",
+            imageName: "Workspace-dev",
+            workspaceId: "workspace",
+          },
+        ],
+      },
+    });
+    expect(calls).toEqual([
+      ["template", "list", "--ston"],
+      ["image", "list", "--ston"],
+    ]);
   });
 
   it("verifies copied images with list and info before reporting success", async () => {

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   getPharoLauncherConfigReport,
   getPharoLauncherHealth,
+  getPharoLauncherInventory,
   getPharoLauncherVersion,
   validatePharoLauncherInstallation,
   type LauncherCliRunner,
@@ -30,6 +31,50 @@ function tempLauncherConfig() {
     installationLauncherImage: launcherImage,
     launcherImage,
     launcherScript,
+  };
+}
+
+function tempProfileConfig() {
+  const config = tempLauncherConfig();
+  const stateRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pharo-launcher-mcp-profile-"),
+  );
+  tempDirs.push(stateRoot);
+
+  const profile = {
+    name: "isolated",
+    stateRoot,
+    launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+    imagesDir: path.join(stateRoot, "images"),
+    vmsDir: path.join(stateRoot, "vms"),
+    templateSourcesDir: path.join(stateRoot, "templates"),
+    initScriptsDir: path.join(stateRoot, "init-scripts"),
+    logsDir: path.join(stateRoot, "logs"),
+  };
+  const launcherConfiguration = path.join(
+    stateRoot,
+    "launcher",
+    "pharo-launcher-cli-config.ston",
+  );
+
+  for (const directory of [
+    path.dirname(profile.launcherImage),
+    profile.imagesDir,
+    profile.vmsDir,
+    profile.templateSourcesDir,
+    profile.initScriptsDir,
+    profile.logsDir,
+  ]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  fs.writeFileSync(profile.launcherImage, "");
+  fs.writeFileSync(launcherConfiguration, "");
+
+  return {
+    ...config,
+    launcherImage: profile.launcherImage,
+    launcherConfiguration,
+    profile,
   };
 }
 
@@ -152,5 +197,228 @@ describe("PharoLauncher discovery", () => {
     expect(report.ok).toBe(false);
     expect(report.harmlessCliCall.ok).toBe(false);
     expect(report.harmlessCliCall.result?.stderr).toBe("boom");
+  });
+
+  it("reports scoped template, version, image, declaration, and profile inventory", async () => {
+    const config = tempProfileConfig();
+    fs.writeFileSync(
+      path.join(config.profile.templateSourcesDir, "local.ston"),
+      "OrderedCollection[PhLTemplate{#name:'Pharo 12',#category:'stable',#url:URL['https://example.test/120/latest.zip']}]",
+    );
+
+    const calls: readonly string[][] = [];
+    const runner: LauncherCliRunner = async (args) => {
+      (calls as string[][]).push([...args]);
+
+      return {
+        exitCode: 0,
+        stdout:
+          args[0] === "template"
+            ? "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13',#category:'stable',#url:URL['https://example.test/130/latest.zip']}]"
+            : "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13',#url:URL['https://example.test/130/latest.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['Task','Task.image']}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'130-x64'}}]}]",
+        stderr: "",
+        durationMs: 5,
+        timedOut: false,
+      };
+    };
+
+    const report = await getPharoLauncherInventory(runner, config, {
+      declaredImages: [
+        {
+          imageId: "dev",
+          imageName: "Task",
+          projectId: "project",
+          workspaceId: "workspace",
+          targetId: "target",
+          active: true,
+          status: "declared",
+        },
+      ],
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.profiles.active).toMatchObject({
+      id: "profile:isolated",
+      active: true,
+      name: "isolated",
+      stateRoot: { path: config.profile.stateRoot, exists: true },
+      imagesRoot: { path: config.profile.imagesDir, exists: true },
+      vmRoot: { path: config.profile.vmsDir, exists: true },
+      templateSourceRoot: {
+        path: config.profile.templateSourcesDir,
+        exists: true,
+      },
+      initScriptRoot: { path: config.profile.initScriptsDir, exists: true },
+      logRoot: { path: config.profile.logsDir, exists: true },
+    });
+    expect(report.templates.installed).toEqual([
+      expect.objectContaining({
+        id: expect.stringContaining("installed:template:stable:Pharo+12"),
+        name: "Pharo 12",
+        category: "stable",
+        pharoVersion: "120",
+        createRequest: {
+          templateName: "Pharo 12",
+          templateCategory: "stable",
+        },
+      }),
+    ]);
+    expect(report.templates.downloadable).toEqual([
+      expect.objectContaining({
+        id: expect.stringContaining("downloadable:template:stable:Pharo+13"),
+        name: "Pharo 13",
+        category: "stable",
+        pharoVersion: "130",
+      }),
+    ]);
+    expect(report.images.existing).toEqual([
+      expect.objectContaining({
+        id: "image:Task",
+        imageName: "Task",
+        pharoVersion: "130",
+        copyRequest: { imageName: "Task" },
+      }),
+    ]);
+    expect(report.images.declared).toEqual([
+      expect.objectContaining({
+        imageId: "dev",
+        imageName: "Task",
+        workspaceId: "workspace",
+      }),
+    ]);
+    expect(report.versions).toEqual([
+      expect.objectContaining({
+        id: "pharo:120",
+        pharoVersion: "120",
+        installedTemplateIds: [expect.stringContaining("Pharo+12")],
+      }),
+      expect.objectContaining({
+        id: "pharo:130",
+        pharoVersion: "130",
+        downloadableTemplateIds: [expect.stringContaining("Pharo+13")],
+        imageIds: ["image:Task"],
+      }),
+    ]);
+    expect(calls).toEqual([
+      ["template", "list", "--ston"],
+      ["image", "list", "--ston"],
+    ]);
+  });
+
+  it("reports an empty scoped inventory without treating it as a failure", async () => {
+    const config = tempProfileConfig();
+    const runner: LauncherCliRunner = async () => ({
+      exitCode: 0,
+      stdout: "OrderedCollection[]",
+      stderr: "",
+      durationMs: 2,
+      timedOut: false,
+    });
+
+    const report = await getPharoLauncherInventory(runner, config);
+
+    expect(report.ok).toBe(true);
+    expect(report.templates.installed).toEqual([]);
+    expect(report.templates.downloadable).toEqual([]);
+    expect(report.templates.downloadableKnown).toBe(true);
+    expect(report.images.existing).toEqual([]);
+    expect(report.images.existingKnown).toBe(true);
+    expect(report.images.declared).toEqual([]);
+    expect(report.versions).toEqual([]);
+    expect(report.diagnostics).toEqual([]);
+  });
+
+  it("returns actionable diagnostics for missing profile paths without probing the launcher", async () => {
+    const config = tempLauncherConfig();
+    const stateRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-profile-"),
+    );
+    tempDirs.push(stateRoot);
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+
+    const runner: LauncherCliRunner = async () => {
+      throw new Error("runner should not be called");
+    };
+
+    const report = await getPharoLauncherInventory(runner, {
+      ...config,
+      launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+      launcherConfiguration: path.join(
+        stateRoot,
+        "launcher",
+        "pharo-launcher-cli-config.ston",
+      ),
+      profile: {
+        name: "missing",
+        stateRoot,
+        launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+        imagesDir: path.join(stateRoot, "images"),
+        vmsDir: path.join(stateRoot, "vms"),
+        templateSourcesDir: path.join(stateRoot, "templates"),
+        initScriptsDir: path.join(stateRoot, "init-scripts"),
+        logsDir: path.join(stateRoot, "logs"),
+      },
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.profiles.active).toMatchObject({
+      name: "missing",
+      stateRoot: { path: stateRoot, exists: false },
+    });
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "launcher_image_missing",
+          action: expect.stringContaining("PHARO_LAUNCHER_MCP_LAUNCHER_IMAGE"),
+        }),
+        expect.objectContaining({
+          code: "launcher_configuration_missing",
+          action: expect.stringContaining(
+            "PHARO_LAUNCHER_MCP_LAUNCHER_CONFIGURATION",
+          ),
+        }),
+        expect.objectContaining({
+          code: "profile_template_source_root_missing",
+          action: expect.stringContaining(
+            "PHARO_LAUNCHER_MCP_TEMPLATE_SOURCES_DIR",
+          ),
+        }),
+      ]),
+    );
+    expect(report.probes).toEqual({});
+  });
+
+  it("keeps multiple Pharo versions distinct without launching images", async () => {
+    const config = tempProfileConfig();
+    const calls: readonly string[][] = [];
+    const runner: LauncherCliRunner = async (args) => {
+      (calls as string[][]).push([...args]);
+
+      return {
+        exitCode: 0,
+        stdout:
+          args[0] === "template"
+            ? "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 12',#category:'stable',#url:URL['https://example.test/120/latest.zip']},PhLRemoteTemplate{#name:'Pharo 13',#category:'stable',#url:URL['https://example.test/130/latest.zip']}]"
+            : "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'120',#originTemplate:PhLRemoteTemplate{#name:'Pharo 12'},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['Base12','Base12.image']}}},PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13'},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['Base13','Base13.image']}}}]",
+        stderr: "",
+        durationMs: 3,
+        timedOut: false,
+      };
+    };
+
+    const report = await getPharoLauncherInventory(runner, config);
+
+    expect(report.versions.map((version) => version.pharoVersion)).toEqual([
+      "120",
+      "130",
+    ]);
+    expect(report.images.existing.map((image) => image.imageName)).toEqual([
+      "Base12",
+      "Base13",
+    ]);
+    expect(calls).toEqual([
+      ["template", "list", "--ston"],
+      ["image", "list", "--ston"],
+    ]);
   });
 });
