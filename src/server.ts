@@ -259,7 +259,7 @@ function namedImage(data: unknown, imageName: string): LauncherImage | undefined
   return imagesFromData(data).find((image) => image.name === imageName);
 }
 
-interface ImageCopyVerification {
+interface ImageVerification {
   ok: boolean;
   targetImageName: string;
   attempts: number;
@@ -271,11 +271,12 @@ interface ImageCopyVerification {
   info?: LauncherCommandResult;
 }
 
-async function verifyCopiedImage(
+async function verifyImage(
   runner: LauncherCliRunner,
   newImageName: string,
+  operationLabel: "Copied" | "Created",
   options: CallToolOptions,
-): Promise<ImageCopyVerification> {
+): Promise<ImageVerification> {
   const startedAt = Date.now();
   const deadline =
     startedAt +
@@ -286,7 +287,7 @@ async function verifyCopiedImage(
   let attempts = 0;
   let lastList: LauncherCommandResult | undefined;
   let lastInfo: LauncherCommandResult | undefined;
-  let diagnostic = "Copied image did not appear in image list.";
+  let diagnostic = `${operationLabel} image did not appear in image list.`;
 
   while (true) {
     attempts += 1;
@@ -344,12 +345,12 @@ async function verifyCopiedImage(
       }
 
       diagnostic = normalizedInfo.ok
-        ? "Copied image appeared in image list but could not be inspected."
-        : "Copied image appeared in image list, but image info failed.";
+        ? `${operationLabel} image appeared in image list but could not be inspected.`
+        : `${operationLabel} image appeared in image list, but image info failed.`;
     } else {
       diagnostic = normalizedList.ok
-        ? "Copied image did not appear in image list."
-        : "Image list failed while verifying copied image.";
+        ? `${operationLabel} image did not appear in image list.`
+        : `Image list failed while verifying ${operationLabel.toLowerCase()} image.`;
     }
 
     const remainingMs = deadline - Date.now();
@@ -393,11 +394,11 @@ async function imageCopyResult(
     args[2],
     newImageName,
   );
-  const verification = await verifyCopiedImage(runner, newImageName, options);
+  const verification = await verifyImage(runner, newImageName, "Copied", options);
   const copyResult: LauncherCommandResult & {
     diagnostic?: string;
     metadataRepair: ReturnType<typeof repairCopiedImageMetadata>;
-    copyVerification: ImageCopyVerification;
+    copyVerification: ImageVerification;
   } = {
     ...normalized,
     ok: verification.ok,
@@ -423,6 +424,54 @@ async function imageCopyResult(
   };
 
   return jsonResult(copyResult, !copyResult.ok);
+}
+
+async function imageCreateResult(
+  args: string[],
+  options: CallToolOptions,
+): Promise<ToolResult> {
+  const runner = options.runner ?? runLauncherCli;
+  const result = await runLauncherToolCommand(runner, args, options);
+  const normalized = normalizeLauncherResult(
+    "pharo_launcher_image_create",
+    args,
+    result,
+  );
+  const newImageName = args.at(-1);
+
+  if (!normalized.ok || !newImageName) {
+    return jsonResult(normalized, true);
+  }
+
+  const verification = await verifyImage(runner, newImageName, "Created", options);
+  const createResult: LauncherCommandResult & {
+    diagnostic?: string;
+    createVerification: ImageVerification;
+  } = {
+    ...normalized,
+    ok: verification.ok,
+    ...(verification.ok
+      ? {
+          data: {
+            ...(typeof normalized.data === "object" && normalized.data !== null
+              ? normalized.data
+              : {}),
+            targetImageName: newImageName,
+            listedImage: verification.listedImage,
+            inspectedImage: verification.inspectedImage,
+            createdImage: verification.inspectedImage,
+          },
+        }
+      : {}),
+    ...(!verification.ok
+      ? {
+          diagnostic: `Image create command exited successfully, but target image ${newImageName} was not listable and inspectable: ${verification.diagnostic}`,
+        }
+      : {}),
+    createVerification: verification,
+  };
+
+  return jsonResult(createResult, !createResult.ok);
 }
 
 interface TemplateSourcesBootstrap {
@@ -598,6 +647,9 @@ async function cliResult(
 ): Promise<ToolResult> {
   if (toolName === "pharo_launcher_image_copy") {
     return imageCopyResult(args, options);
+  }
+  if (toolName === "pharo_launcher_image_create") {
+    return imageCreateResult(args, options);
   }
   if (toolName === "pharo_launcher_template_update") {
     return templateUpdateResult(args, options);

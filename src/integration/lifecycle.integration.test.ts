@@ -62,6 +62,14 @@ async function firstTemplate(profile: IntegrationProfile): Promise<TemplateChoic
     .map((vm) => (typeof vm.id === "string" ? vm.id.match(/^(\d+)-/)?.[1] : undefined))
     .filter((version): version is string => Boolean(version));
 
+  const update = await callLiveTool(
+    profile,
+    "pharo_launcher_template_update",
+    {},
+    { timeoutMs: lifecycleTimeoutMs },
+  );
+  expectSuccessfulTool("template update", update);
+
   const { result, body } = await callLiveTool(
     profile,
     "pharo_launcher_template_list",

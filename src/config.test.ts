@@ -196,6 +196,22 @@ describe("loadPharoLauncherConfig", () => {
     );
   });
 
+  it("does not create an implicit profile or home when profile env is absent", () => {
+    const config = loadPharoLauncherConfig(
+      {
+        HOME: "/home/ada",
+      },
+      "linux",
+    );
+
+    expect(config.profile).toBeUndefined();
+    expect(config.launcherConfiguration).toBeUndefined();
+    expect(config.launcherImage).toBe(
+      "/home/ada/.local/share/Pharo Launcher/PharoLauncher.image",
+    );
+    expect(config.launcherImage).toBe(config.installationLauncherImage);
+  });
+
   it("uses explicit launcher paths on non-Windows platforms", () => {
     const config = loadPharoLauncherConfig(
       {

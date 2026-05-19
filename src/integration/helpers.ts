@@ -6,7 +6,6 @@ import {
   loadPharoLauncherConfig,
   type PharoLauncherConfig,
 } from "../config.js";
-import { defaultLauncherDir as platformDefaultLauncherDir } from "../platform.js";
 import { callTool, type CallToolOptions } from "../server.js";
 
 export interface IntegrationProfile {
@@ -19,10 +18,6 @@ export interface ParsedToolResult {
   body: Record<string, unknown>;
 }
 
-function defaultLauncherDir(): string {
-  return platformDefaultLauncherDir(process.env, process.platform);
-}
-
 function copyIfExists(source: string, destination: string): void {
   if (fs.existsSync(source)) {
     fs.copyFileSync(source, destination);
@@ -32,10 +27,11 @@ function copyIfExists(source: string, destination: string): void {
 export function prepareIntegrationProfile(
   profileName = "integration",
 ): IntegrationProfile {
-  const launcherDir = process.env.PHARO_LAUNCHER_DIR ?? defaultLauncherDir();
+  const installationConfig = loadPharoLauncherConfig(process.env);
+  const launcherDir = process.env.PHARO_LAUNCHER_DIR ?? installationConfig.launcherDir;
   const sourceImage =
     process.env.PHARO_LAUNCHER_IMAGE ??
-    path.join(launcherDir, "PharoLauncher.image");
+    installationConfig.installationLauncherImage;
 
   if (!fs.existsSync(sourceImage)) {
     throw new Error(`PharoLauncher image not found: ${sourceImage}`);

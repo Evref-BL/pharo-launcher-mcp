@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import {
   loadPharoLauncherConfig,
@@ -125,8 +126,24 @@ export interface PharoTemplateInventoryEntry {
   name: string;
   category?: string;
   url?: string;
+  architecture?: string;
   pharoVersion?: string;
   sourcePath?: string;
+  sourceFile?: {
+    path: string;
+    sizeBytes: number;
+    mtimeMs: number;
+    sha256: string;
+  };
+  identity: {
+    source: "installed" | "downloadable";
+    category: string;
+    name: string;
+    url?: string;
+    pharoVersion?: string;
+    architecture?: string;
+    sourceFileSha256?: string;
+  };
   createRequest: {
     templateName: string;
     templateCategory?: string;
@@ -142,6 +159,16 @@ export interface PharoImageInventoryEntry {
   imagePath?: string;
   originTemplate?: LauncherImage["originTemplate"];
   vmId?: string;
+  identity: {
+    imageName: string;
+    architecture?: string;
+    pharoVersion?: string;
+    formatNumber?: number;
+    imagePath?: string;
+    originTemplateName?: string;
+    originTemplateUrl?: string;
+    vmId?: string;
+  };
   copyRequest: {
     imageName: string;
   };
@@ -552,13 +579,75 @@ function imagesFromData(data: unknown): LauncherImage[] {
   return [];
 }
 
+function normalizePharoVersion(value: string): string {
+  const trimmed = value.trim();
+  const numeric = trimmed.match(/^(\d{2,3})(?:\.(\d+))?$/);
+  if (!numeric) {
+    return trimmed;
+  }
+
+  const major = numeric[1];
+  const minor = numeric[2] ?? (major.length === 2 ? "0" : "");
+  return `${major}${minor}`;
+}
+
 function pharoVersionFromTemplate(template: LauncherTemplate): string | undefined {
   const urlVersion = template.url?.match(/(?:^|[/-])(\d{2,3})(?:[./-]|$)/)?.[1];
   if (urlVersion) {
-    return urlVersion;
+    return normalizePharoVersion(urlVersion);
   }
 
-  return template.name?.match(/\bPharo\s+(\d+(?:\.\d+)?)/i)?.[1];
+  const nameVersion = template.name?.match(
+    /\b(?:Pharo|Moose)\D*(\d{2,3}(?:\.\d+)?)/i,
+  )?.[1];
+  return nameVersion ? normalizePharoVersion(nameVersion) : undefined;
+}
+
+function architectureFromTemplate(
+  template: LauncherTemplate,
+): string | undefined {
+  const source = `${template.name ?? ""} ${template.url ?? ""}`;
+  if (/\b(?:aarch64|arm64)\b/i.test(source)) {
+    return "arm64";
+  }
+  if (/\b(?:x64|64\s*[- ]?\s*bit|64bit)\b/i.test(source)) {
+    return "64";
+  }
+  if (/\b(?:x86|32\s*[- ]?\s*bit|32bit)\b/i.test(source)) {
+    return "32";
+  }
+
+  return undefined;
+}
+
+function templateSourceFile(
+  filePath: string,
+):
+  | {
+      path: string;
+      sizeBytes: number;
+      mtimeMs: number;
+      sha256: string;
+    }
+  | undefined {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) {
+      return undefined;
+    }
+
+    return {
+      path: filePath,
+      sizeBytes: stat.size,
+      mtimeMs: stat.mtimeMs,
+      sha256: crypto
+        .createHash("sha256")
+        .update(fs.readFileSync(filePath))
+        .digest("hex"),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function inventoryTemplate(
@@ -570,16 +659,30 @@ function inventoryTemplate(
     return undefined;
   }
 
+  const pharoVersion = pharoVersionFromTemplate(template);
+  const architecture = architectureFromTemplate(template);
+  const sourceFile = sourcePath ? templateSourceFile(sourcePath) : undefined;
+  const category = template.category ?? "uncategorized";
+
   return {
     id: templateId(source, template),
     source,
     name: template.name,
     ...(template.category ? { category: template.category } : {}),
     ...(template.url ? { url: template.url } : {}),
-    ...(pharoVersionFromTemplate(template)
-      ? { pharoVersion: pharoVersionFromTemplate(template) }
-      : {}),
+    ...(architecture ? { architecture } : {}),
+    ...(pharoVersion ? { pharoVersion } : {}),
     ...(sourcePath ? { sourcePath } : {}),
+    ...(sourceFile ? { sourceFile } : {}),
+    identity: {
+      source,
+      category,
+      name: template.name,
+      ...(template.url ? { url: template.url } : {}),
+      ...(pharoVersion ? { pharoVersion } : {}),
+      ...(architecture ? { architecture } : {}),
+      ...(sourceFile ? { sourceFileSha256: sourceFile.sha256 } : {}),
+    },
     createRequest: {
       templateName: template.name,
       ...(template.category ? { templateCategory: template.category } : {}),
@@ -601,6 +704,20 @@ function inventoryImage(image: LauncherImage): PharoImageInventoryEntry | undefi
     ...(image.imagePath ? { imagePath: image.imagePath } : {}),
     ...(image.originTemplate ? { originTemplate: image.originTemplate } : {}),
     ...(image.vmId ? { vmId: image.vmId } : {}),
+    identity: {
+      imageName: image.name,
+      ...(image.architecture ? { architecture: image.architecture } : {}),
+      ...(image.pharoVersion ? { pharoVersion: image.pharoVersion } : {}),
+      ...(image.formatNumber ? { formatNumber: image.formatNumber } : {}),
+      ...(image.imagePath ? { imagePath: image.imagePath } : {}),
+      ...(image.originTemplate?.name
+        ? { originTemplateName: image.originTemplate.name }
+        : {}),
+      ...(image.originTemplate?.url
+        ? { originTemplateUrl: image.originTemplate.url }
+        : {}),
+      ...(image.vmId ? { vmId: image.vmId } : {}),
+    },
     copyRequest: {
       imageName: image.name,
     },

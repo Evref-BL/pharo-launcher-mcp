@@ -81,6 +81,13 @@ describe("PharoLauncher live integration", () => {
   });
 
   it("lists template categories and inspects a template", async () => {
+    const update = await callLiveTool(
+      profile,
+      "pharo_launcher_template_update",
+    );
+    expect(update.result.isError).toBeUndefined();
+    expectOkTool(update.body);
+
     const categories = await callLiveTool(
       profile,
       "pharo_launcher_template_category_list",

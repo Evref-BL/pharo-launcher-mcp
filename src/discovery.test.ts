@@ -318,6 +318,21 @@ describe("PharoLauncher discovery", () => {
         name: "Pharo 12",
         category: "stable",
         pharoVersion: "120",
+        sourcePath: path.join(config.profile.templateSourcesDir, "local.ston"),
+        sourceFile: expect.objectContaining({
+          path: path.join(config.profile.templateSourcesDir, "local.ston"),
+          sizeBytes: expect.any(Number),
+          mtimeMs: expect.any(Number),
+          sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+        identity: expect.objectContaining({
+          source: "installed",
+          category: "stable",
+          name: "Pharo 12",
+          url: "https://example.test/120/latest.zip",
+          pharoVersion: "120",
+          sourceFileSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
         createRequest: {
           templateName: "Pharo 12",
           templateCategory: "stable",
@@ -330,6 +345,13 @@ describe("PharoLauncher discovery", () => {
         name: "Pharo 13",
         category: "stable",
         pharoVersion: "130",
+        identity: expect.objectContaining({
+          source: "downloadable",
+          category: "stable",
+          name: "Pharo 13",
+          url: "https://example.test/130/latest.zip",
+          pharoVersion: "130",
+        }),
       }),
     ]);
     expect(report.images.existing).toEqual([
@@ -337,6 +359,16 @@ describe("PharoLauncher discovery", () => {
         id: "image:Task",
         imageName: "Task",
         pharoVersion: "130",
+        identity: expect.objectContaining({
+          imageName: "Task",
+          architecture: "64",
+          pharoVersion: "130",
+          formatNumber: 68021,
+          imagePath: "Task/Task.image",
+          originTemplateName: "Pharo 13",
+          originTemplateUrl: "https://example.test/130/latest.zip",
+          vmId: "130-x64",
+        }),
         copyRequest: { imageName: "Task" },
       }),
     ]);
@@ -363,6 +395,48 @@ describe("PharoLauncher discovery", () => {
     expect(calls).toEqual([
       ["template", "list", "--ston"],
       ["image", "list", "--ston"],
+    ]);
+  });
+
+  it("normalizes Moose template identity by underlying Pharo version", async () => {
+    const config = tempProfileConfig();
+    fs.writeFileSync(
+      path.join(config.profile.templateSourcesDir, "moose.ston"),
+      "OrderedCollection[PhLTemplate{#name:'Moose 13 64bit',#category:'Moose',#url:URL['https://example.test/moose/13/latest.zip']}]",
+    );
+
+    const runner: LauncherCliRunner = async () => ({
+      exitCode: 0,
+      stdout: "OrderedCollection[]",
+      stderr: "",
+      durationMs: 2,
+      timedOut: false,
+    });
+
+    const report = await getPharoLauncherInventory(runner, config);
+
+    expect(report.ok).toBe(true);
+    expect(report.templates.installed).toEqual([
+      expect.objectContaining({
+        name: "Moose 13 64bit",
+        category: "Moose",
+        pharoVersion: "130",
+        architecture: "64",
+        identity: expect.objectContaining({
+          source: "installed",
+          category: "Moose",
+          name: "Moose 13 64bit",
+          pharoVersion: "130",
+          architecture: "64",
+          sourceFileSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      }),
+    ]);
+    expect(report.versions).toEqual([
+      expect.objectContaining({
+        id: "pharo:130",
+        pharoVersion: "130",
+      }),
     ]);
   });
 

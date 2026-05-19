@@ -46,6 +46,12 @@ For macOS app-bundle installs, the control image is resolved from
 `pharo_launcher_health` report the selected discovery source and all attempted
 installation candidates.
 
+The default, no-profile mode is a direct adapter over the user's normal Pharo
+Launcher installation and state scope. In that mode, image/template/VM commands
+operate on the same image repository and template state the normal Pharo
+Launcher installation uses. pharo-launcher-mcp does not create an implicit home
+directory, hidden default profile, or cache in front of that installation.
+
 Override paths when needed:
 
 ```sh
@@ -76,6 +82,12 @@ Profiles are optional. They let pharo-launcher-mcp use a separate Pharo
 Launcher control image and separate folders for images, VMs, templates,
 initialization scripts, and logs.
 
+Use a profile when an automation, integration test, or embedding application
+needs an isolated launcher state scope. A profile is explicit: it is selected by
+`PHARO_LAUNCHER_MCP_PROFILE`, `PHARO_LAUNCHER_MCP_STATE_ROOT`, or the
+per-directory profile variables below. If none of those variables are set,
+profile mode is inactive.
+
 ```sh
 PHARO_LAUNCHER_MCP_PROFILE=isolated
 PHARO_LAUNCHER_MCP_STATE_ROOT=/path/to/pharo-launcher-mcp/profiles/isolated
@@ -99,6 +111,15 @@ and uses `<state-root>/launcher/pharo-launcher-cli-config.ston`. That generated
 configuration points Pharo Launcher at the profile images, VMs, template
 sources, and initialization script directories so image create and copy commands
 do not fall back to the host default image repository.
+
+Terminology used by the tool output:
+
+- Pharo Launcher installation: the app, VM/executable, control image, and
+  discovery source used to run launcher commands.
+- Launcher state scope: the image, VM, template-source, init-script, and log
+  locations affected by launcher commands.
+- pharo-launcher-mcp profile: an explicit isolated launcher state scope.
+- No-profile mode: direct use of the user's normal Pharo Launcher state scope.
 
 ## Tools
 
@@ -201,6 +222,20 @@ Launcher tools return a normalized envelope:
   };
 }
 ```
+
+`pharo_launcher_inventory` includes normalized template and image identity data
+for callers that need stable planning keys. Template entries include the
+selected category/name/url, normalized Pharo version when discoverable, inferred
+architecture when discoverable, source file digest/mtime for installed template
+files, and a stable `createRequest`. Moose templates are classified by their
+underlying Pharo version.
+
+`pharo_launcher_image_create` and `pharo_launcher_image_copy` do not trust a
+successful command exit alone. After the command returns, the server lists and
+inspects the target image name. The result includes `createVerification` or
+`copyVerification`, plus the listed and inspected image metadata. If the image
+cannot be found and inspected, the MCP tool result is an error with a focused
+diagnostic.
 
 ## Development
 

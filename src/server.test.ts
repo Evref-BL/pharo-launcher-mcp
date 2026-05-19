@@ -310,6 +310,161 @@ describe("callTool", () => {
     ]);
   });
 
+  it("verifies created template images with list and info before reporting success", async () => {
+    const calls: readonly string[][] = [];
+    const runner: LauncherCliRunner = async (args) => {
+      (calls as string[][]).push([...args]);
+
+      return {
+        exitCode: 0,
+        stdout:
+          args[0] === "image" && args[1] === "create"
+            ? "Created"
+            : taskImageSton,
+        stderr: "",
+        durationMs: 4,
+        timedOut: false,
+      };
+    };
+
+    const result = await callTool(
+      "pharo_launcher_image_create",
+      {
+        templateName: "Pharo 13",
+        newImageName: "Task",
+        noLaunch: true,
+      },
+      { runner },
+    );
+
+    expect(result.isError).toBeUndefined();
+    const body = parseJsonResult(result);
+    expect(body).toMatchObject({
+      ok: true,
+      parser: {
+        status: "unsupported",
+        format: "text",
+      },
+      raw: {
+        stdout: "Created",
+        stderr: "",
+        format: "text",
+      },
+      command: {
+        args: [
+          "image",
+          "create",
+          "--no-launch",
+          "--templateName",
+          "Pharo 13",
+          "Task",
+        ],
+        durationMs: 4,
+        exitCode: 0,
+      },
+      data: {
+        message: "Created",
+        targetImageName: "Task",
+        listedImage: {
+          name: "Task",
+          pharoVersion: "130",
+        },
+        inspectedImage: {
+          name: "Task",
+          pharoVersion: "130",
+        },
+        createdImage: {
+          name: "Task",
+          pharoVersion: "130",
+        },
+      },
+      createVerification: {
+        ok: true,
+        targetImageName: "Task",
+        attempts: 1,
+      },
+    });
+    expect(calls).toEqual([
+      [
+        "image",
+        "create",
+        "--no-launch",
+        "--templateName",
+        "Pharo 13",
+        "Task",
+      ],
+      ["image", "list", "--nameFilter", "Task", "--ston"],
+      ["image", "info", "--ston", "Task"],
+    ]);
+  });
+
+  it("fails created template images that are not discoverable", async () => {
+    const calls: readonly string[][] = [];
+    const runner: LauncherCliRunner = async (args) => {
+      (calls as string[][]).push([...args]);
+
+      return {
+        exitCode: 0,
+        stdout:
+          args[0] === "image" && args[1] === "create"
+            ? "Created"
+            : "OrderedCollection[]",
+        stderr: "",
+        durationMs: 4,
+        timedOut: false,
+      };
+    };
+
+    const result = await callTool(
+      "pharo_launcher_image_create",
+      {
+        templateName: "Pharo 13",
+        newImageName: "Task",
+        noLaunch: true,
+      },
+      {
+        runner,
+        imageCopyVerificationTimeoutMs: 0,
+        imageCopyVerificationPollMs: 0,
+      },
+    );
+    const body = parseJsonResult(result);
+
+    expect(result.isError).toBe(true);
+    expect(body).toMatchObject({
+      ok: false,
+      diagnostic:
+        "Image create command exited successfully, but target image Task was not listable and inspectable: Created image did not appear in image list.",
+      raw: {
+        stdout: "Created",
+        stderr: "",
+      },
+      createVerification: {
+        ok: false,
+        targetImageName: "Task",
+        attempts: 1,
+        list: {
+          ok: true,
+          data: [],
+          raw: {
+            stdout: "OrderedCollection[]",
+          },
+        },
+      },
+    });
+    expect(calls).toEqual([
+      [
+        "image",
+        "create",
+        "--no-launch",
+        "--templateName",
+        "Pharo 13",
+        "Task",
+      ],
+      ["image", "list", "--nameFilter", "Task", "--ston"],
+    ]);
+  });
+
   it("runs typed launcher read tools through the runner", async () => {
     const calls: readonly string[][] = [];
     const runner: LauncherCliRunner = async (args) => {

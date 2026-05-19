@@ -55,6 +55,13 @@ selection, and native process backend selection for all three platforms.
 `src/config.test.ts` covers macOS app-bundle discovery, fallback, and explicit
 environment override precedence.
 
+No-profile mode means no pharo-launcher-mcp profile is active and no
+pharo-launcher-mcp home/cache is created. The resolved Pharo Launcher
+installation and its normal state scope are used directly. Profile mode is
+entered only when `PHARO_LAUNCHER_MCP_PROFILE`,
+`PHARO_LAUNCHER_MCP_STATE_ROOT`, or one of the explicit profile directory
+variables is present.
+
 ## Process Backend
 
 Pharo Launcher process commands can vary by host. pharo-launcher-mcp uses a native process
@@ -89,6 +96,13 @@ LauncherVm
 LauncherProcess
 LauncherCommandResult
 ```
+
+Inventory output adds normalized identity metadata on top of parsed launcher
+models. Template identities normalize Pharo and Moose template names to the
+underlying Pharo version when possible, infer architecture from template names
+or URLs, and attach source-file digest/mtime for installed `.ston` template
+files. Image identities mirror the launcher metadata returned by image
+list/info commands.
 
 ## Integration Tests
 
