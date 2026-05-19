@@ -29,6 +29,62 @@ function imagePathSton(imageName: string): string {
   return `RelativePath [ '${escaped}', '${escaped}.image' ]`;
 }
 
+function stonStringParts(source: string): string[] {
+  return [...source.matchAll(/'((?:''|[^'])*)'/g)].map((match) =>
+    (match[1] ?? "").replaceAll("''", "'"),
+  );
+}
+
+function imageRelativePathPattern(): RegExp {
+  return new RegExp(
+    `RelativePath\\s*\\[\\s*((?:'(?:''|[^'])*'\\s*,?\\s*)+)\\]`,
+    "g",
+  );
+}
+
+function referencesSourceImagePath(pathParts: string[], imageName: string): boolean {
+  return (
+    pathParts.length >= 2 &&
+    pathParts.at(-2) === imageName &&
+    pathParts.at(-1) === `${imageName}.image`
+  );
+}
+
+function normalizeLauncherImagesOrigin(source: string): string {
+  return source.replace(
+    /#origin\s*:\s*#[A-Za-z][A-Za-z0-9_]*/g,
+    "#origin : #launcherImagesLocation",
+  );
+}
+
+function repairSourceImageFileLocator(
+  source: string,
+  sourceImageName: string,
+  targetImageName: string,
+): string {
+  const targetPath = imagePathSton(targetImageName);
+
+  return source.replace(/FileLocator\s*\{[\s\S]*?\}/g, (fileLocator) => {
+    let repairedPath = false;
+    const repairedLocator = fileLocator.replace(
+      imageRelativePathPattern(),
+      (match, pathSource: string) => {
+        const pathParts = stonStringParts(pathSource);
+        if (!referencesSourceImagePath(pathParts, sourceImageName)) {
+          return match;
+        }
+
+        repairedPath = true;
+        return targetPath;
+      },
+    );
+
+    return repairedPath
+      ? normalizeLauncherImagesOrigin(repairedLocator)
+      : repairedLocator;
+  });
+}
+
 export function repairCopiedImageMetadata(
   config: PharoLauncherConfig,
   sourceImageName: string,
@@ -74,7 +130,11 @@ export function repairCopiedImageMetadataInDirectory(
   }
 
   const before = fs.readFileSync(metaInfPath, "utf8");
-  const after = before.replace(
+  const after = repairSourceImageFileLocator(
+    before,
+    sourceImageName,
+    targetImageName,
+  ).replace(
     imagePathPattern(sourceImageName),
     imagePathSton(targetImageName),
   );

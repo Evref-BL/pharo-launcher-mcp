@@ -191,6 +191,33 @@ function metadataImagePathPattern(imageName: string): RegExp {
   );
 }
 
+function stonStringParts(source: string): string[] {
+  return [...source.matchAll(/'((?:''|[^'])*)'/g)].map((match) =>
+    (match[1] ?? "").replaceAll("''", "'"),
+  );
+}
+
+function metadataReferencesImagePath(
+  metadataContent: string,
+  imageName: string,
+): boolean {
+  const relativePaths = metadataContent.matchAll(
+    /RelativePath\s*\[\s*((?:'(?:''|[^'])*'\s*,?\s*)+)\]/g,
+  );
+  for (const relativePath of relativePaths) {
+    const parts = stonStringParts(relativePath[1] ?? "");
+    if (
+      parts.length >= 2 &&
+      parts.at(-2) === imageName &&
+      parts.at(-1) === `${imageName}.image`
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function pathMetadata(filePath: string): PathMetadata {
   try {
     const stat = fs.statSync(filePath);
@@ -506,7 +533,7 @@ function verifyDestinationImage(
     metadataImagePathPattern(destinationImageName).test(metadataContent);
   const sourceMetadataReferenceAbsent =
     sourceImageName === destinationImageName ||
-    !metadataImagePathPattern(sourceImageName).test(metadataContent);
+    !metadataReferencesImagePath(metadataContent, sourceImageName);
 
   if (!destinationDirectoryExists) {
     return {

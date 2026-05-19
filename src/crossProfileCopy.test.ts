@@ -21,24 +21,29 @@ function imageDirectory(profileRoot: string, imageName: string): string {
   return path.join(profileRoot, "images", imageName);
 }
 
-function writeImage(profileRoot: string, imageName: string): string {
+function writeImage(
+  profileRoot: string,
+  imageName: string,
+  metadata?: string,
+): string {
   const directory = imageDirectory(profileRoot, imageName);
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, `${imageName}.image`), "");
   fs.writeFileSync(path.join(directory, `${imageName}.changes`), "");
   fs.writeFileSync(
     path.join(directory, "meta-inf.ston"),
-    [
-      "PhLImage {",
-      "\t#vmManager : PhLVirtualMachineManager {",
-      "\t\t#imageFile : FileLocator {",
-      `\t\t\t#path : RelativePath [ '${imageName}', '${imageName}.image' ],`,
-      "\t\t\t#origin : #launcherImagesLocation",
-      "\t\t}",
-      "\t}",
-      "}",
-      "",
-    ].join("\n"),
+    metadata ??
+      [
+        "PhLImage {",
+        "\t#vmManager : PhLVirtualMachineManager {",
+        "\t\t#imageFile : FileLocator {",
+        `\t\t\t#path : RelativePath [ '${imageName}', '${imageName}.image' ],`,
+        "\t\t\t#origin : #launcherImagesLocation",
+        "\t\t}",
+        "\t}",
+        "}",
+        "",
+      ].join("\n"),
   );
   return directory;
 }
@@ -230,6 +235,108 @@ describe("cross-profile image copy", () => {
         from: imageDirectory(sourceRoot, "Base"),
       });
       expect(result.cleanup.destinationImageDirectory).toBe(destinationDirectory);
+    } finally {
+      removeProfileRoot(sourceRoot);
+      removeProfileRoot(destinationRoot);
+    }
+  });
+
+  it("repairs prefixed temp FileLocator metadata during cross-profile copy", () => {
+    const sourceRoot = tempProfileRoot("source");
+    const destinationRoot = tempProfileRoot("destination");
+    try {
+      writeImage(
+        sourceRoot,
+        "Base",
+        [
+          "PhLImage {",
+          "\t#vmManager : PhLVirtualMachineManager {",
+          "\t\t#imageFile : FileLocator {",
+          "\t\t\t#path : RelativePath [ 'devnexus-plexus-home-cache-run', 'home', 'profiles', 'pharo-launcher-mcp', 'image-cache', 'images', 'Base', 'Base.image' ],",
+          "\t\t\t#origin : #temp",
+          "\t\t}",
+          "\t}",
+          "}",
+          "",
+        ].join("\n"),
+      );
+
+      const result = copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot, profileName: "cache" },
+        destinationProfile: {
+          stateRoot: destinationRoot,
+          profileName: "runtime",
+        },
+        sourceImageName: "Base",
+        destinationImageName: "Task",
+      });
+      const destinationDirectory = imageDirectory(destinationRoot, "Task");
+
+      expect(result).toMatchObject({
+        ok: true,
+        metadataRepair: {
+          status: "repaired",
+        },
+        verification: {
+          ok: true,
+          destinationMetadataReferencesDestination: true,
+          sourceMetadataReferenceAbsent: true,
+        },
+      });
+      const repaired = fs.readFileSync(
+        path.join(destinationDirectory, "meta-inf.ston"),
+        "utf8",
+      );
+      expect(repaired).toContain("RelativePath [ 'Task', 'Task.image' ]");
+      expect(repaired).toContain("#origin : #launcherImagesLocation");
+      expect(repaired).not.toContain("devnexus-plexus-home-cache-run");
+      expect(repaired).not.toContain("Base.image");
+    } finally {
+      removeProfileRoot(sourceRoot);
+      removeProfileRoot(destinationRoot);
+    }
+  });
+
+  it("rejects copied metadata that still references a prefixed source image path", () => {
+    const sourceRoot = tempProfileRoot("source");
+    const destinationRoot = tempProfileRoot("destination");
+    try {
+      writeImage(
+        sourceRoot,
+        "Base",
+        [
+          "PhLImage {",
+          "\t#vmManager : PhLVirtualMachineManager {",
+          "\t\t#imageFile : FileLocator {",
+          "\t\t\t#path : RelativePath [ 'Task', 'Task.image' ],",
+          "\t\t\t#origin : #launcherImagesLocation",
+          "\t\t}",
+          "\t}",
+          "\t#staleReference : RelativePath [ 'tmp-root', 'images', 'Base', 'Base.image' ]",
+          "}",
+          "",
+        ].join("\n"),
+      );
+
+      const result = copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot },
+        destinationProfile: { stateRoot: destinationRoot },
+        sourceImageName: "Base",
+        destinationImageName: "Task",
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        verification: {
+          ok: false,
+          destinationMetadataReferencesDestination: true,
+          sourceMetadataReferenceAbsent: false,
+        },
+        diagnostic: expect.stringContaining(
+          "Destination image metadata still references the source image file",
+        ),
+      });
+      expect(fs.existsSync(imageDirectory(destinationRoot, "Task"))).toBe(false);
     } finally {
       removeProfileRoot(sourceRoot);
       removeProfileRoot(destinationRoot);

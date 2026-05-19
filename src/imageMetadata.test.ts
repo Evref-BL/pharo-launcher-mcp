@@ -70,6 +70,81 @@ describe("repairCopiedImageMetadata", () => {
     fs.rmSync(stateRoot, { recursive: true, force: true });
   });
 
+  it("repairs temp-root FileLocator paths copied from another profile", () => {
+    const stateRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-profile-"),
+    );
+    const config = profileConfig(stateRoot);
+    const targetDirectory = path.join(config.profile!.imagesDir, "Task");
+    fs.mkdirSync(targetDirectory, { recursive: true });
+    fs.writeFileSync(path.join(targetDirectory, "Task.image"), "");
+    const metaInfPath = path.join(targetDirectory, "meta-inf.ston");
+    fs.writeFileSync(
+      metaInfPath,
+      [
+        "PhLImage {",
+        "\t#vmManager : PhLVirtualMachineManager {",
+        "\t\t#imageFile : FileLocator {",
+        "\t\t\t#path : RelativePath [ 'devnexus-plexus-home-cache-run', 'home', 'profiles', 'pharo-launcher-mcp', 'image-cache', 'images', 'Base', 'Base.image' ],",
+        "\t\t\t#origin : #temp",
+        "\t\t}",
+        "\t}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    expect(repairCopiedImageMetadata(config, "Base", "Task")).toMatchObject({
+      status: "repaired",
+      metaInfPath,
+    });
+    const repaired = fs.readFileSync(metaInfPath, "utf8");
+    expect(repaired).toContain("RelativePath [ 'Task', 'Task.image' ]");
+    expect(repaired).toContain("#origin : #launcherImagesLocation");
+    expect(repaired).not.toContain("devnexus-plexus-home-cache-run");
+    expect(repaired).not.toContain("Base.image");
+
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  });
+
+  it("preserves STON quoting while repairing prefixed image paths", () => {
+    const stateRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-profile-"),
+    );
+    const config = profileConfig(stateRoot);
+    const sourceImageName = "Base's Image";
+    const targetImageName = "Task's Target";
+    const targetDirectory = path.join(config.profile!.imagesDir, targetImageName);
+    fs.mkdirSync(targetDirectory, { recursive: true });
+    fs.writeFileSync(path.join(targetDirectory, `${targetImageName}.image`), "");
+    const metaInfPath = path.join(targetDirectory, "meta-inf.ston");
+    fs.writeFileSync(
+      metaInfPath,
+      [
+        "PhLImage {",
+        "\t#vmManager : PhLVirtualMachineManager {",
+        "\t\t#imageFile : FileLocator {",
+        "\t\t\t#path : RelativePath [ 'tmp-root', 'Base''s Image', 'Base''s Image.image' ],",
+        "\t\t\t#origin : #temp",
+        "\t\t}",
+        "\t}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    expect(
+      repairCopiedImageMetadata(config, sourceImageName, targetImageName),
+    ).toMatchObject({ status: "repaired", metaInfPath });
+    const repaired = fs.readFileSync(metaInfPath, "utf8");
+    expect(repaired).toContain(
+      "RelativePath [ 'Task''s Target', 'Task''s Target.image' ]",
+    );
+    expect(repaired).not.toContain("Base''s Image.image");
+
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  });
+
   it("does not rewrite metadata when no profile is active", () => {
     const result = repairCopiedImageMetadata(
       {
