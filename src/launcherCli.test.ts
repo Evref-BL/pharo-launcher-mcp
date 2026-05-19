@@ -205,8 +205,18 @@ describe("buildLauncherCliInvocation", () => {
     );
 
     const configurationContent = fs.readFileSync(configPath, "utf8");
+    const normalizedTemplateSourcesDir = path
+      .resolve(profile.templateSourcesDir)
+      .replaceAll("\\", "/");
+    const stonTemplateSourcesDir = /^[A-Za-z]:\//.test(
+      normalizedTemplateSourcesDir,
+    )
+      ? `/${normalizedTemplateSourcesDir}`
+      : normalizedTemplateSourcesDir;
     expect(configurationContent).toBe(profileLauncherConfigurationContent(profile));
-    expect(configurationContent).toContain(profile.templateSourcesDir);
+    expect(configurationContent).toContain(
+      `#templateSourcesFileLocation : FILE [ '${stonTemplateSourcesDir}' ]`,
+    );
     expect(configurationContent).not.toContain("sources.list");
     expect(fs.existsSync(profile.imagesDir)).toBe(true);
     expect(fs.existsSync(profile.vmsDir)).toBe(true);

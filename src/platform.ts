@@ -17,6 +17,21 @@ function pathApi(platform: NodeJS.Platform): path.PlatformPath {
   return platform === "win32" ? path.win32 : path.posix;
 }
 
+function pathApiForPathLike(
+  platform: NodeJS.Platform,
+  value: string,
+): path.PlatformPath {
+  if (platform === "win32") {
+    return path.win32;
+  }
+
+  return /^[A-Za-z]:[\\/]/.test(value) ||
+    value.startsWith("\\\\") ||
+    value.includes("\\")
+    ? path.win32
+    : path.posix;
+}
+
 export function joinPlatformPath(
   platform: NodeJS.Platform,
   ...segments: string[]
@@ -65,7 +80,12 @@ export function defaultLauncherVm(
 
   if (platform === "darwin") {
     if (launcherDir.endsWith(".app")) {
-      return paths.join(launcherDir, "Contents", "MacOS", "Pharo");
+      return pathApiForPathLike(platform, launcherDir).join(
+        launcherDir,
+        "Contents",
+        "MacOS",
+        "Pharo",
+      );
     }
 
     return paths.join(
@@ -88,7 +108,7 @@ export function defaultLauncherImage(
   const paths = pathApi(platform);
 
   if (platform === "darwin" && launcherDir.endsWith(".app")) {
-    return paths.join(
+    return pathApiForPathLike(platform, launcherDir).join(
       launcherDir,
       "Contents",
       "Resources",

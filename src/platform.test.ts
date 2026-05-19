@@ -40,6 +40,12 @@ describe("launcher platform defaults", () => {
     expect(bundledLauncherScriptName("darwin")).toBe("pharo-launcher.sh");
   });
 
+  it("keeps Windows-shaped macOS app bundle candidates Windows-shaped", () => {
+    expect(defaultLauncherVm("C:\\Users\\Ada\\PharoLauncher.app", "darwin")).toBe(
+      "C:\\Users\\Ada\\PharoLauncher.app\\Contents\\MacOS\\Pharo",
+    );
+  });
+
   it("defines Linux PharoLauncher defaults", () => {
     expect(defaultLauncherDir({ HOME: "/home/ada" }, "linux")).toBe(
       "/home/ada/.local/share/Pharo Launcher",
