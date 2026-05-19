@@ -41,7 +41,18 @@ export function repairCopiedImageMetadata(
     };
   }
 
-  const targetDirectory = path.join(config.profile.imagesDir, targetImageName);
+  return repairCopiedImageMetadataInDirectory(
+    path.join(config.profile.imagesDir, targetImageName),
+    sourceImageName,
+    targetImageName,
+  );
+}
+
+export function repairCopiedImageMetadataInDirectory(
+  targetDirectory: string,
+  sourceImageName: string,
+  targetImageName: string,
+): ImageMetadataRepairResult {
   const metaInfPath = path.join(targetDirectory, "meta-inf.ston");
   const targetImagePath = path.join(
     targetDirectory,

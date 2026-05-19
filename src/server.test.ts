@@ -59,6 +59,26 @@ function tempProfileConfig() {
   };
 }
 
+function writeProfileImage(stateRoot: string, imageName: string): void {
+  const directory = path.join(stateRoot, "images", imageName);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, `${imageName}.image`), "");
+  fs.writeFileSync(
+    path.join(directory, "meta-inf.ston"),
+    [
+      "PhLImage {",
+      "\t#vmManager : PhLVirtualMachineManager {",
+      "\t\t#imageFile : FileLocator {",
+      `\t\t\t#path : RelativePath [ '${imageName}', '${imageName}.image' ],`,
+      "\t\t\t#origin : #launcherImagesLocation",
+      "\t\t}",
+      "\t}",
+      "}",
+      "",
+    ].join("\n"),
+  );
+}
+
 describe("callTool", () => {
   const taskImageSton =
     "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13',#url:URL['https://example.test/latest.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['Task','Task.image']}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'130-x64'}}]}]";
@@ -308,6 +328,99 @@ describe("callTool", () => {
       ["image", "copy", "Base", "Task"],
       ["image", "list", "--nameFilter", "Task", "--ston"],
     ]);
+  });
+
+  it("copies images between explicit profiles without using the active profile", async () => {
+    const sourceRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-source-profile-"),
+    );
+    const destinationRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-destination-profile-"),
+    );
+    const runner: LauncherCliRunner = async () => {
+      throw new Error("runner should not be called");
+    };
+    writeProfileImage(sourceRoot, "Base");
+
+    const result = await callTool(
+      "pharo_launcher_image_copy_between_profiles",
+      {
+        sourceProfile: {
+          stateRoot: sourceRoot,
+          profileName: "source",
+        },
+        destinationProfile: {
+          stateRoot: destinationRoot,
+          profileName: "destination",
+        },
+        sourceImageName: "Base",
+        destinationImageName: "Task",
+      },
+      { runner },
+    );
+    const body = parseJsonResult(result);
+
+    expect(result.isError).toBeUndefined();
+    expect(body).toMatchObject({
+      ok: true,
+      operation: "copy_between_profiles",
+      sourceImageName: "Base",
+      destinationImageName: "Task",
+      sourceProfile: {
+        profileName: "source",
+        stateRoot: sourceRoot,
+        imagesDir: path.join(sourceRoot, "images"),
+      },
+      destinationProfile: {
+        profileName: "destination",
+        stateRoot: destinationRoot,
+        imagesDir: path.join(destinationRoot, "images"),
+      },
+      destinationImage: {
+        imageName: "Task",
+        imageFile: {
+          exists: true,
+          kind: "file",
+        },
+      },
+      verification: {
+        ok: true,
+        destinationImageFileExists: true,
+      },
+    });
+
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+    fs.rmSync(destinationRoot, { recursive: true, force: true });
+  });
+
+  it("rejects copy between profiles when either profile is not explicit", async () => {
+    const runner: LauncherCliRunner = async () => {
+      throw new Error("runner should not be called");
+    };
+    const destinationRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-destination-profile-"),
+    );
+    try {
+      const result = await callTool(
+        "pharo_launcher_image_copy_between_profiles",
+        {
+          sourceProfile: {},
+          destinationProfile: {
+            stateRoot: destinationRoot,
+          },
+          sourceImageName: "Base",
+          destinationImageName: "Task",
+        },
+        { runner },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toContain(
+        "sourceProfile must include stateRoot or explicit launcherConfiguration",
+      );
+    } finally {
+      fs.rmSync(destinationRoot, { recursive: true, force: true });
+    }
   });
 
   it("verifies created template images with list and info before reporting success", async () => {

@@ -138,6 +138,7 @@ Image tools:
 ```text
 pharo_launcher_image_bisect
 pharo_launcher_image_copy
+pharo_launcher_image_copy_between_profiles
 pharo_launcher_image_create
 pharo_launcher_image_create_from_build
 pharo_launcher_image_create_from_pull_request
@@ -236,6 +237,15 @@ inspects the target image name. The result includes `createVerification` or
 `copyVerification`, plus the listed and inspected image metadata. If the image
 cannot be found and inspected, the MCP tool result is an error with a focused
 diagnostic.
+
+`pharo_launcher_image_copy_between_profiles` copies an image from one
+explicitly supplied scoped profile to another. Both `sourceProfile` and
+`destinationProfile` must include `stateRoot` or the complete explicit profile
+paths: `launcherConfiguration`, `imagesDir`, `vmsDir`, `templateSourcesDir`,
+`initScriptsDir`, and `logsDir`. The tool rejects host-default or relative-path
+profile input, refuses destination collisions, repairs copied image metadata to
+the destination image name, and reports source/destination metadata, touched
+paths, verification, and cleanup guidance.
 
 ## Development
 

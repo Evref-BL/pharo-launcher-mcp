@@ -12,6 +12,7 @@ import {
   rawCommandTool,
   ToolInputError,
 } from "./commandCatalog.js";
+import { copyImageBetweenProfiles } from "./crossProfileCopy.js";
 import {
   loadPharoLauncherConfig,
   type PharoLauncherConfig,
@@ -75,6 +76,36 @@ const inventoryInputSchema = {
   },
   additionalProperties: false,
 } as const;
+const scopedProfileSchema = {
+  type: "object",
+  properties: {
+    stateRoot: stringSchema,
+    launcherConfiguration: stringSchema,
+    imagesDir: stringSchema,
+    vmsDir: stringSchema,
+    templateSourcesDir: stringSchema,
+    initScriptsDir: stringSchema,
+    logsDir: stringSchema,
+    profileName: stringSchema,
+  },
+  additionalProperties: false,
+} as const;
+const copyBetweenProfilesInputSchema = {
+  type: "object",
+  properties: {
+    sourceProfile: scopedProfileSchema,
+    destinationProfile: scopedProfileSchema,
+    sourceImageName: stringSchema,
+    destinationImageName: stringSchema,
+  },
+  required: [
+    "sourceProfile",
+    "destinationProfile",
+    "sourceImageName",
+    "destinationImageName",
+  ],
+  additionalProperties: false,
+} as const;
 
 const tools = [
   {
@@ -105,6 +136,12 @@ const tools = [
     description:
       "Return read-only scoped Pharo Launcher templates, versions, active profile roots, existing images, and caller-declared image handles for safe lifecycle planning.",
     inputSchema: inventoryInputSchema,
+  },
+  {
+    name: "pharo_launcher_image_copy_between_profiles",
+    description:
+      "Copy a launcher image from one explicitly supplied scoped launcher profile to another explicitly supplied scoped launcher profile.",
+    inputSchema: copyBetweenProfilesInputSchema,
   },
   ...launcherCommandTools,
   rawCommandTool,
@@ -707,6 +744,19 @@ export async function callTool(
               : {}),
           },
         );
+        return jsonResult(result, !result.ok);
+      } catch (error) {
+        if (error instanceof ToolInputError) {
+          return jsonResult({ error: error.message }, true);
+        }
+
+        throw error;
+      }
+    }
+
+    case "pharo_launcher_image_copy_between_profiles": {
+      try {
+        const result = copyImageBetweenProfiles(argumentsValue);
         return jsonResult(result, !result.ok);
       } catch (error) {
         if (error instanceof ToolInputError) {
