@@ -108,6 +108,24 @@ describe("result normalizer", () => {
     });
   });
 
+  it("does not normalize explicit template category failures as bootstrap diagnostics", () => {
+    const result = normalizeLauncherResult(
+      "pharo_launcher_template_list",
+      ["template", "list", "--templateCategory", "unknown", "--ston"],
+      {
+        ...cliResult,
+        exitCode: 1,
+        stdout: "",
+        stderr:
+          "Image template category 'unknown' not found. Categories are: OrderedCollection[]",
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostic).toBeUndefined();
+    expect(result.action).toBeUndefined();
+  });
+
   it("normalizes profile-scoped fromBuild refusals as VM store diagnostics", () => {
     const result = normalizeLauncherResult(
       "pharo_launcher_image_create_from_build",

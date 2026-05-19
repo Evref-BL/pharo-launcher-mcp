@@ -28,6 +28,37 @@ function tempLauncherConfig() {
   };
 }
 
+function tempProfileConfig() {
+  const baseConfig = tempLauncherConfig();
+  const stateRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pharo-launcher-mcp-profile-"),
+  );
+  const profile = {
+    name: "isolated",
+    stateRoot,
+    launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+    imagesDir: path.join(stateRoot, "images"),
+    vmsDir: path.join(stateRoot, "vms"),
+    templateSourcesDir: path.join(stateRoot, "templates"),
+    initScriptsDir: path.join(stateRoot, "init-scripts"),
+    logsDir: path.join(stateRoot, "logs"),
+  };
+
+  fs.mkdirSync(path.dirname(profile.launcherImage), { recursive: true });
+  fs.writeFileSync(profile.launcherImage, "");
+
+  return {
+    ...baseConfig,
+    launcherImage: profile.launcherImage,
+    launcherConfiguration: path.join(
+      stateRoot,
+      "launcher",
+      "pharo-launcher-cli-config.ston",
+    ),
+    profile,
+  };
+}
+
 describe("callTool", () => {
   const taskImageSton =
     "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13',#url:URL['https://example.test/latest.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['Task','Task.image']}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'130-x64'}}]}]";
@@ -374,6 +405,104 @@ describe("callTool", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain("requires confirm: true");
+  });
+
+  it("bootstraps scoped template sources after template update", async () => {
+    const config = tempProfileConfig();
+    const calls: readonly string[][] = [];
+    const runner: LauncherCliRunner = async (args) => {
+      (calls as string[][]).push([...args]);
+      if (args[0] === "template" && args[1] === "update") {
+        return {
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          durationMs: 4,
+          timedOut: false,
+        };
+      }
+
+      return {
+        exitCode: 0,
+        stdout:
+          "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13',#category:'stable',#url:URL['https://example.test/130/latest.zip']}]",
+        stderr: "",
+        durationMs: 4,
+        timedOut: false,
+      };
+    };
+
+    const result = await callTool("pharo_launcher_template_update", {}, {
+      config,
+      runner,
+      fetchTemplateSources: async () =>
+        "https://files.pharo.org/image/130/latest-64.zip",
+    });
+    const body = parseJsonResult(result);
+    const sourcesFile = path.join(config.profile.templateSourcesDir, "sources.list");
+
+    expect(result.isError).toBeUndefined();
+    expect(fs.readFileSync(sourcesFile, "utf8")).toContain("latest-64.zip");
+    expect(body).toMatchObject({
+      ok: true,
+      command: {
+        args: ["template", "update"],
+      },
+      templateSourcesBootstrap: {
+        ok: true,
+        action: "created",
+        path: sourcesFile,
+      },
+      templateSourcesProbe: {
+        ok: true,
+      },
+    });
+    expect(calls).toEqual([
+      ["template", "update"],
+      ["template", "list", "--ston"],
+    ]);
+
+    fs.rmSync(config.profile.stateRoot, { recursive: true, force: true });
+  });
+
+  it("fails template update when scoped template source bootstrap fails", async () => {
+    const config = tempProfileConfig();
+    const calls: readonly string[][] = [];
+    const runner: LauncherCliRunner = async (args) => {
+      (calls as string[][]).push([...args]);
+
+      return {
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+        durationMs: 4,
+        timedOut: false,
+      };
+    };
+
+    const result = await callTool("pharo_launcher_template_update", {}, {
+      config,
+      runner,
+      fetchTemplateSources: async () => {
+        throw new Error("network unavailable");
+      },
+    });
+    const body = parseJsonResult(result);
+
+    expect(result.isError).toBe(true);
+    expect(body).toMatchObject({
+      ok: false,
+      diagnostic: expect.stringContaining("bootstrap file is missing or empty"),
+      templateSourcesBootstrap: {
+        ok: false,
+        action: "failed",
+        path: path.join(config.profile.templateSourcesDir, "sources.list"),
+        error: "network unavailable",
+      },
+    });
+    expect(calls).toEqual([["template", "update"]]);
+
+    fs.rmSync(config.profile.stateRoot, { recursive: true, force: true });
   });
 
   it("keeps raw command access behind pharo_launcher_raw_command", async () => {

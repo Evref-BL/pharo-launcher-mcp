@@ -656,6 +656,33 @@ function readInstalledTemplates(
     return [];
   }
 
+  const sourcesFilePath = path.join(root, "sources.list");
+  const sourcesFileKind = pathKind(sourcesFilePath);
+  if (sourcesFileKind === "missing") {
+    diagnostics.push({
+      severity: "warning",
+      code: "profile_template_sources_bootstrap_missing",
+      message:
+        "The active profile template source bootstrap file is missing, so template update/list may not populate scoped template inventory.",
+      action:
+        "Run pharo_launcher_template_update to fetch or seed the active profile sources.list before planning image creation.",
+      path: sourcesFilePath,
+    });
+  } else if (
+    sourcesFileKind === "file" &&
+    fs.statSync(sourcesFilePath).size === 0
+  ) {
+    diagnostics.push({
+      severity: "warning",
+      code: "profile_template_sources_bootstrap_empty",
+      message:
+        "The active profile template source bootstrap file is empty, so template update/list may not populate scoped template inventory.",
+      action:
+        "Run pharo_launcher_template_update to refresh the active profile sources.list before planning image creation.",
+      path: sourcesFilePath,
+    });
+  }
+
   return fs
     .readdirSync(root, { withFileTypes: true })
     .sort((left, right) => left.name.localeCompare(right.name))

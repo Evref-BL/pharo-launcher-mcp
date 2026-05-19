@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -36,6 +38,9 @@ import type { LauncherCommandResult, LauncherImage } from "./models.js";
 const serverVersion = "0.1.1";
 const imageCopyVerificationTimeoutMs = 30_000;
 const imageCopyVerificationPollMs = 1_000;
+const defaultTemplateSourcesUrl =
+  "https://files.pharo.org/pharo-launcher/sources.list";
+const templateSourcesFileName = "sources.list";
 
 const emptyInputSchema = {
   type: "object",
@@ -117,6 +122,8 @@ export interface CallToolOptions {
   imageCopyVerificationTimeoutMs?: number;
   imageCopyVerificationPollMs?: number;
   sleep?: (milliseconds: number) => Promise<void>;
+  templateSourcesUrl?: string;
+  fetchTemplateSources?: (url: string) => Promise<string>;
 }
 
 function textResult(text: string, isError = false): ToolResult {
@@ -418,6 +425,172 @@ async function imageCopyResult(
   return jsonResult(copyResult, !copyResult.ok);
 }
 
+interface TemplateSourcesBootstrap {
+  ok: boolean;
+  action: "not_applicable" | "already_present" | "created" | "failed";
+  path?: string;
+  url?: string;
+  bytes?: number;
+  diagnostic?: string;
+  error?: string;
+}
+
+function profileTemplateSourcesFile(
+  config: PharoLauncherConfig | undefined,
+): string | undefined {
+  return config?.profile
+    ? path.join(config.profile.templateSourcesDir, templateSourcesFileName)
+    : undefined;
+}
+
+function nonEmptyFile(filePath: string): boolean {
+  try {
+    const stat = fs.statSync(filePath);
+    return stat.isFile() && stat.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function defaultFetchTemplateSources(url: string): Promise<string> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
+  }
+
+  return response.text();
+}
+
+async function ensureProfileTemplateSourcesBootstrap(
+  config: PharoLauncherConfig | undefined,
+  options: CallToolOptions,
+): Promise<TemplateSourcesBootstrap> {
+  const sourcesPath = profileTemplateSourcesFile(config);
+  if (!sourcesPath) {
+    return { ok: true, action: "not_applicable" };
+  }
+
+  if (nonEmptyFile(sourcesPath)) {
+    return {
+      ok: true,
+      action: "already_present",
+      path: sourcesPath,
+      bytes: fs.statSync(sourcesPath).size,
+    };
+  }
+
+  const url = options.templateSourcesUrl ?? defaultTemplateSourcesUrl;
+  try {
+    const fetchTemplateSources =
+      options.fetchTemplateSources ?? defaultFetchTemplateSources;
+    const body = await fetchTemplateSources(url);
+    if (body.trim().length === 0) {
+      throw new Error("downloaded template source list was empty");
+    }
+
+    fs.mkdirSync(path.dirname(sourcesPath), { recursive: true });
+    const tempPath = `${sourcesPath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tempPath, body, "utf8");
+    fs.renameSync(tempPath, sourcesPath);
+
+    return {
+      ok: true,
+      action: "created",
+      path: sourcesPath,
+      url,
+      bytes: Buffer.byteLength(body, "utf8"),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      action: "failed",
+      path: sourcesPath,
+      url,
+      diagnostic:
+        "Pharo Launcher template update completed, but the active profile template source bootstrap file is missing or empty.",
+      error: message,
+    };
+  }
+}
+
+async function templateUpdateResult(
+  args: string[],
+  options: CallToolOptions,
+): Promise<ToolResult> {
+  const runner = options.runner ?? runLauncherCli;
+  const config = options.config ?? loadPharoLauncherConfig();
+  const commandOptions = {
+    ...options,
+    config,
+  };
+  const result = await runLauncherToolCommand(runner, args, commandOptions);
+  const normalized = normalizeLauncherResult(
+    "pharo_launcher_template_update",
+    args,
+    result,
+  );
+
+  if (!normalized.ok) {
+    return jsonResult(normalized, true);
+  }
+
+  const bootstrap = await ensureProfileTemplateSourcesBootstrap(
+    config,
+    commandOptions,
+  );
+  if (!bootstrap.ok) {
+    return jsonResult(
+      {
+        ...normalized,
+        ok: false,
+        diagnostic: bootstrap.diagnostic,
+        action:
+          "Fetch or seed the active profile sources.list, then run pharo_launcher_template_update again before planning image creation.",
+        templateSourcesBootstrap: bootstrap,
+      },
+      true,
+    );
+  }
+
+  if (bootstrap.action === "not_applicable") {
+    return jsonResult({
+      ...normalized,
+      templateSourcesBootstrap: bootstrap,
+    });
+  }
+
+  const probeArgs = ["template", "list", "--ston"];
+  const probeResult = normalizeLauncherResult(
+    "pharo_launcher_template_list",
+    probeArgs,
+    await runLauncherToolCommand(runner, probeArgs, commandOptions),
+  );
+  if (!probeResult.ok) {
+    return jsonResult(
+      {
+        ...normalized,
+        ok: false,
+        diagnostic:
+          probeResult.diagnostic ??
+          "Pharo Launcher template update completed, but template list still failed for the active profile.",
+        action:
+          probeResult.action ??
+          "Inspect pharo_launcher_inventory diagnostics before planning image creation.",
+        templateSourcesBootstrap: bootstrap,
+        templateSourcesProbe: probeResult,
+      },
+      true,
+    );
+  }
+
+  return jsonResult({
+    ...normalized,
+    templateSourcesBootstrap: bootstrap,
+    templateSourcesProbe: probeResult,
+  });
+}
+
 async function cliResult(
   toolName: string,
   args: string[],
@@ -425,6 +598,9 @@ async function cliResult(
 ): Promise<ToolResult> {
   if (toolName === "pharo_launcher_image_copy") {
     return imageCopyResult(args, options);
+  }
+  if (toolName === "pharo_launcher_template_update") {
+    return templateUpdateResult(args, options);
   }
 
   const runner = options.runner ?? runLauncherCli;

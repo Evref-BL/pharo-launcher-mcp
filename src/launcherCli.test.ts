@@ -204,9 +204,10 @@ describe("buildLauncherCliInvocation", () => {
       }),
     );
 
-    expect(fs.readFileSync(configPath, "utf8")).toBe(
-      profileLauncherConfigurationContent(profile),
-    );
+    const configurationContent = fs.readFileSync(configPath, "utf8");
+    expect(configurationContent).toBe(profileLauncherConfigurationContent(profile));
+    expect(configurationContent).toContain(profile.templateSourcesDir);
+    expect(configurationContent).not.toContain("sources.list");
     expect(fs.existsSync(profile.imagesDir)).toBe(true);
     expect(fs.existsSync(profile.vmsDir)).toBe(true);
     expect(fs.existsSync(profile.templateSourcesDir)).toBe(true);

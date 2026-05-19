@@ -386,7 +386,14 @@ describe("PharoLauncher discovery", () => {
     expect(report.images.existingKnown).toBe(true);
     expect(report.images.declared).toEqual([]);
     expect(report.versions).toEqual([]);
-    expect(report.diagnostics).toEqual([
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        severity: "warning",
+        code: "profile_template_sources_bootstrap_missing",
+        message: expect.stringContaining("bootstrap file is missing"),
+        action: expect.stringContaining("pharo_launcher_template_update"),
+        path: path.join(config.profile.templateSourcesDir, "sources.list"),
+      }),
       expect.objectContaining({
         severity: "error",
         code: "template_inventory_empty",
@@ -396,7 +403,7 @@ describe("PharoLauncher discovery", () => {
         ),
         path: config.profile.templateSourcesDir,
       }),
-    ]);
+    ]));
   });
 
   it("returns actionable diagnostics for missing profile paths without probing the launcher", async () => {
