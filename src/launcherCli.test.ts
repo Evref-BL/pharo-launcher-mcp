@@ -682,7 +682,7 @@ describe("buildLauncherCliInvocation", () => {
     expect(result.timeoutReason).toBeUndefined();
   });
 
-  it("reports ENOENT diagnostics with command, cwd, and PATH", async () => {
+  it("reports pre-spawn diagnostics with command, args, cwd, and PATH", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -706,15 +706,92 @@ describe("buildLauncherCliInvocation", () => {
         timeoutMs: 2_000,
       });
 
-      expect(result.exitCode).toBeNull();
+      expect(result.exitCode).toBe(1);
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain("Failed to start PharoLauncher CLI command");
       expect(result.stderr).toContain(
+        "Selected launcher shell path is missing or inaccessible before spawn",
+      );
+      expect(result.stderr).toContain("source: script");
+      expect(result.stderr).toContain(
         `command: ${path.join(stateRoot, "missing-bash")}`,
       );
+      expect(result.stderr).toContain(`args: ${scriptPath} image list`);
       expect(result.stderr).toContain(`cwd: ${stateRoot}`);
       expect(result.stderr).toContain("PATH:");
       expect(result.timedOut).toBe(false);
+    } finally {
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("creates scoped profile artifacts before reporting a missing create shell", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const stateRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-create-shell-"),
+    );
+    const scriptPath = path.join(stateRoot, "launcher.sh");
+    const missingBash = path.join(stateRoot, "missing-bash");
+    const profile = {
+      name: "isolated",
+      stateRoot,
+      launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+      imagesDir: path.join(stateRoot, "images"),
+      vmsDir: path.join(stateRoot, "vms"),
+      templateSourcesDir: path.join(stateRoot, "templates"),
+      initScriptsDir: path.join(stateRoot, "init-scripts"),
+      logsDir: path.join(stateRoot, "logs"),
+    };
+    const launcherConfiguration = path.join(
+      stateRoot,
+      "launcher",
+      "pharo-launcher-cli-config.ston",
+    );
+
+    writeExecutableScript(
+      scriptPath,
+      "#!/usr/bin/env sh\necho should-not-run\n",
+    );
+
+    try {
+      const result = await runLauncherCli(
+        ["image", "create", "--templateName", "Pharo 13", "Task"],
+        {
+          bashPath: missingBash,
+          config: launcherConfig({
+            launcherDir: stateRoot,
+            launcherVm: "unused",
+            launcherImage: profile.launcherImage,
+            launcherScript: scriptPath,
+            launcherConfiguration,
+            profile,
+          }),
+          timeoutMs: 2_000,
+        },
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        "Selected launcher shell path is missing or inaccessible before spawn",
+      );
+      expect(result.stderr).toContain(`command: ${missingBash}`);
+      expect(result.stderr).toContain(`args: ${scriptPath}`);
+      expect(result.stderr).toContain(
+        `PHARO_LAUNCHER_MCP_STATE_ROOT: ${stateRoot}`,
+      );
+      expect(result.stderr).toContain(
+        `PHARO_LAUNCHER_MCP_LOGS_DIR: ${profile.logsDir}`,
+      );
+      expect(fs.existsSync(launcherConfiguration)).toBe(true);
+      expect(fs.existsSync(profile.imagesDir)).toBe(true);
+      expect(fs.existsSync(profile.vmsDir)).toBe(true);
+      expect(fs.existsSync(profile.templateSourcesDir)).toBe(true);
+      expect(fs.existsSync(profile.initScriptsDir)).toBe(true);
+      expect(fs.existsSync(profile.logsDir)).toBe(true);
     } finally {
       fs.rmSync(stateRoot, { recursive: true, force: true });
     }

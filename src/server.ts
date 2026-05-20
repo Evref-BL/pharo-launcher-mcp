@@ -26,7 +26,11 @@ import {
   type PharoLauncherDeclaredImage,
   validatePharoLauncherInstallation,
 } from "./discovery.js";
-import { runLauncherCli } from "./launcherCli.js";
+import {
+  buildLauncherCliInvocation,
+  launcherInvocationFailureDiagnostic,
+  runLauncherCli,
+} from "./launcherCli.js";
 import {
   runNativeProcessTool,
   shouldUseNativeProcessTool,
@@ -270,7 +274,42 @@ async function runLauncherToolCommand(
   args: readonly string[],
   options: CallToolOptions,
 ): Promise<LauncherCliResult> {
-  return runner(args, runnerOptions(options));
+  const startTime = Date.now();
+  try {
+    return await runner(args, runnerOptions(options));
+  } catch (error) {
+    return {
+      exitCode: null,
+      stdout: "",
+      stderr: runnerExceptionDiagnostic(args, options, error),
+      durationMs: Date.now() - startTime,
+      timedOut: false,
+    };
+  }
+}
+
+function runnerExceptionDiagnostic(
+  args: readonly string[],
+  options: CallToolOptions,
+  error: unknown,
+): string {
+  const normalizedError = error instanceof Error ? error : new Error(String(error));
+
+  try {
+    const invocation = buildLauncherCliInvocation(
+      args,
+      options.config ?? loadPharoLauncherConfig(),
+    );
+    return launcherInvocationFailureDiagnostic(invocation, normalizedError);
+  } catch (contextError) {
+    const contextMessage =
+      contextError instanceof Error ? contextError.message : String(contextError);
+    return [
+      `Failed to start PharoLauncher CLI command: ${normalizedError.message}`,
+      `args: ${args.join(" ")}`,
+      `diagnosticContextError: ${contextMessage}`,
+    ].join("\n");
+  }
 }
 
 function sleep(milliseconds: number): Promise<void> {

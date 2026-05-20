@@ -511,6 +511,60 @@ describe("callTool", () => {
     ]);
   });
 
+  it("returns a structured tool error when image create runner setup throws", async () => {
+    const config = tempProfileConfig();
+    const runner: LauncherCliRunner = async () => {
+      throw new Error("spawn bash ENOENT");
+    };
+
+    try {
+      const result = await callTool(
+        "pharo_launcher_image_create",
+        {
+          templateName: "Pharo 13",
+          newImageName: "Task",
+          noLaunch: true,
+        },
+        { runner, config },
+      );
+      const body = parseJsonResult(result);
+
+      expect(result.isError).toBe(true);
+      expect(body).toMatchObject({
+        ok: false,
+        raw: {
+          stderr: expect.stringContaining("spawn bash ENOENT"),
+        },
+        command: {
+          args: [
+            "image",
+            "create",
+            "--no-launch",
+            "--templateName",
+            "Pharo 13",
+            "Task",
+          ],
+          exitCode: null,
+        },
+      });
+      expect(String((body.raw as { stderr?: unknown }).stderr)).toContain(
+        "command:",
+      );
+      expect(String((body.raw as { stderr?: unknown }).stderr)).toContain(
+        "args:",
+      );
+      expect(String((body.raw as { stderr?: unknown }).stderr)).toContain(
+        `PHARO_LAUNCHER_MCP_STATE_ROOT: ${config.profile.stateRoot}`,
+      );
+      expect(String((body.raw as { stderr?: unknown }).stderr)).toContain(
+        `PHARO_LAUNCHER_MCP_LOGS_DIR: ${config.profile.logsDir}`,
+      );
+    } finally {
+      fs.rmSync(config.profile.stateRoot, { recursive: true, force: true });
+      fs.rmSync(config.launcherDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails created template images that are not discoverable", async () => {
     const calls: readonly string[][] = [];
     const runner: LauncherCliRunner = async (args) => {

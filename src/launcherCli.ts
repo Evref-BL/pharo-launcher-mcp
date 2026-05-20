@@ -211,17 +211,35 @@ function resolveBashPath(platform: NodeJS.Platform): string {
   );
 }
 
-function spawnEnoentDiagnostic(
+function diagnosticProfileLines(env: NodeJS.ProcessEnv): string[] {
+  return [
+    "PHARO_LAUNCHER_MCP_PROFILE",
+    "PHARO_LAUNCHER_MCP_STATE_ROOT",
+    "PHARO_LAUNCHER_MCP_IMAGES_DIR",
+    "PHARO_LAUNCHER_MCP_VMS_DIR",
+    "PHARO_LAUNCHER_MCP_TEMPLATE_SOURCES_DIR",
+    "PHARO_LAUNCHER_MCP_INIT_SCRIPTS_DIR",
+    "PHARO_LAUNCHER_MCP_LOGS_DIR",
+  ].flatMap((key) => {
+    const value = env[key];
+    return value ? [`${key}: ${value}`] : [];
+  });
+}
+
+export function launcherInvocationFailureDiagnostic(
   invocation: LauncherCliInvocation,
-  error: NodeJS.ErrnoException,
+  error: Error | NodeJS.ErrnoException,
 ): string {
   const pathValue = invocation.env.PATH ?? process.env.PATH ?? "";
 
   return [
     `Failed to start PharoLauncher CLI command: ${error.message}`,
+    `source: ${invocation.source}`,
     `command: ${invocation.command}`,
+    `args: ${invocation.args.join(" ")}`,
     `cwd: ${invocation.cwd}`,
     `PATH: ${pathValue}`,
+    ...diagnosticProfileLines(invocation.env),
   ].join("\n");
 }
 
@@ -328,6 +346,29 @@ function failedResult(
   };
 }
 
+function validateInvocationSetup(
+  invocation: LauncherCliInvocation,
+  startTime: number,
+): LauncherCliResult | undefined {
+  if (invocation.source !== "script" || !path.isAbsolute(invocation.command)) {
+    return undefined;
+  }
+
+  try {
+    fs.accessSync(invocation.command, fs.constants.X_OK);
+    return undefined;
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? `Selected launcher shell path is missing or inaccessible before spawn: ${error.message}`
+        : "Selected launcher shell path is missing or inaccessible before spawn";
+    return failedResult(
+      launcherInvocationFailureDiagnostic(invocation, new Error(message)),
+      startTime,
+    );
+  }
+}
+
 function trimForDiagnostic(value: string): string | undefined {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
@@ -357,28 +398,59 @@ function runInvocation(
   startTime: number,
 ): Promise<LauncherCliResult> {
   return new Promise((resolve) => {
-    const child = spawn(invocation.command, invocation.args, {
-      cwd: invocation.cwd,
-      env: invocation.env,
-      windowsHide: true,
-    });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(invocation.command, invocation.args, {
+        cwd: invocation.cwd,
+        env: invocation.env,
+        windowsHide: true,
+      });
+    } catch (error) {
+      resolve({
+        exitCode: null,
+        stdout: "",
+        stderr: launcherInvocationFailureDiagnostic(
+          invocation,
+          error instanceof Error ? error : new Error(String(error)),
+        ),
+        durationMs: Date.now() - startTime,
+        timedOut: false,
+      });
+      return;
+    }
 
     let stdout = "";
     let stderr = "";
     let timedOut = false;
     let timeoutReason: string | undefined;
+    const stdoutStream = child.stdout;
+    const stderrStream = child.stderr;
+    if (!stdoutStream || !stderrStream) {
+      child.kill();
+      resolve({
+        exitCode: null,
+        stdout,
+        stderr: launcherInvocationFailureDiagnostic(
+          invocation,
+          new Error("PharoLauncher CLI spawn did not provide stdout/stderr streams"),
+        ),
+        durationMs: Date.now() - startTime,
+        timedOut,
+      });
+      return;
+    }
     const timeout = setTimeout(() => {
       timedOut = true;
       timeoutReason = `PharoLauncher CLI timed out after ${timeoutMs}ms`;
       child.kill();
     }, timeoutMs);
 
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
+    stdoutStream.setEncoding("utf8");
+    stderrStream.setEncoding("utf8");
+    stdoutStream.on("data", (chunk: string) => {
       stdout += chunk;
     });
-    child.stderr.on("data", (chunk: string) => {
+    stderrStream.on("data", (chunk: string) => {
       stderr += chunk;
     });
     child.on("error", (error) => {
@@ -387,10 +459,7 @@ function runInvocation(
       resolve({
         exitCode: null,
         stdout,
-        stderr:
-          errnoError.code === "ENOENT"
-            ? spawnEnoentDiagnostic(invocation, errnoError)
-            : error.message,
+        stderr: launcherInvocationFailureDiagnostic(invocation, errnoError),
         durationMs: Date.now() - startTime,
         timedOut,
         ...(timeoutReason ? { timeoutReason } : {}),
@@ -784,9 +853,20 @@ async function runProfileScopedImageLaunch(
   }
 
   if (detached) {
+    const setupFailure = validateInvocationSetup(
+      plan.invocation,
+      startTime,
+    );
+    if (setupFailure) {
+      return setupFailure;
+    }
     return runDetachedProfileImageLaunch(plan, config, args, startTime);
   }
 
+  const setupFailure = validateInvocationSetup(plan.invocation, startTime);
+  if (setupFailure) {
+    return setupFailure;
+  }
   return runInvocation(plan.invocation, timeoutMs, startTime);
 }
 
@@ -828,6 +908,10 @@ export function runLauncherCli(
   const invocation = buildLauncherCliInvocation(invocationArgs, config, {
     bashPath: options.bashPath,
   });
+  const setupFailure = validateInvocationSetup(invocation, startTime);
+  if (setupFailure) {
+    return Promise.resolve(setupFailure);
+  }
 
   if (detachedImageLaunch) {
     const logPaths = detachedLaunchLogPaths(config, args, startTime);
