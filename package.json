@@ -14,6 +14,10 @@
   "bin": {
     "pharo-launcher-mcp": "dist/index.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Evref-BL/pharo-launcher-mcp.git"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
