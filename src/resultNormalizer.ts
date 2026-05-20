@@ -72,18 +72,28 @@ function scopedImageLaunchVmStoreDiagnostic(
   toolName: string,
   result: LauncherCliResult,
 ): Pick<LauncherCommandResult, "diagnostic" | "action"> | undefined {
-  if (
-    toolName !== "pharo_launcher_image_launch" ||
-    !result.stderr.includes("profile-scoped image launch")
-  ) {
+  if (toolName !== "pharo_launcher_image_launch") {
+    return undefined;
+  }
+
+  if (result.stderr.includes("Refusing profile-scoped image launch")) {
+    return {
+      diagnostic:
+        "Profile-scoped image launch was refused because Pharo Launcher can use the default VM store instead of the configured profile VM directory.",
+      action:
+        "Launch from an explicit profile only after Pharo Launcher initializes PhLVirtualMachineManager from the CLI configuration, or after pharo-launcher-mcp has a verified launch path that keeps VM artifacts inside PHARO_LAUNCHER_MCP_VMS_DIR.",
+    };
+  }
+
+  if (!result.stderr.includes("Profile-scoped image launch")) {
     return undefined;
   }
 
   return {
     diagnostic:
-      "Profile-scoped image launch was refused because Pharo Launcher can use the default VM store instead of the configured profile VM directory.",
+      "Profile-scoped image launch could not prepare the profile-local image and VM paths needed for direct launch.",
     action:
-      "Launch from an explicit profile only after Pharo Launcher initializes PhLVirtualMachineManager from the CLI configuration, or after pharo-launcher-mcp has a verified launch path that keeps VM artifacts inside PHARO_LAUNCHER_MCP_VMS_DIR.",
+      "Inspect image info, PHARO_LAUNCHER_MCP_IMAGES_DIR, PHARO_LAUNCHER_MCP_VMS_DIR, and pharo_launcher_vm_update output before retrying the launch.",
   };
 }
 
