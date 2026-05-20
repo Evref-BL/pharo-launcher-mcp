@@ -79,6 +79,26 @@ describe("buildLauncherCliInvocation", () => {
     expect(invocation.source).toBe("script");
   });
 
+  it("resolves a POSIX bash path before falling back to PATH lookup", () => {
+    const invocation = buildLauncherCliInvocation(
+      ["image", "list", "--ston"],
+      launcherConfig({
+        launcherDir: "/opt/pharo-launcher",
+        launcherVm: "/opt/pharo-launcher/pharo-vm/pharo",
+        launcherImage: "/opt/pharo-launcher/PharoLauncher.image",
+        launcherScript: "/opt/pharo-launcher/bin/pharo-launcher.sh",
+      }),
+      {
+        platform: "linux",
+      },
+    );
+
+    const expectedBashPath = ["/bin/bash", "/usr/bin/bash"].find((candidate) =>
+      fs.existsSync(candidate),
+    );
+    expect(invocation.command).toBe(expectedBashPath ?? "bash");
+  });
+
   it("does not route command scripts through cmd.exe off Windows", () => {
     const invocation = buildLauncherCliInvocation(
       ["image", "list"],
@@ -440,6 +460,44 @@ describe("buildLauncherCliInvocation", () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.timedOut).toBe(false);
     expect(result.timeoutReason).toBeUndefined();
+  });
+
+  it("reports ENOENT diagnostics with command, cwd, and PATH", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const stateRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-enoent-"),
+    );
+    const scriptPath = path.join(stateRoot, "launcher.sh");
+    fs.writeFileSync(scriptPath, "#!/usr/bin/env sh\necho ignored\n", "utf8");
+    fs.chmodSync(scriptPath, 0o755);
+
+    try {
+      const result = await runLauncherCli(["image", "list"], {
+        bashPath: path.join(stateRoot, "missing-bash"),
+        config: launcherConfig({
+          launcherDir: stateRoot,
+          launcherVm: "unused",
+          launcherImage: "unused",
+          launcherScript: scriptPath,
+        }),
+        timeoutMs: 2_000,
+      });
+
+      expect(result.exitCode).toBeNull();
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("Failed to start PharoLauncher CLI command");
+      expect(result.stderr).toContain(
+        `command: ${path.join(stateRoot, "missing-bash")}`,
+      );
+      expect(result.stderr).toContain(`cwd: ${stateRoot}`);
+      expect(result.stderr).toContain("PATH:");
+      expect(result.timedOut).toBe(false);
+    } finally {
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
   });
 
   it("captures timeout reason", async () => {

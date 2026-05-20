@@ -32,6 +32,7 @@ export interface LauncherCliResult {
 export interface RunLauncherCliOptions {
   config?: PharoLauncherConfig;
   timeoutMs?: number;
+  bashPath?: string;
 }
 
 export interface BuildLauncherCliInvocationOptions {
@@ -40,6 +41,8 @@ export interface BuildLauncherCliInvocationOptions {
   bashPath?: string;
   comspec?: string;
 }
+
+const POSIX_BASH_PATH_CANDIDATES = ["/bin/bash", "/usr/bin/bash"] as const;
 
 function comparablePath(value: string): string {
   const resolved = path.resolve(value);
@@ -164,6 +167,31 @@ function scriptCommandAndArgs(
   };
 }
 
+function resolveBashPath(platform: NodeJS.Platform): string {
+  if (platform === "win32") {
+    return "bash";
+  }
+
+  return (
+    POSIX_BASH_PATH_CANDIDATES.find((candidate) => fs.existsSync(candidate)) ??
+    "bash"
+  );
+}
+
+function spawnEnoentDiagnostic(
+  invocation: LauncherCliInvocation,
+  error: NodeJS.ErrnoException,
+): string {
+  const pathValue = invocation.env.PATH ?? process.env.PATH ?? "";
+
+  return [
+    `Failed to start PharoLauncher CLI command: ${error.message}`,
+    `command: ${invocation.command}`,
+    `cwd: ${invocation.cwd}`,
+    `PATH: ${pathValue}`,
+  ].join("\n");
+}
+
 export function isDetachedImageLaunch(args: readonly string[]): boolean {
   return (
     args[0] === "image" &&
@@ -235,7 +263,7 @@ export function buildLauncherCliInvocation(
       launcherScript,
       launcherArgs,
       platform,
-      options.bashPath,
+      options.bashPath ?? resolveBashPath(platform),
       options.comspec ?? process.env.ComSpec,
     );
 
@@ -289,7 +317,9 @@ export function runLauncherCli(
   }
 
   ensureProfileLauncherConfiguration(config);
-  const invocation = buildLauncherCliInvocation(invocationArgs, config);
+  const invocation = buildLauncherCliInvocation(invocationArgs, config, {
+    bashPath: options.bashPath,
+  });
 
   if (detachedImageLaunch) {
     const logPaths = detachedLaunchLogPaths(config, args, startTime);
@@ -305,6 +335,10 @@ export function runLauncherCli(
         detached: true,
         stdio: ["ignore", stdoutFd, stderrFd],
         windowsHide: true,
+      });
+      child.on("error", () => {
+        // Detached launches cannot report async spawn failures to the already
+        // returned result, but the listener prevents an unhandled error event.
       });
       child.unref();
 
@@ -327,7 +361,7 @@ export function runLauncherCli(
     }
   }
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const child = spawn(invocation.command, invocation.args, {
       cwd: invocation.cwd,
       env: invocation.env,
@@ -354,7 +388,18 @@ export function runLauncherCli(
     });
     child.on("error", (error) => {
       clearTimeout(timeout);
-      reject(error);
+      const errnoError = error as NodeJS.ErrnoException;
+      resolve({
+        exitCode: null,
+        stdout,
+        stderr:
+          errnoError.code === "ENOENT"
+            ? spawnEnoentDiagnostic(invocation, errnoError)
+            : error.message,
+        durationMs: Date.now() - startTime,
+        timedOut,
+        ...(timeoutReason ? { timeoutReason } : {}),
+      });
     });
     child.on("close", (exitCode) => {
       clearTimeout(timeout);
