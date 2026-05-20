@@ -163,6 +163,34 @@ describe("result normalizer", () => {
     });
   });
 
+  it("normalizes profile-scoped image launch refusals as VM store diagnostics", () => {
+    const result = normalizeLauncherResult(
+      "pharo_launcher_image_launch",
+      ["image", "launch", "--script", "bootstrap.st", "ScopedImage"],
+      {
+        ...cliResult,
+        exitCode: 1,
+        stdout: "",
+        stderr:
+          "Refusing profile-scoped image launch before invoking Pharo Launcher.\nThat launch can download, extract, or run VMs outside PHARO_LAUNCHER_MCP_VMS_DIR (/tmp/profile/vms).",
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostic:
+        "Profile-scoped image launch was refused because Pharo Launcher can use the default VM store instead of the configured profile VM directory.",
+      action: expect.stringContaining("PhLVirtualMachineManager"),
+      parser: {
+        status: "skipped",
+        format: "text",
+      },
+      raw: {
+        stderr: expect.stringContaining("PHARO_LAUNCHER_MCP_VMS_DIR"),
+      },
+    });
+  });
+
   it("extracts LauncherImage models from STON output", () => {
     const images = parseLauncherImagesFromSton(
       "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['MCP13','MCP13.image'],#origin:#launcherImagesLocation}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'130-x64',#blessing:'stable'}}]}]",

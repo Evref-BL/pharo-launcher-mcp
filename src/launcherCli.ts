@@ -200,6 +200,10 @@ export function isDetachedImageLaunch(args: readonly string[]): boolean {
   );
 }
 
+function isImageLaunch(args: readonly string[]): boolean {
+  return args[0] === "image" && args[1] === "launch";
+}
+
 export function launcherArgsForDetachedImageLaunch(
   args: readonly string[],
 ): string[] {
@@ -223,6 +227,22 @@ function profileScopedFromBuildDiagnostic(
     "Pharo Launcher currently applies the CLI profile imagesDirectory during creation, but fromBuild automatically launches the image without initializing PhLVirtualMachineManager from the CLI configuration.",
     `That launch can download or run VMs outside PHARO_LAUNCHER_MCP_VMS_DIR (${config.profile.vmsDir}).`,
     "Use a non-fromBuild creation path with explicit launch control, or fix Pharo Launcher to initialize the VM manager from the CLI configuration before fromBuild launch.",
+  ].join("\n");
+}
+
+function profileScopedImageLaunchDiagnostic(
+  args: readonly string[],
+  config: PharoLauncherConfig,
+): string | undefined {
+  if (!config.profile || !isImageLaunch(args)) {
+    return undefined;
+  }
+
+  return [
+    "Refusing profile-scoped image launch before invoking Pharo Launcher.",
+    "Pharo Launcher currently builds image launch configurations from the image VM manager, which can ignore the CLI profile vmsDirectory and use the default VM store.",
+    `That launch can download, extract, or run VMs outside PHARO_LAUNCHER_MCP_VMS_DIR (${config.profile.vmsDir}).`,
+    "Launch from an explicit profile only after Pharo Launcher initializes PhLVirtualMachineManager from the CLI configuration, or after pharo-launcher-mcp has a verified launch path that keeps VM artifacts inside the configured profile VM directory.",
   ].join("\n");
 }
 
@@ -311,6 +331,19 @@ export function runLauncherCli(
       exitCode: 1,
       stdout: "",
       stderr: scopedFromBuildDiagnostic,
+      durationMs: Date.now() - startTime,
+      timedOut: false,
+    });
+  }
+  const scopedImageLaunchDiagnostic = profileScopedImageLaunchDiagnostic(
+    invocationArgs,
+    config,
+  );
+  if (scopedImageLaunchDiagnostic) {
+    return Promise.resolve({
+      exitCode: 1,
+      stdout: "",
+      stderr: scopedImageLaunchDiagnostic,
       durationMs: Date.now() - startTime,
       timedOut: false,
     });
