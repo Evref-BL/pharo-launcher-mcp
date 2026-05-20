@@ -241,6 +241,79 @@ describe("cross-profile image copy", () => {
     }
   });
 
+  it("accepts launcher metadata without an image FileLocator during cross-profile copy", () => {
+    const sourceRoot = tempProfileRoot("source");
+    const destinationRoot = tempProfileRoot("destination");
+    try {
+      writeImage(
+        sourceRoot,
+        "PlexusHomeCache-d58cf946b1bd39a08c35c3ca",
+        [
+          "PhLImage {",
+          "\t#originTemplate : PhLRemoteTemplate {",
+          "\t\t#name : 'Pharo 13.0 - 64bit (stable)',",
+          "\t\t#url : URL [ 'https://files.pharo.org/image/130/latest-64.zip' ]",
+          "\t},",
+          "\t#launchConfigurations : OrderedCollection [ ],",
+          "\t#shouldRunInitializationScript : true",
+          "}",
+          "",
+        ].join("\n"),
+      );
+
+      const result = copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot, profileName: "cache" },
+        destinationProfile: {
+          stateRoot: destinationRoot,
+          profileName: "runtime",
+        },
+        sourceImageName: "PlexusHomeCache-d58cf946b1bd39a08c35c3ca",
+        destinationImageName: "MCPPharo-dev-nexus-mcp-pharo-dev",
+      });
+      const destinationDirectory = imageDirectory(
+        destinationRoot,
+        "MCPPharo-dev-nexus-mcp-pharo-dev",
+      );
+
+      expect(result).toMatchObject({
+        ok: true,
+        metadataRepair: {
+          status: "unchanged",
+        },
+        verification: {
+          ok: true,
+          destinationMetadataReferencesDestination: false,
+          destinationMetadataHasImageReference: false,
+          destinationMetadataUsesLauncherDirectoryFallback: true,
+          sourceMetadataReferenceAbsent: true,
+          sourceBasenameImageFileAbsent: true,
+        },
+      });
+      expect(
+        fs.existsSync(
+          path.join(destinationDirectory, "MCPPharo-dev-nexus-mcp-pharo-dev.image"),
+        ),
+      ).toBe(true);
+      expect(
+        fs.existsSync(
+          path.join(
+            destinationDirectory,
+            "PlexusHomeCache-d58cf946b1bd39a08c35c3ca.image",
+          ),
+        ),
+      ).toBe(false);
+      const destinationMetadata = fs.readFileSync(
+        path.join(destinationDirectory, "meta-inf.ston"),
+        "utf8",
+      );
+      expect(destinationMetadata).toContain("#originTemplate");
+      expect(destinationMetadata).not.toContain("RelativePath");
+    } finally {
+      removeProfileRoot(sourceRoot);
+      removeProfileRoot(destinationRoot);
+    }
+  });
+
   it("repairs prefixed temp FileLocator metadata during cross-profile copy", () => {
     const sourceRoot = tempProfileRoot("source");
     const destinationRoot = tempProfileRoot("destination");

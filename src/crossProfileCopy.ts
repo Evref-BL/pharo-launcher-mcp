@@ -79,6 +79,8 @@ interface CopyVerification {
   destinationImageFileExists: boolean;
   destinationMetadataFileExists: boolean;
   destinationMetadataReferencesDestination: boolean;
+  destinationMetadataHasImageReference: boolean;
+  destinationMetadataUsesLauncherDirectoryFallback: boolean;
   sourceMetadataReferenceAbsent: boolean;
   sourceBasenameImageFileAbsent: boolean;
   diagnostic?: string;
@@ -176,21 +178,6 @@ function isPathInside(parent: string, candidate: string): boolean {
   );
 }
 
-function stonString(value: string): string {
-  return value.replaceAll("'", "''");
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function metadataImagePathPattern(imageName: string): RegExp {
-  const escaped = escapeRegExp(stonString(imageName));
-  return new RegExp(
-    `RelativePath\\s*\\[\\s*'${escaped}'\\s*,\\s*'${escaped}\\.image'\\s*\\]`,
-  );
-}
-
 function stonStringParts(source: string): string[] {
   return [...source.matchAll(/'((?:''|[^'])*)'/g)].map((match) =>
     (match[1] ?? "").replaceAll("''", "'"),
@@ -201,21 +188,37 @@ function metadataReferencesImagePath(
   metadataContent: string,
   imageName: string,
 ): boolean {
+  return metadataImagePathReferences(metadataContent).some(
+    (parts) =>
+      parts.length >= 2 &&
+      parts.at(-2) === imageName &&
+      parts.at(-1) === `${imageName}.image`,
+  );
+}
+
+function metadataImagePathReferences(metadataContent: string): string[][] {
   const relativePaths = metadataContent.matchAll(
     /RelativePath\s*\[\s*((?:'(?:''|[^'])*'\s*,?\s*)+)\]/g,
   );
+  const references: string[][] = [];
   for (const relativePath of relativePaths) {
     const parts = stonStringParts(relativePath[1] ?? "");
-    if (
-      parts.length >= 2 &&
-      parts.at(-2) === imageName &&
-      parts.at(-1) === `${imageName}.image`
-    ) {
-      return true;
+    if (parts.at(-1)?.endsWith(".image")) {
+      references.push(parts);
     }
   }
 
-  return false;
+  return references;
+}
+
+function metadataSupportsLauncherDirectoryFallback(
+  metadataContent: string,
+): boolean {
+  return (
+    /PhLImage\s*\{/.test(metadataContent) &&
+    /#originTemplate\s*:/.test(metadataContent) &&
+    /#launchConfigurations\s*:/.test(metadataContent)
+  );
 }
 
 function pathMetadata(filePath: string): PathMetadata {
@@ -528,97 +531,81 @@ function verifyDestinationImage(
   const metadataContent = destinationMetadataFileExists
     ? fs.readFileSync(metadataFile, "utf8")
     : "";
+  const destinationMetadataHasImageReference =
+    metadataImagePathReferences(metadataContent).length > 0;
   const destinationMetadataReferencesDestination =
     destinationMetadataFileExists &&
-    metadataImagePathPattern(destinationImageName).test(metadataContent);
+    metadataReferencesImagePath(metadataContent, destinationImageName);
+  const destinationMetadataUsesLauncherDirectoryFallback =
+    destinationMetadataFileExists &&
+    !destinationMetadataHasImageReference &&
+    metadataSupportsLauncherDirectoryFallback(metadataContent);
   const sourceMetadataReferenceAbsent =
     sourceImageName === destinationImageName ||
     !metadataReferencesImagePath(metadataContent, sourceImageName);
+  const verificationBase = {
+    destinationDirectoryExists,
+    destinationImageFileExists,
+    destinationMetadataFileExists,
+    destinationMetadataReferencesDestination,
+    destinationMetadataHasImageReference,
+    destinationMetadataUsesLauncherDirectoryFallback,
+    sourceMetadataReferenceAbsent,
+    sourceBasenameImageFileAbsent,
+  };
 
   if (!destinationDirectoryExists) {
     return {
+      ...verificationBase,
       ok: false,
-      destinationDirectoryExists,
-      destinationImageFileExists,
-      destinationMetadataFileExists,
-      destinationMetadataReferencesDestination,
-      sourceMetadataReferenceAbsent,
-      sourceBasenameImageFileAbsent,
       diagnostic: "Destination image directory does not exist after copy.",
     };
   }
   if (!destinationImageFileExists) {
     return {
+      ...verificationBase,
       ok: false,
-      destinationDirectoryExists,
-      destinationImageFileExists,
-      destinationMetadataFileExists,
-      destinationMetadataReferencesDestination,
-      sourceMetadataReferenceAbsent,
-      sourceBasenameImageFileAbsent,
       diagnostic: "Destination image file does not use the requested image name.",
     };
   }
   if (!destinationMetadataFileExists) {
     return {
+      ...verificationBase,
       ok: false,
-      destinationDirectoryExists,
-      destinationImageFileExists,
-      destinationMetadataFileExists,
-      destinationMetadataReferencesDestination,
-      sourceMetadataReferenceAbsent,
-      sourceBasenameImageFileAbsent,
       diagnostic: "Destination image metadata file is missing.",
     };
   }
-  if (!destinationMetadataReferencesDestination) {
+  if (
+    !destinationMetadataReferencesDestination &&
+    !destinationMetadataUsesLauncherDirectoryFallback
+  ) {
     return {
+      ...verificationBase,
       ok: false,
-      destinationDirectoryExists,
-      destinationImageFileExists,
-      destinationMetadataFileExists,
-      destinationMetadataReferencesDestination,
-      sourceMetadataReferenceAbsent,
-      sourceBasenameImageFileAbsent,
       diagnostic:
         "Destination image metadata does not reference the requested image file.",
     };
   }
   if (!sourceMetadataReferenceAbsent) {
     return {
+      ...verificationBase,
       ok: false,
-      destinationDirectoryExists,
-      destinationImageFileExists,
-      destinationMetadataFileExists,
-      destinationMetadataReferencesDestination,
-      sourceMetadataReferenceAbsent,
-      sourceBasenameImageFileAbsent,
       diagnostic:
         "Destination image metadata still references the source image file.",
     };
   }
   if (!sourceBasenameImageFileAbsent) {
     return {
+      ...verificationBase,
       ok: false,
-      destinationDirectoryExists,
-      destinationImageFileExists,
-      destinationMetadataFileExists,
-      destinationMetadataReferencesDestination,
-      sourceMetadataReferenceAbsent,
-      sourceBasenameImageFileAbsent,
       diagnostic:
         "Copied image directory still contains an image file named after the source image.",
     };
   }
 
   return {
+    ...verificationBase,
     ok: true,
-    destinationDirectoryExists,
-    destinationImageFileExists,
-    destinationMetadataFileExists,
-    destinationMetadataReferencesDestination,
-    sourceMetadataReferenceAbsent,
-    sourceBasenameImageFileAbsent,
   };
 }
 
