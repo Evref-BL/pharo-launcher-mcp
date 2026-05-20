@@ -30,6 +30,11 @@ const formatSchema = {
   enum: ["ston", "text"],
   default: "ston",
 } as const;
+const displayModeSchema = {
+  type: "string",
+  enum: ["headless", "interactive"],
+  default: "headless",
+} as const;
 
 function objectSchema(
   properties: Record<string, unknown>,
@@ -111,6 +116,21 @@ function optionalBoolean(input: Record<string, unknown>, key: string): boolean {
   }
 
   return value;
+}
+
+function optionalDisplayMode(
+  input: Record<string, unknown>,
+): "headless" | "interactive" | undefined {
+  const value = input.displayMode;
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === "headless" || value === "interactive") {
+    return value;
+  }
+
+  throw new ToolInputError("displayMode must be headless or interactive");
 }
 
 function requireConfirmation(input: Record<string, unknown>, toolName: string): void {
@@ -239,6 +259,7 @@ function imageLaunch(input: unknown): string[] {
   const object = inputObject(input);
   const args = ["image", "launch"];
   addOption(args, "--script", optionalString(object, "script"));
+  addOption(args, "--displayMode", optionalDisplayMode(object));
   addFlag(args, "--detached", optionalBoolean(object, "detached"));
   args.push(requiredString(object, "imageName"));
   return args;
@@ -475,6 +496,7 @@ export const launcherCommandTools: LauncherCommandTool[] = [
         imageName: stringSchema,
         script: stringSchema,
         detached: booleanSchema,
+        displayMode: displayModeSchema,
       },
       ["imageName"],
     ),

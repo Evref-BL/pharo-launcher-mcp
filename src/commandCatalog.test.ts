@@ -140,6 +140,11 @@ describe("launcher command catalog", () => {
       ["image", "launch", "--script", "bootstrap.st", "--detached", "Task"],
     ],
     [
+      "pharo_launcher_image_launch",
+      { imageName: "Task", displayMode: "interactive" },
+      ["image", "launch", "--displayMode", "interactive", "Task"],
+    ],
+    [
       "pharo_launcher_image_list",
       { nameFilter: "Task", format: "text", brief: true },
       ["image", "list", "--nameFilter", "Task", "--brief"],
@@ -237,6 +242,12 @@ describe("launcher command catalog", () => {
         detached: true,
       }),
     ).toThrow("imageName is required");
+    expect(() =>
+      buildLauncherCommandArgs("pharo_launcher_image_launch", {
+        imageName: "Task",
+        displayMode: "visible",
+      }),
+    ).toThrow("displayMode must be headless or interactive");
     expect(() =>
       buildLauncherCommandArgs("pharo_launcher_image_package", {
         location: "C:\\out",

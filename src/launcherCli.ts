@@ -48,11 +48,14 @@ interface ProfileImageLaunchPlan {
   imageName: string;
   imagePath: string;
   scriptPath?: string;
+  displayMode: ImageLaunchDisplayMode;
   vmId: string;
   vmPath: string;
   invocation: LauncherCliInvocation;
   vmUpdated: boolean;
 }
+
+type ImageLaunchDisplayMode = "headless" | "interactive";
 
 const POSIX_BASH_PATH_CANDIDATES = ["/bin/bash", "/usr/bin/bash"] as const;
 
@@ -311,6 +314,32 @@ export function launcherArgsForDetachedImageLaunch(
   args: readonly string[],
 ): string[] {
   return args.filter((arg) => arg !== "--detached");
+}
+
+function imageLaunchArgsAndDisplayMode(
+  args: readonly string[],
+  startTime: number,
+): { args: string[]; displayMode: ImageLaunchDisplayMode } | LauncherCliResult {
+  const displayModeIndex = args.indexOf("--displayMode");
+  if (displayModeIndex < 0) {
+    return { args: [...args], displayMode: "headless" };
+  }
+
+  const displayMode = args[displayModeIndex + 1];
+  if (displayMode !== "headless" && displayMode !== "interactive") {
+    return failedResult(
+      "Profile-scoped image launch displayMode must be headless or interactive.",
+      startTime,
+    );
+  }
+
+  return {
+    args: args.filter(
+      (_arg, index) =>
+        index !== displayModeIndex && index !== displayModeIndex + 1,
+    ),
+    displayMode,
+  };
 }
 
 function isImageCreateFromBuild(args: readonly string[]): boolean {
@@ -717,6 +746,7 @@ async function profileScopedImageLaunchPlan(
   config: PharoLauncherConfig,
   timeoutMs: number,
   startTime: number,
+  displayMode: ImageLaunchDisplayMode,
 ): Promise<ProfileImageLaunchPlan | LauncherCliResult> {
   const profile = config.profile;
   const imageName = imageNameFromLaunchArgs(args);
@@ -815,7 +845,7 @@ async function profileScopedImageLaunchPlan(
 
   const scriptPath = scriptPathFromLaunchArgs(args);
   const invocationArgs = [
-    "--headless",
+    ...(displayMode === "headless" ? ["--headless"] : []),
     imagePath,
     ...(scriptPath ? ["eval", scriptPath] : []),
   ];
@@ -823,6 +853,7 @@ async function profileScopedImageLaunchPlan(
     imageName,
     imagePath,
     ...(scriptPath ? { scriptPath } : {}),
+    displayMode,
     vmId,
     vmPath,
     invocation: {
@@ -867,6 +898,7 @@ async function runDetachedProfileImageLaunch(
       stdout: [
         `Detached profile-scoped Pharo image pid ${child.pid ?? "unknown"}.`,
         `image: ${plan.imagePath}`,
+        `displayMode: ${plan.displayMode}`,
         `vm: ${plan.vmPath}`,
         `vmId: ${plan.vmId}`,
         `vmUpdated: ${plan.vmUpdated}`,
@@ -891,6 +923,7 @@ async function runProfileScopedImageLaunch(
   timeoutMs: number,
   startTime: number,
   detached: boolean,
+  displayMode: ImageLaunchDisplayMode,
 ): Promise<LauncherCliResult> {
   ensureProfileLauncherConfiguration(config);
   const plan = await profileScopedImageLaunchPlan(
@@ -898,6 +931,7 @@ async function runProfileScopedImageLaunch(
     config,
     timeoutMs,
     startTime,
+    displayMode,
   );
 
   if ("exitCode" in plan) {
@@ -919,7 +953,21 @@ async function runProfileScopedImageLaunch(
   if (setupFailure) {
     return setupFailure;
   }
-  return runInvocation(plan.invocation, timeoutMs, startTime);
+  const result = await runInvocation(plan.invocation, timeoutMs, startTime);
+  return {
+    ...result,
+    stdout: [
+      `Profile-scoped Pharo image launch.`,
+      `image: ${plan.imagePath}`,
+      `displayMode: ${plan.displayMode}`,
+      `vm: ${plan.vmPath}`,
+      `vmId: ${plan.vmId}`,
+      `vmUpdated: ${plan.vmUpdated}`,
+      result.stdout,
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n"),
+  };
 }
 
 export function runLauncherCli(
@@ -932,9 +980,16 @@ export function runLauncherCli(
   const invocationArgs = detachedImageLaunch
     ? launcherArgsForDetachedImageLaunch(args)
     : args;
+  const imageLaunchOptions = isImageLaunch(invocationArgs)
+    ? imageLaunchArgsAndDisplayMode(invocationArgs, startTime)
+    : { args: [...invocationArgs], displayMode: "headless" as const };
+  if ("exitCode" in imageLaunchOptions) {
+    return Promise.resolve(imageLaunchOptions);
+  }
+  const launcherArgs = imageLaunchOptions.args;
   const config = options.config ?? loadPharoLauncherConfig();
   const scopedFromBuildDiagnostic = profileScopedFromBuildDiagnostic(
-    invocationArgs,
+    launcherArgs,
     config,
   );
   if (scopedFromBuildDiagnostic) {
@@ -946,18 +1001,19 @@ export function runLauncherCli(
       timedOut: false,
     });
   }
-  if (config.profile && isImageLaunch(invocationArgs)) {
+  if (config.profile && isImageLaunch(launcherArgs)) {
     return runProfileScopedImageLaunch(
-      invocationArgs,
+      launcherArgs,
       config,
       timeoutMs,
       startTime,
       detachedImageLaunch,
+      imageLaunchOptions.displayMode,
     );
   }
 
   ensureProfileLauncherConfiguration(config);
-  const invocation = buildLauncherCliInvocation(invocationArgs, config, {
+  const invocation = buildLauncherCliInvocation(launcherArgs, config, {
     bashPath: options.bashPath,
   });
   const setupFailure = validateInvocationSetup(invocation, startTime);

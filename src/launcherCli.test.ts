@@ -565,6 +565,7 @@ describe("buildLauncherCliInvocation", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("Detached profile-scoped Pharo image pid");
       expect(result.stdout).toContain(`image: ${imagePath}`);
+      expect(result.stdout).toContain("displayMode: headless");
       expect(result.stdout).toContain(`vm: ${vmPath}`);
       expect(result.stdout).toContain("vmUpdated: false");
       expect(result.stderr).toBe("");
@@ -578,6 +579,116 @@ describe("buildLauncherCliInvocation", () => {
       expect(fs.readFileSync(vmArgsPath, "utf8")).toBe(
         ["--headless", imagePath, "eval", startupScriptPath, ""].join("\n"),
       );
+    } finally {
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("launches profile-scoped images interactively when requested", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const stateRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-launch-"),
+    );
+    const launcherCallsPath = path.join(stateRoot, "launcher-calls.txt");
+    const vmArgsPath = path.join(stateRoot, "vm-args.txt");
+    const launcherScriptPath = path.join(stateRoot, "launcher.sh");
+    const installationLauncherImage = path.join(
+      stateRoot,
+      "installation",
+      "PharoLauncher.image",
+    );
+    const imageName = "Task";
+    const vmId = "130-x64";
+    const profile = {
+      name: "isolated",
+      stateRoot,
+      launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+      imagesDir: path.join(stateRoot, "images"),
+      vmsDir: path.join(stateRoot, "vms"),
+      templateSourcesDir: path.join(stateRoot, "templates"),
+      initScriptsDir: path.join(stateRoot, "init-scripts"),
+      logsDir: path.join(stateRoot, "logs"),
+    };
+    const imagePath = path.join(profile.imagesDir, imageName, `${imageName}.image`);
+    const vmPath = path.join(
+      profile.vmsDir,
+      vmId,
+      "Pharo.app",
+      "Contents",
+      "MacOS",
+      "Pharo",
+    );
+
+    fs.mkdirSync(path.dirname(imagePath), { recursive: true });
+    fs.mkdirSync(path.dirname(vmPath), { recursive: true });
+    fs.mkdirSync(path.dirname(installationLauncherImage), { recursive: true });
+    fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
+    fs.writeFileSync(imagePath, "", "utf8");
+    writeExecutableScript(
+      launcherScriptPath,
+      [
+        "#!/usr/bin/env sh",
+        `printf '%s\\n' "$*" >> ${shellQuote(launcherCallsPath)}`,
+        `case "$*" in`,
+        `  *"image info --ston ${imageName}"*) printf '%s\\n' ${shellQuote(launcherTemplateOnlyImageInfoSton(imageName))} ;;`,
+        `  *) echo "unexpected launcher command: $*" >&2; exit 64 ;;`,
+        "esac",
+        "",
+      ].join("\n"),
+    );
+    writeExecutableScript(
+      vmPath,
+      [
+        "#!/usr/bin/env sh",
+        `printf '%s\\n' "$@" > ${shellQuote(vmArgsPath)}`,
+        "",
+      ].join("\n"),
+    );
+
+    try {
+      const result = await runLauncherCli(
+        [
+          "image",
+          "launch",
+          "--displayMode",
+          "interactive",
+          "--detached",
+          imageName,
+        ],
+        {
+          config: launcherConfig({
+            launcherDir: stateRoot,
+            launcherVm: "unused",
+            installationLauncherImage,
+            launcherImage: profile.launcherImage,
+            launcherScript: launcherScriptPath,
+            launcherConfiguration: path.join(
+              stateRoot,
+              "launcher",
+              "pharo-launcher-cli-config.ston",
+            ),
+            profile,
+          }),
+          timeoutMs: 2_000,
+        },
+      );
+
+      await waitForFile(vmArgsPath);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Detached profile-scoped Pharo image pid");
+      expect(result.stdout).toContain("displayMode: interactive");
+      expect(result.stderr).toBe("");
+      expect(fs.readFileSync(launcherCallsPath, "utf8")).toContain(
+        `image info --ston ${imageName}`,
+      );
+      expect(fs.readFileSync(launcherCallsPath, "utf8")).not.toContain(
+        "image launch",
+      );
+      expect(fs.readFileSync(vmArgsPath, "utf8")).toBe([imagePath, ""].join("\n"));
     } finally {
       fs.rmSync(stateRoot, { recursive: true, force: true });
     }
