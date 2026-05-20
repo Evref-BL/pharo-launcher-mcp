@@ -24,6 +24,7 @@ import {
   getPharoLauncherVersion,
   type LauncherCliRunner,
   type PharoLauncherDeclaredImage,
+  type PharoLauncherTemplateCreateRequest,
   validatePharoLauncherInstallation,
 } from "./discovery.js";
 import {
@@ -68,6 +69,15 @@ const declaredImageSchema = {
   required: ["imageId"],
   additionalProperties: false,
 } as const;
+const templateCreateRequestSchema = {
+  type: "object",
+  properties: {
+    templateName: stringSchema,
+    templateCategory: stringSchema,
+  },
+  required: ["templateName"],
+  additionalProperties: false,
+} as const;
 const inventoryInputSchema = {
   type: "object",
   properties: {
@@ -76,6 +86,11 @@ const inventoryInputSchema = {
       items: declaredImageSchema,
       description:
         "Project/workspace-declared image handles supplied by a scoped caller.",
+    },
+    templateCreateRequest: {
+      ...templateCreateRequestSchema,
+      description:
+        "Optional template image create request to evaluate for offline readiness without mutation or download.",
     },
   },
   additionalProperties: false,
@@ -267,6 +282,28 @@ function declaredImagesFromInput(input: unknown): PharoLauncherDeclaredImage[] {
         : {}),
     };
   });
+}
+
+function templateCreateRequestFromInput(
+  input: unknown,
+): PharoLauncherTemplateCreateRequest | undefined {
+  const object = inputObject(input);
+  const value = object.templateCreateRequest;
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const request = inputObject(value);
+  const templateName = optionalString(request, "templateName");
+  if (!templateName) {
+    throw new ToolInputError("templateCreateRequest.templateName is required");
+  }
+
+  const templateCategory = optionalString(request, "templateCategory");
+  return {
+    templateName,
+    ...(templateCategory ? { templateCategory } : {}),
+  };
 }
 
 async function runLauncherToolCommand(
@@ -773,11 +810,14 @@ export async function callTool(
 
     case "pharo_launcher_inventory": {
       try {
+        const templateCreateRequest =
+          templateCreateRequestFromInput(argumentsValue);
         const result = await getPharoLauncherInventory(
           runner,
           options.config,
           {
             declaredImages: declaredImagesFromInput(argumentsValue),
+            ...(templateCreateRequest ? { templateCreateRequest } : {}),
             ...(options.timeoutMs !== undefined
               ? { timeoutMs: options.timeoutMs }
               : {}),

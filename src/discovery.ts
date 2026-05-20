@@ -193,6 +193,34 @@ export interface PharoLauncherInventoryProbe {
   diagnostic?: string;
 }
 
+export interface PharoLauncherTemplateCreateRequest {
+  templateName: string;
+  templateCategory?: string;
+}
+
+export type PharoLauncherOfflineReadinessStatus =
+  | "ready"
+  | "missing"
+  | "unknown";
+
+export interface PharoLauncherOfflineReadinessInput {
+  name: "templateSource" | "baseImage" | "vm";
+  status: PharoLauncherOfflineReadinessStatus;
+  diagnostic: string;
+  path?: string;
+  templateId?: string;
+  imageId?: string;
+}
+
+export interface PharoLauncherTemplateCreateReadinessReport {
+  status: PharoLauncherOfflineReadinessStatus;
+  request: PharoLauncherTemplateCreateRequest;
+  inputs: PharoLauncherOfflineReadinessInput[];
+  template?: PharoTemplateInventoryEntry;
+  baseImage?: PharoImageInventoryEntry;
+  diagnostics: string[];
+}
+
 export interface PharoLauncherInventoryReport {
   ok: boolean;
   service: "pharo-launcher-mcp";
@@ -216,11 +244,13 @@ export interface PharoLauncherInventoryReport {
     templateList?: PharoLauncherInventoryProbe;
     imageList?: PharoLauncherInventoryProbe;
   };
+  templateCreateReadiness?: PharoLauncherTemplateCreateReadinessReport;
   diagnostics: PharoLauncherInventoryDiagnostic[];
 }
 
 export interface PharoLauncherInventoryOptions {
   declaredImages?: readonly PharoLauncherDeclaredImage[];
+  templateCreateRequest?: PharoLauncherTemplateCreateRequest;
   timeoutMs?: number;
 }
 
@@ -960,6 +990,189 @@ function collectVersions(
   );
 }
 
+function templateMatchesCreateRequest(
+  template: PharoTemplateInventoryEntry,
+  request: PharoLauncherTemplateCreateRequest,
+): boolean {
+  if (template.name !== request.templateName) {
+    return false;
+  }
+
+  return (
+    !request.templateCategory || template.category === request.templateCategory
+  );
+}
+
+function imageMatchesTemplate(
+  image: PharoImageInventoryEntry,
+  template: PharoTemplateInventoryEntry,
+): boolean {
+  if (template.url && image.originTemplate?.url === template.url) {
+    return true;
+  }
+
+  if (template.name && image.originTemplate?.name === template.name) {
+    return true;
+  }
+
+  if (!template.pharoVersion || image.pharoVersion !== template.pharoVersion) {
+    return false;
+  }
+
+  return !template.architecture || image.architecture === template.architecture;
+}
+
+function vmNameMatchesTemplate(value: string, template: PharoTemplateInventoryEntry): boolean {
+  const normalized = value.toLowerCase();
+  const version = template.pharoVersion?.toLowerCase();
+  const majorVersion =
+    version && version.endsWith("0") ? version.slice(0, -1) : version;
+  const versionMatches =
+    !version ||
+    normalized.includes(version) ||
+    Boolean(majorVersion && normalized.includes(majorVersion));
+  const architecture = template.architecture?.toLowerCase();
+  const architectureMatches =
+    !architecture ||
+    normalized.includes(architecture) ||
+    (architecture === "64" && /\b(?:x64|64|64bit)\b/.test(normalized)) ||
+    (architecture === "arm64" && /\b(?:arm64|aarch64)\b/.test(normalized));
+
+  return versionMatches && architectureMatches;
+}
+
+function findLocalVmProof(
+  config: PharoLauncherConfig,
+  template: PharoTemplateInventoryEntry | undefined,
+): PharoLauncherOfflineReadinessInput {
+  if (!config.profile) {
+    return {
+      name: "vm",
+      status: "unknown",
+      diagnostic:
+        "VM readiness is unknown because no scoped launcher profile is active.",
+    };
+  }
+
+  const root = config.profile.vmsDir;
+  if (pathKind(root) !== "directory" || !isReadable(root)) {
+    return {
+      name: "vm",
+      status: "missing",
+      path: root,
+      diagnostic:
+        "The active profile VM root is missing or unreadable, so no local VM can be proven.",
+    };
+  }
+
+  if (!template?.pharoVersion) {
+    return {
+      name: "vm",
+      status: "unknown",
+      path: root,
+      diagnostic:
+        "VM readiness is unknown because the selected template has no Pharo version metadata.",
+    };
+  }
+
+  const entries = fs.readdirSync(root, { withFileTypes: true });
+  const match = entries.find((entry) => vmNameMatchesTemplate(entry.name, template));
+  if (!match) {
+    return {
+      name: "vm",
+      status: "missing",
+      path: root,
+      diagnostic:
+        "No profile-local VM matched the selected template version and architecture.",
+    };
+  }
+
+  return {
+    name: "vm",
+    status: "ready",
+    path: path.join(root, match.name),
+    diagnostic:
+      "A profile-local VM matches the selected template version and architecture.",
+  };
+}
+
+function templateCreateReadiness(options: {
+  config: PharoLauncherConfig;
+  request: PharoLauncherTemplateCreateRequest;
+  installedTemplates: readonly PharoTemplateInventoryEntry[];
+  downloadableTemplates: readonly PharoTemplateInventoryEntry[];
+  existingImages: readonly PharoImageInventoryEntry[];
+  existingKnown: boolean;
+}): PharoLauncherTemplateCreateReadinessReport {
+  const installedTemplate = options.installedTemplates.find((template) =>
+    templateMatchesCreateRequest(template, options.request),
+  );
+  const downloadableTemplate = options.downloadableTemplates.find((template) =>
+    templateMatchesCreateRequest(template, options.request),
+  );
+  const template = installedTemplate ?? downloadableTemplate;
+  const baseImage =
+    template &&
+    options.existingImages.find((image) => imageMatchesTemplate(image, template));
+
+  const inputs: PharoLauncherOfflineReadinessInput[] = [
+    installedTemplate
+      ? {
+          name: "templateSource",
+          status: "ready",
+          templateId: installedTemplate.id,
+          ...(installedTemplate.sourcePath
+            ? { path: installedTemplate.sourcePath }
+            : {}),
+          diagnostic:
+            "The selected template is present in the active profile template source catalog.",
+        }
+      : {
+          name: "templateSource",
+          status: "missing",
+          ...(options.config.profile
+            ? { path: options.config.profile.templateSourcesDir }
+            : {}),
+          diagnostic: downloadableTemplate
+            ? "The selected template is known only from downloadable inventory, not from the active profile template source catalog."
+            : "The selected template is not present in the active profile template source catalog.",
+        },
+    baseImage
+      ? {
+          name: "baseImage",
+          status: "ready",
+          imageId: baseImage.id,
+          ...(baseImage.imagePath ? { path: baseImage.imagePath } : {}),
+          diagnostic:
+            "An existing image proves the selected template base artifact is already local.",
+        }
+      : {
+          name: "baseImage",
+          status: options.existingKnown ? "missing" : "unknown",
+          diagnostic: options.existingKnown
+            ? "No existing image proves the selected template base artifact is already local."
+            : "Base image artifact readiness is unknown because existing image inventory could not be read.",
+        },
+    findLocalVmProof(options.config, template),
+  ];
+  const status = inputs.some((input) => input.status === "missing")
+    ? "missing"
+    : inputs.some((input) => input.status === "unknown")
+      ? "unknown"
+      : "ready";
+
+  return {
+    status,
+    request: options.request,
+    inputs,
+    ...(template ? { template } : {}),
+    ...(baseImage ? { baseImage } : {}),
+    diagnostics: inputs
+      .filter((input) => input.status !== "ready")
+      .map((input) => input.diagnostic),
+  };
+}
+
 export async function getPharoLauncherInventory(
   runner: LauncherCliRunner = runLauncherCli,
   config: PharoLauncherConfig = loadPharoLauncherConfig(),
@@ -1075,6 +1288,16 @@ export async function getPharoLauncherInventory(
   ) {
     addEmptyTemplateInventoryDiagnostic(diagnostics, config);
   }
+  const readiness = options.templateCreateRequest
+    ? templateCreateReadiness({
+        config,
+        request: options.templateCreateRequest,
+        installedTemplates,
+        downloadableTemplates,
+        existingImages,
+        existingKnown,
+      })
+    : undefined;
 
   return {
     ok: !diagnostics.some((diagnostic) => diagnostic.severity === "error"),
@@ -1093,6 +1316,7 @@ export async function getPharoLauncherInventory(
       declared: [...(options.declaredImages ?? [])],
     },
     probes,
+    ...(readiness ? { templateCreateReadiness: readiness } : {}),
     diagnostics,
   };
 }
