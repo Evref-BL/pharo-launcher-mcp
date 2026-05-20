@@ -13,10 +13,11 @@ import {
 } from "./launcherCli.js";
 
 function launcherConfig(
-  config: Omit<PharoLauncherConfig, "installationLauncherImage">,
+  config: Omit<PharoLauncherConfig, "installationLauncherImage"> &
+    Partial<Pick<PharoLauncherConfig, "installationLauncherImage">>,
 ): PharoLauncherConfig {
   return {
-    installationLauncherImage: config.launcherImage,
+    installationLauncherImage: config.installationLauncherImage ?? config.launcherImage,
     ...config,
   };
 }
@@ -226,6 +227,17 @@ describe("buildLauncherCliInvocation", () => {
     const stateRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pharo-launcher-mcp-profile-"),
     );
+    const installationRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-installation-"),
+    );
+    const installationLauncherImage = path.join(
+      installationRoot,
+      "PharoLauncher.image",
+    );
+    const installationLauncherChanges = path.join(
+      installationRoot,
+      "PharoLauncher.changes",
+    );
     const configPath = path.join(
       stateRoot,
       "launcher",
@@ -241,11 +253,14 @@ describe("buildLauncherCliInvocation", () => {
       initScriptsDir: path.join(stateRoot, "init-scripts"),
       logsDir: path.join(stateRoot, "logs"),
     };
+    fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
+    fs.writeFileSync(installationLauncherChanges, "launcher-changes", "utf8");
 
     ensureProfileLauncherConfiguration(
       launcherConfig({
         launcherDir: "C:\\PL",
         launcherVm: "C:\\PL\\PharoConsole.exe",
+        installationLauncherImage,
         launcherImage: profile.launcherImage,
         launcherConfiguration: configPath,
         profile,
@@ -271,8 +286,75 @@ describe("buildLauncherCliInvocation", () => {
     expect(fs.existsSync(profile.templateSourcesDir)).toBe(true);
     expect(fs.existsSync(profile.initScriptsDir)).toBe(true);
     expect(fs.existsSync(profile.logsDir)).toBe(true);
+    expect(fs.readFileSync(profile.launcherImage, "utf8")).toBe("launcher-image");
+    expect(
+      fs.readFileSync(
+        profile.launcherImage.replace(/\.image$/i, ".changes"),
+        "utf8",
+      ),
+    ).toBe("launcher-changes");
 
     fs.rmSync(stateRoot, { recursive: true, force: true });
+    fs.rmSync(installationRoot, { recursive: true, force: true });
+  });
+
+  it("fails profile setup before invocation when the installation launcher image is missing", () => {
+    const stateRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-profile-"),
+    );
+    const markerPath = path.join(stateRoot, "spawned.txt");
+    const scriptPath =
+      process.platform === "win32"
+        ? path.join(stateRoot, "launcher.cmd")
+        : path.join(stateRoot, "launcher.sh");
+    const profile = {
+      name: "isolated",
+      stateRoot,
+      launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+      imagesDir: path.join(stateRoot, "images"),
+      vmsDir: path.join(stateRoot, "vms"),
+      templateSourcesDir: path.join(stateRoot, "templates"),
+      initScriptsDir: path.join(stateRoot, "init-scripts"),
+      logsDir: path.join(stateRoot, "logs"),
+    };
+    fs.writeFileSync(
+      scriptPath,
+      process.platform === "win32"
+        ? `@echo off\r\necho spawned > "${markerPath}"\r\n`
+        : `#!/usr/bin/env sh\necho spawned > "${markerPath}"\n`,
+      "utf8",
+    );
+    if (process.platform !== "win32") {
+      fs.chmodSync(scriptPath, 0o755);
+    }
+
+    try {
+      expect(() =>
+        runLauncherCli(["image", "list"], {
+          config: launcherConfig({
+            launcherDir: stateRoot,
+            launcherVm: "unused",
+            installationLauncherImage: path.join(
+              stateRoot,
+              "missing",
+              "PharoLauncher.image",
+            ),
+            launcherImage: profile.launcherImage,
+            launcherScript: scriptPath,
+            launcherConfiguration: path.join(
+              stateRoot,
+              "launcher",
+              "pharo-launcher-cli-config.ston",
+            ),
+            profile,
+          }),
+          timeoutMs: 2_000,
+        }),
+      ).toThrow(/Cannot bootstrap profile launcher image/);
+      expect(fs.existsSync(markerPath)).toBe(false);
+    } finally {
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
   });
 
   it("rejects profile launcher configuration outside the profile root", () => {
@@ -395,6 +477,11 @@ describe("buildLauncherCliInvocation", () => {
     const launcherCallsPath = path.join(stateRoot, "launcher-calls.txt");
     const vmArgsPath = path.join(stateRoot, "vm-args.txt");
     const launcherScriptPath = path.join(stateRoot, "launcher.sh");
+    const installationLauncherImage = path.join(
+      stateRoot,
+      "installation",
+      "PharoLauncher.image",
+    );
     const imageName = "Task";
     const vmId = "130-x64";
     const profile = {
@@ -420,6 +507,8 @@ describe("buildLauncherCliInvocation", () => {
 
     fs.mkdirSync(path.dirname(imagePath), { recursive: true });
     fs.mkdirSync(path.dirname(vmPath), { recursive: true });
+    fs.mkdirSync(path.dirname(installationLauncherImage), { recursive: true });
+    fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
     fs.writeFileSync(imagePath, "", "utf8");
     fs.writeFileSync(startupScriptPath, "Smalltalk snapshot: false andQuit: true.", "utf8");
     writeExecutableScript(
@@ -457,6 +546,7 @@ describe("buildLauncherCliInvocation", () => {
           config: launcherConfig({
             launcherDir: stateRoot,
             launcherVm: "unused",
+            installationLauncherImage,
             launcherImage: profile.launcherImage,
             launcherScript: launcherScriptPath,
             launcherConfiguration: path.join(
@@ -503,6 +593,11 @@ describe("buildLauncherCliInvocation", () => {
     );
     const launcherCallsPath = path.join(stateRoot, "launcher-calls.txt");
     const launcherScriptPath = path.join(stateRoot, "launcher.sh");
+    const installationLauncherImage = path.join(
+      stateRoot,
+      "installation",
+      "PharoLauncher.image",
+    );
     const imageName = "Task";
     const vmId = "130-x64";
     const profile = {
@@ -527,6 +622,8 @@ describe("buildLauncherCliInvocation", () => {
     const startupScriptPath = path.join(stateRoot, "bootstrap.st");
 
     fs.mkdirSync(path.dirname(imagePath), { recursive: true });
+    fs.mkdirSync(path.dirname(installationLauncherImage), { recursive: true });
+    fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
     fs.writeFileSync(imagePath, "", "utf8");
     fs.writeFileSync(startupScriptPath, "Smalltalk snapshot: false andQuit: true.", "utf8");
     writeExecutableScript(
@@ -557,6 +654,7 @@ describe("buildLauncherCliInvocation", () => {
           config: launcherConfig({
             launcherDir: stateRoot,
             launcherVm: "unused",
+            installationLauncherImage,
             launcherImage: profile.launcherImage,
             launcherScript: launcherScriptPath,
             launcherConfiguration: path.join(
@@ -733,8 +831,15 @@ describe("buildLauncherCliInvocation", () => {
     const stateRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pharo-launcher-mcp-create-shell-"),
     );
+    const installationRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-installation-"),
+    );
     const scriptPath = path.join(stateRoot, "launcher.sh");
     const missingBash = path.join(stateRoot, "missing-bash");
+    const installationLauncherImage = path.join(
+      installationRoot,
+      "PharoLauncher.image",
+    );
     const profile = {
       name: "isolated",
       stateRoot,
@@ -750,6 +855,7 @@ describe("buildLauncherCliInvocation", () => {
       "launcher",
       "pharo-launcher-cli-config.ston",
     );
+    fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
 
     writeExecutableScript(
       scriptPath,
@@ -764,6 +870,7 @@ describe("buildLauncherCliInvocation", () => {
           config: launcherConfig({
             launcherDir: stateRoot,
             launcherVm: "unused",
+            installationLauncherImage,
             launcherImage: profile.launcherImage,
             launcherScript: scriptPath,
             launcherConfiguration,
@@ -792,8 +899,12 @@ describe("buildLauncherCliInvocation", () => {
       expect(fs.existsSync(profile.templateSourcesDir)).toBe(true);
       expect(fs.existsSync(profile.initScriptsDir)).toBe(true);
       expect(fs.existsSync(profile.logsDir)).toBe(true);
+      expect(fs.readFileSync(profile.launcherImage, "utf8")).toBe(
+        "launcher-image",
+      );
     } finally {
       fs.rmSync(stateRoot, { recursive: true, force: true });
+      fs.rmSync(installationRoot, { recursive: true, force: true });
     }
   });
 

@@ -137,31 +137,83 @@ export function profileLauncherConfigurationContent(
   ].join("\n");
 }
 
+function changesPathForImage(imagePath: string): string {
+  return /\.image$/i.test(imagePath)
+    ? imagePath.replace(/\.image$/i, ".changes")
+    : `${imagePath}.changes`;
+}
+
+function copyIfExists(source: string, destination: string): void {
+  if (fs.existsSync(source) && !fs.existsSync(destination)) {
+    fs.copyFileSync(source, destination);
+  }
+}
+
+function ensureProfileLauncherImage(
+  config: PharoLauncherConfig,
+  profileLauncherImage: string,
+): void {
+  const installationLauncherImage = path.resolve(config.installationLauncherImage);
+  if (!fs.existsSync(profileLauncherImage)) {
+    if (!fs.existsSync(installationLauncherImage)) {
+      throw new Error(
+        [
+          "Cannot bootstrap profile launcher image because the installation PharoLauncher image is missing.",
+          `source: ${installationLauncherImage}`,
+          `destination: ${profileLauncherImage}`,
+        ].join("\n"),
+      );
+    }
+
+    fs.copyFileSync(installationLauncherImage, profileLauncherImage);
+  }
+
+  copyIfExists(
+    changesPathForImage(installationLauncherImage),
+    changesPathForImage(profileLauncherImage),
+  );
+}
+
 export function ensureProfileLauncherConfiguration(
   config: PharoLauncherConfig,
 ): void {
-  if (!config.profile || !config.launcherConfiguration) {
+  if (!config.profile) {
     return;
   }
 
-  const configurationPath = path.resolve(config.launcherConfiguration);
   const stateRoot = path.resolve(config.profile.stateRoot);
-  if (!isPathInside(stateRoot, configurationPath)) {
+  const profileLauncherImage = path.resolve(config.profile.launcherImage);
+  if (!isPathInside(stateRoot, profileLauncherImage)) {
+    throw new Error(
+      `Refusing launcher profile image outside PHARO_LAUNCHER_MCP_STATE_ROOT: ${profileLauncherImage}`,
+    );
+  }
+
+  const configurationPath = config.launcherConfiguration
+    ? path.resolve(config.launcherConfiguration)
+    : undefined;
+  if (configurationPath && !isPathInside(stateRoot, configurationPath)) {
     throw new Error(
       `Refusing launcher profile configuration outside PHARO_LAUNCHER_MCP_STATE_ROOT: ${configurationPath}`,
     );
   }
 
   for (const directory of [
-    path.dirname(config.profile.launcherImage),
+    path.dirname(profileLauncherImage),
     config.profile.imagesDir,
     config.profile.vmsDir,
     config.profile.templateSourcesDir,
     config.profile.initScriptsDir,
     config.profile.logsDir,
-    path.dirname(configurationPath),
+    ...(configurationPath ? [path.dirname(configurationPath)] : []),
   ]) {
     fs.mkdirSync(directory, { recursive: true });
+  }
+
+  ensureProfileLauncherImage(config, profileLauncherImage);
+
+  if (!configurationPath) {
+    return;
   }
 
   const content = profileLauncherConfigurationContent(config.profile);
