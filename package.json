@@ -22,7 +22,7 @@
   "types": "./dist/index.d.ts",
   "files": [
     "bin",
-    "docs/development.md",
+    "docs",
     "dist",
     "LICENSE",
     "README.md"
