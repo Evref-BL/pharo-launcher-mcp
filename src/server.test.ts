@@ -167,6 +167,10 @@ describe("callTool", () => {
             workspaceId: "workspace",
           },
         ],
+        templateCreateRequest: {
+          templateName: "Pharo 13",
+          templateCategory: "stable",
+        },
       },
       { runner, config },
     );
@@ -196,6 +200,13 @@ describe("callTool", () => {
             workspaceId: "workspace",
           },
         ],
+      },
+      templateCreateReadiness: {
+        status: "missing",
+        request: {
+          templateName: "Pharo 13",
+          templateCategory: "stable",
+        },
       },
     });
     expect(calls).toEqual([

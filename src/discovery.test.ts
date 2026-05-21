@@ -440,6 +440,151 @@ describe("PharoLauncher discovery", () => {
     ]);
   });
 
+  it("reports template create offline readiness when local template, base image, and VM proofs exist", async () => {
+    const config = tempProfileConfig();
+    fs.writeFileSync(
+      path.join(config.profile.templateSourcesDir, "local.ston"),
+      "OrderedCollection[PhLTemplate{#name:'Pharo 13',#category:'stable',#url:URL['https://example.test/130/latest.zip']}]",
+    );
+    fs.mkdirSync(path.join(config.profile.vmsDir, "130-x64"));
+    const runner: LauncherCliRunner = async (args) => ({
+      exitCode: 0,
+      stdout:
+        args[0] === "template"
+          ? "OrderedCollection[]"
+          : "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13',#url:URL['https://example.test/130/latest.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['Base13','Base13.image']}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'130-x64'}}]}]",
+      stderr: "",
+      durationMs: 2,
+      timedOut: false,
+    });
+
+    const report = await getPharoLauncherInventory(runner, config, {
+      templateCreateRequest: {
+        templateName: "Pharo 13",
+        templateCategory: "stable",
+      },
+    });
+
+    expect(report.templateCreateReadiness).toMatchObject({
+      status: "ready",
+      request: {
+        templateName: "Pharo 13",
+        templateCategory: "stable",
+      },
+      inputs: [
+        { name: "templateSource", status: "ready" },
+        { name: "baseImage", status: "ready", imageId: "image:Base13" },
+        {
+          name: "vm",
+          status: "ready",
+          path: path.join(config.profile.vmsDir, "130-x64"),
+        },
+      ],
+    });
+  });
+
+  it("reports missing template-source readiness separately from downloadable inventory", async () => {
+    const config = tempProfileConfig();
+    fs.mkdirSync(path.join(config.profile.vmsDir, "130-x64"));
+    const runner: LauncherCliRunner = async (args) => ({
+      exitCode: 0,
+      stdout:
+        args[0] === "template"
+          ? "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13',#category:'stable',#url:URL['https://example.test/130/latest.zip']}]"
+          : "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13',#url:URL['https://example.test/130/latest.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['Base13','Base13.image']}}}]",
+      stderr: "",
+      durationMs: 2,
+      timedOut: false,
+    });
+
+    const report = await getPharoLauncherInventory(runner, config, {
+      templateCreateRequest: {
+        templateName: "Pharo 13",
+        templateCategory: "stable",
+      },
+    });
+
+    expect(report.templateCreateReadiness?.status).toBe("missing");
+    expect(report.templateCreateReadiness?.inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "templateSource",
+          status: "missing",
+          path: config.profile.templateSourcesDir,
+        }),
+      ]),
+    );
+  });
+
+  it("reports missing base-image readiness separately", async () => {
+    const config = tempProfileConfig();
+    fs.writeFileSync(
+      path.join(config.profile.templateSourcesDir, "local.ston"),
+      "OrderedCollection[PhLTemplate{#name:'Pharo 13',#category:'stable',#url:URL['https://example.test/130/latest.zip']}]",
+    );
+    fs.mkdirSync(path.join(config.profile.vmsDir, "130-x64"));
+    const runner: LauncherCliRunner = async () => ({
+      exitCode: 0,
+      stdout: "OrderedCollection[]",
+      stderr: "",
+      durationMs: 2,
+      timedOut: false,
+    });
+
+    const report = await getPharoLauncherInventory(runner, config, {
+      templateCreateRequest: {
+        templateName: "Pharo 13",
+        templateCategory: "stable",
+      },
+    });
+
+    expect(report.templateCreateReadiness?.status).toBe("missing");
+    expect(report.templateCreateReadiness?.inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "baseImage",
+          status: "missing",
+        }),
+      ]),
+    );
+  });
+
+  it("reports missing VM readiness separately", async () => {
+    const config = tempProfileConfig();
+    fs.writeFileSync(
+      path.join(config.profile.templateSourcesDir, "local.ston"),
+      "OrderedCollection[PhLTemplate{#name:'Pharo 13',#category:'stable',#url:URL['https://example.test/130/latest.zip']}]",
+    );
+    const runner: LauncherCliRunner = async (args) => ({
+      exitCode: 0,
+      stdout:
+        args[0] === "template"
+          ? "OrderedCollection[]"
+          : "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13',#url:URL['https://example.test/130/latest.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['Base13','Base13.image']}}}]",
+      stderr: "",
+      durationMs: 2,
+      timedOut: false,
+    });
+
+    const report = await getPharoLauncherInventory(runner, config, {
+      templateCreateRequest: {
+        templateName: "Pharo 13",
+        templateCategory: "stable",
+      },
+    });
+
+    expect(report.templateCreateReadiness?.status).toBe("missing");
+    expect(report.templateCreateReadiness?.inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "vm",
+          status: "missing",
+          path: config.profile.vmsDir,
+        }),
+      ]),
+    );
+  });
+
   it("reports an empty scoped template inventory as actionable", async () => {
     const config = tempProfileConfig();
     const runner: LauncherCliRunner = async () => ({
