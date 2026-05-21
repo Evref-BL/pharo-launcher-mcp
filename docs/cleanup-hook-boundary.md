@@ -18,8 +18,8 @@ These checks are safe for planning and static verification:
 - `pharo_launcher_config`, because it reports resolved configuration without
   invoking Pharo Launcher
 
-These checks inspect the host or invoke Pharo Launcher and therefore need an
-explicit approval from the caller before they run:
+These checks inspect live host state or invoke Pharo Launcher. Run them only
+when the caller has chosen to cross that boundary:
 
 - `pharo_launcher_version`
 - `pharo_launcher_validate_installation`

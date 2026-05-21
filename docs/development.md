@@ -1,9 +1,9 @@
-# pharo-launcher-mcp Development
+# Development
 
-This document contains development notes for pharo-launcher-mcp. The main README is kept
-focused on installation, configuration, and tool usage.
+This document is for maintainers changing pharo-launcher-mcp. The README stays
+focused on installation and first use; user-facing detail lives under `docs/`.
 
-## Source Layout
+## Source layout
 
 - `src/server.ts`: MCP server surface and tool dispatch.
 - `src/commandCatalog.ts`: Pharo Launcher command definitions and input checks.
@@ -18,12 +18,11 @@ focused on installation, configuration, and tool usage.
 - `bin/pharo-launcher.sh`: POSIX wrapper.
 - `scripts/*.ps1`: Windows helper scripts for local live checks.
 
-## Local Setup
+## Local setup
 
 ```sh
 npm install
-npm run build
-npm test
+npm run check
 ```
 
 Useful scripts:
@@ -35,9 +34,10 @@ npm test
 npm run test:integration
 ```
 
-`npm test` runs unit coverage only. It does not invoke a local Pharo Launcher.
+`npm run check` runs type checking, build, and unit tests. `npm test` runs unit
+coverage only. It does not invoke a local Pharo Launcher.
 
-## Platform Contract
+## Platform contract
 
 The production code handles Windows, macOS, and Linux explicitly:
 
@@ -62,17 +62,17 @@ entered only when `PHARO_LAUNCHER_MCP_PROFILE`,
 `PHARO_LAUNCHER_MCP_STATE_ROOT`, or one of the explicit profile directory
 variables is present.
 
-## Process Backend
+## Process backend
 
-Pharo Launcher process commands can vary by host. pharo-launcher-mcp uses a native process
-backend for `pharo_launcher_process_list` and `pharo_launcher_process_kill`
-when needed:
+Pharo Launcher process commands can vary by host. pharo-launcher-mcp uses a
+native process backend for `pharo_launcher_process_list` and
+`pharo_launcher_process_kill` when needed:
 
 - Windows uses a PowerShell/CIM query.
 - macOS and Linux use `ps -axo pid=,args=`.
 - Unsupported host platforms return an explicit unsupported-backend error.
 
-## Parsing Boundary
+## Parsing boundary
 
 `src/parser.ts` is the only layer that translates Pharo Launcher output into
 pharo-launcher-mcp models.
@@ -104,7 +104,7 @@ or URLs, and attach source-file digest/mtime for installed `.ston` template
 files. Image identities mirror the launcher metadata returned by image
 list/info commands.
 
-## Integration Tests
+## Integration tests
 
 Run the live integration suite explicitly:
 
@@ -137,10 +137,10 @@ External-source image creation variants such as build, pull request,
 repository, SHA, and VM mutation commands should use explicit fixtures because
 they require network inputs or can alter VM installations.
 
-## Windows Live Helpers
+## Windows live helpers
 
 The helper scripts under `scripts/*.ps1` are Windows PowerShell conveniences for
-the current development environment:
+a local Windows development environment:
 
 ```powershell
 .\scripts\verify-environment.ps1
@@ -152,10 +152,10 @@ The live smoke test uses a dedicated profile root and copies the Pharo Launcher
 control image there before making live calls. It runs harmless checks by
 default: health, `--version`, and installation validation.
 
-Default profile root:
+When `-StateRoot` is not supplied, the helper uses:
 
 ```text
-C:\dev\code\git\.pharo-launcher-mcp\profiles\live-test
+<repo-parent>\.pharo-launcher-mcp\profiles\live-test
 ```
 
 Refresh the copied launcher control image:
@@ -167,13 +167,13 @@ Refresh the copied launcher control image:
 These helpers are not a substitute for cross-platform verification on macOS and
 Linux.
 
-## Cleanup Hook Boundary
+## Cleanup hook boundary
 
 Use `docs/cleanup-hook-boundary.md` when mapping launcher status, stop,
 timeout, and cleanup hooks for isolated live checks. That boundary
 distinguishes read-only planning checks from host inspection and mutation.
 
-## Local Probes
+## Local probes
 
 Probe the local Pharo Launcher image list without starting MCP stdio:
 
@@ -187,4 +187,22 @@ Start the MCP server over stdio from a local build:
 
 ```powershell
 node .\dist\index.js
+```
+
+## Documentation updates
+
+Keep docs close to the behavior they describe:
+
+- Put the fastest install and health path in `README.md`.
+- Put profile details in `docs/user/profile-mode.md`.
+- Put tool arguments and result shape in `docs/reference/tools.md`.
+- Put live host failure modes in `docs/troubleshooting.md`.
+- Keep examples generic. Do not use local machine paths, project names, issue
+  numbers, or incident history as examples.
+
+Before committing docs changes, run:
+
+```sh
+npm run check
+npm pack --dry-run
 ```
