@@ -5,7 +5,7 @@ first checks to run before mutating any Launcher state.
 
 ## Requirements
 
-- Node.js 24 or newer
+- Node.js 22.12.0 or newer
 - `npm` and `npx`
 - A local Pharo Launcher installation
 - An MCP client that can start a stdio server

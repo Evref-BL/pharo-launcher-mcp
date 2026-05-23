@@ -18,7 +18,7 @@ image or process action.
 
 Requirements:
 
-- Node.js 24 or newer
+- Node.js 22.12.0 or newer
 - `npm` and `npx`
 - Pharo Launcher installed on the host
 
