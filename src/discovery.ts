@@ -1323,7 +1323,7 @@ export async function getPharoLauncherInventory(
 
 function parseVersion(result: LauncherCliResult): string | undefined {
   const output = `${result.stdout}\n${result.stderr}`;
-  const firstVersionLikeToken = output.match(/\b\d+(?:\.\d+)+(?:[-+.\w]*)?\b/);
+  const firstVersionLikeToken = output.match(/\b\d+(?:\.\d+)+(?:[-+.\w]+)?\b/);
 
   return firstVersionLikeToken?.[0];
 }
