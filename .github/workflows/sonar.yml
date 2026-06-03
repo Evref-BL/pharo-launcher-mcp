@@ -1,0 +1,94 @@
+name: SonarQube
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: sonarqube-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: SonarQube analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+      SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Configure Sonar analysis
+        id: sonar
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${SONAR_TOKEN}" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SonarQube analysis is skipped because SONAR_TOKEN is not configured."
+            exit 0
+          fi
+
+          cp sonar-project.properties sonar-project.ci.properties
+          if [[ -n "${SONAR_ORGANIZATION}" ]]; then
+            echo "sonar.organization=${SONAR_ORGANIZATION}" >> sonar-project.ci.properties
+          elif [[ -z "${SONAR_HOST_URL}" ]] && ! grep -q '^sonar.organization=' sonar-project.properties; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SonarQube Cloud analysis is skipped because SONAR_ORGANIZATION is not configured."
+            exit 0
+          fi
+
+          echo "host_url=${SONAR_HOST_URL}" >> "$GITHUB_OUTPUT"
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        if: steps.sonar.outputs.configured == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.12.0
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.sonar.outputs.configured == 'true'
+        run: npm ci
+
+      - name: Generate coverage
+        if: steps.sonar.outputs.configured == 'true'
+        run: npm run coverage
+
+      - name: Run SonarQube Cloud analysis
+        if: steps.sonar.outputs.configured == 'true' && steps.sonar.outputs.host_url == ''
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dproject.settings=sonar-project.ci.properties
+            -Dsonar.qualitygate.wait=true
+
+      - name: Run self-managed SonarQube analysis
+        if: steps.sonar.outputs.configured == 'true' && steps.sonar.outputs.host_url != ''
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dproject.settings=sonar-project.ci.properties
+            -Dsonar.qualitygate.wait=true
