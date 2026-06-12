@@ -6,6 +6,13 @@ import type {
 } from "./models.js";
 import { parseLauncherOutput } from "./parser.js";
 
+export interface NormalizeLauncherResultOptions {
+  includeRaw?: boolean;
+  diagnosticTailLength?: number;
+}
+
+const defaultDiagnosticTailLength = 2_000;
+
 function outputFormat(args: readonly string[]): LauncherOutputFormat {
   return args.includes("--ston") ? "ston" : "text";
 }
@@ -13,6 +20,37 @@ function outputFormat(args: readonly string[]): LauncherOutputFormat {
 function trimmedMessage(source: string): string | undefined {
   const message = source.trim();
   return message ? message : undefined;
+}
+
+function outputTail(source: string, maxLength: number): string | undefined {
+  const message = trimmedMessage(source);
+  if (!message) {
+    return undefined;
+  }
+
+  if (message.length <= maxLength) {
+    return message;
+  }
+
+  const headLength = Math.min(400, Math.floor(maxLength / 4));
+  const omissionMarker = "\n...\n";
+  const tailLength = maxLength - headLength - omissionMarker.length;
+  return `${message.slice(0, headLength)}${omissionMarker}${message.slice(
+    message.length - tailLength,
+  )}`;
+}
+
+function failedOutputDiagnostic(
+  result: LauncherCliResult,
+  maxLength: number,
+): Pick<LauncherCommandResult, "diagnostic"> | undefined {
+  const stderr = outputTail(result.stderr, maxLength);
+  if (stderr) {
+    return { diagnostic: stderr };
+  }
+
+  const stdout = outputTail(result.stdout, maxLength);
+  return stdout ? { diagnostic: stdout } : undefined;
 }
 
 function optionValue(args: readonly string[], flag: string): string | undefined {
@@ -143,6 +181,7 @@ export function normalizeLauncherResult(
   toolName: string,
   args: readonly string[],
   result: LauncherCliResult,
+  options: NormalizeLauncherResultOptions = {},
 ): LauncherCommandResult {
   const ok = result.exitCode === 0 && !result.timedOut;
   const format = outputFormat(args);
@@ -163,7 +202,18 @@ export function normalizeLauncherResult(
   const commandDiagnostic =
     diagnostic ??
     scopedFromBuildVmStoreDiagnostic(toolName, result) ??
-    scopedImageLaunchVmStoreDiagnostic(toolName, result);
+    scopedImageLaunchVmStoreDiagnostic(toolName, result) ??
+    (!ok
+      ? failedOutputDiagnostic(
+          result,
+          options.diagnosticTailLength ?? defaultDiagnosticTailLength,
+        )
+      : undefined);
+  const raw = {
+    stdout: result.stdout,
+    stderr: result.stderr,
+    format,
+  };
 
   return {
     ok,
@@ -174,11 +224,7 @@ export function normalizeLauncherResult(
       format: parseResult.format,
       ...(parseResult.message ? { message: parseResult.message } : {}),
     },
-    raw: {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      format,
-    },
+    ...(options.includeRaw ? { raw } : {}),
     command: {
       args: [...args],
       durationMs: result.durationMs,

@@ -175,6 +175,7 @@ export interface CallToolOptions {
   config?: PharoLauncherConfig;
   runner?: LauncherCliRunner;
   timeoutMs?: number;
+  includeRaw?: boolean;
   imageCopyVerificationTimeoutMs?: number;
   imageCopyVerificationPollMs?: number;
   sleep?: (milliseconds: number) => Promise<void>;
@@ -240,6 +241,25 @@ function optionalBoolean(
   }
 
   return value;
+}
+
+function commandResultOptions(
+  argumentsValue: unknown,
+  options: CallToolOptions,
+): CallToolOptions {
+  const includeRaw = optionalBoolean(inputObject(argumentsValue), "includeRaw");
+  return includeRaw === undefined ? options : { ...options, includeRaw };
+}
+
+function normalizeToolResult(
+  toolName: string,
+  args: readonly string[],
+  result: LauncherCliResult,
+  options: CallToolOptions,
+): LauncherCommandResult {
+  return normalizeLauncherResult(toolName, args, result, {
+    includeRaw: options.includeRaw,
+  });
 }
 
 function declaredImagesFromInput(input: unknown): PharoLauncherDeclaredImage[] {
@@ -407,10 +427,11 @@ async function inspectImageVerificationAttempt(
     listArgs ?? [],
     options,
   );
-  const normalizedList = normalizeLauncherResult(
+  const normalizedList = normalizeToolResult(
     "pharo_launcher_image_list",
     listArgs ?? [],
     listResult,
+    options,
   );
   const listedImage = normalizedList.ok
     ? namedImage(normalizedList.data, newImageName)
@@ -434,10 +455,11 @@ async function inspectImageVerificationAttempt(
     infoArgs ?? [],
     options,
   );
-  const normalizedInfo = normalizeLauncherResult(
+  const normalizedInfo = normalizeToolResult(
     "pharo_launcher_image_info",
     infoArgs ?? [],
     infoResult,
+    options,
   );
   const inspectedImage = normalizedInfo.ok
     ? namedImage(normalizedInfo.data, newImageName)
@@ -525,10 +547,11 @@ async function imageCopyResult(
 ): Promise<ToolResult> {
   const runner = options.runner ?? runLauncherCli;
   const result = await runLauncherToolCommand(runner, args, options);
-  const normalized = normalizeLauncherResult(
+  const normalized = normalizeToolResult(
     "pharo_launcher_image_copy",
     args,
     result,
+    options,
   );
   const newImageName = args[3];
 
@@ -579,10 +602,11 @@ async function imageCreateResult(
 ): Promise<ToolResult> {
   const runner = options.runner ?? runLauncherCli;
   const result = await runLauncherToolCommand(runner, args, options);
-  const normalized = normalizeLauncherResult(
+  const normalized = normalizeToolResult(
     "pharo_launcher_image_create",
     args,
     result,
+    options,
   );
   const newImageName = args.at(-1);
 
@@ -721,10 +745,11 @@ async function templateUpdateResult(
     config,
   };
   const result = await runLauncherToolCommand(runner, args, commandOptions);
-  const normalized = normalizeLauncherResult(
+  const normalized = normalizeToolResult(
     "pharo_launcher_template_update",
     args,
     result,
+    commandOptions,
   );
 
   if (!normalized.ok) {
@@ -757,10 +782,11 @@ async function templateUpdateResult(
   }
 
   const probeArgs = ["template", "list", "--ston"];
-  const probeResult = normalizeLauncherResult(
+  const probeResult = normalizeToolResult(
     "pharo_launcher_template_list",
     probeArgs,
     await runLauncherToolCommand(runner, probeArgs, commandOptions),
+    commandOptions,
   );
   if (!probeResult.ok) {
     return jsonResult(
@@ -809,7 +835,7 @@ async function cliResult(
       : await runLauncherToolCommand(runner, args, options);
   const isError = result.exitCode !== 0 || result.timedOut;
 
-  return jsonResult(normalizeLauncherResult(toolName, args, result), isError);
+  return jsonResult(normalizeToolResult(toolName, args, result, options), isError);
 }
 
 async function withToolInputErrorResult(
@@ -875,16 +901,17 @@ async function commandCatalogToolResult(
   options: CallToolOptions,
 ): Promise<ToolResult> {
   return withToolInputErrorResult(async () => {
+    const resultOptions = commandResultOptions(argumentsValue, options);
     const commandArgs = buildLauncherCommandArgs(name, argumentsValue);
     if (commandArgs) {
-      return cliResult(name, commandArgs, options);
+      return cliResult(name, commandArgs, resultOptions);
     }
 
     if (name === rawCommandTool.name) {
       return cliResult(
         name,
         rawCommandTool.buildArgs(argumentsValue),
-        options,
+        resultOptions,
       );
     }
 

@@ -18,7 +18,7 @@ const cliResult = {
 };
 
 describe("result normalizer", () => {
-  it("normalizes command metadata and raw output", () => {
+  it("normalizes command metadata without raw output by default", () => {
     const result = normalizeLauncherResult(
       "pharo_launcher_template_update",
       ["template", "update"],
@@ -38,17 +38,31 @@ describe("result normalizer", () => {
         format: "text",
         message: "No parser registered for pharo_launcher_template_update",
       },
-      raw: {
-        stdout: "Done!",
-        stderr: "",
-        format: "text",
-      },
       command: {
         args: ["template", "update"],
         durationMs: 12,
         exitCode: 0,
         timedOut: false,
       },
+    });
+  });
+
+  it("includes raw output when requested", () => {
+    const result = normalizeLauncherResult(
+      "pharo_launcher_template_update",
+      ["template", "update"],
+      {
+        ...cliResult,
+        stdout: "Done!",
+        stderr: "warn",
+      },
+      { includeRaw: true },
+    );
+
+    expect(result.raw).toEqual({
+      stdout: "Done!",
+      stderr: "warn",
+      format: "text",
     });
   });
 
@@ -66,11 +80,8 @@ describe("result normalizer", () => {
 
     expect(result.ok).toBe(false);
     expect(result.data).toBeUndefined();
-    expect(result.raw).toEqual({
-      stdout: "",
-      stderr: "failed",
-      format: "ston",
-    });
+    expect(result.diagnostic).toBe("failed");
+    expect(result.raw).toBeUndefined();
     expect(result.parser).toEqual({
       status: "skipped",
       format: "ston",
@@ -102,10 +113,8 @@ describe("result normalizer", () => {
         status: "skipped",
         format: "ston",
       },
-      raw: {
-        stderr: expect.stringContaining("Official distributions"),
-      },
     });
+    expect(result.raw).toBeUndefined();
   });
 
   it("does not normalize explicit template category failures as bootstrap diagnostics", () => {
@@ -122,7 +131,7 @@ describe("result normalizer", () => {
     );
 
     expect(result.ok).toBe(false);
-    expect(result.diagnostic).toBeUndefined();
+    expect(result.diagnostic).toContain("Image template category 'unknown'");
     expect(result.action).toBeUndefined();
   });
 
@@ -157,10 +166,8 @@ describe("result normalizer", () => {
         status: "skipped",
         format: "text",
       },
-      raw: {
-        stderr: expect.stringContaining("PHARO_LAUNCHER_MCP_VMS_DIR"),
-      },
     });
+    expect(result.raw).toBeUndefined();
   });
 
   it("normalizes profile-scoped image launch refusals as VM store diagnostics", () => {
@@ -185,10 +192,8 @@ describe("result normalizer", () => {
         status: "skipped",
         format: "text",
       },
-      raw: {
-        stderr: expect.stringContaining("PHARO_LAUNCHER_MCP_VMS_DIR"),
-      },
     });
+    expect(result.raw).toBeUndefined();
   });
 
   it("extracts LauncherImage models from STON output", () => {

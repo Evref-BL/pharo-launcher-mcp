@@ -249,11 +249,6 @@ describe("callTool", () => {
         status: "unsupported",
         format: "text",
       },
-      raw: {
-        stdout: "Copied",
-        stderr: "",
-        format: "text",
-      },
       command: {
         args: ["image", "copy", "Base", "Task"],
         durationMs: 4,
@@ -318,10 +313,6 @@ describe("callTool", () => {
       ok: false,
       diagnostic:
         "Image copy command exited successfully, but target image Task was not listable and inspectable: Copied image did not appear in image list.",
-      raw: {
-        stdout: "Copied",
-        stderr: "",
-      },
       copyVerification: {
         ok: false,
         targetImageName: "Task",
@@ -329,9 +320,6 @@ describe("callTool", () => {
         list: {
           ok: true,
           data: [],
-          raw: {
-            stdout: "OrderedCollection[]",
-          },
         },
       },
     });
@@ -469,11 +457,6 @@ describe("callTool", () => {
         status: "unsupported",
         format: "text",
       },
-      raw: {
-        stdout: "Created",
-        stderr: "",
-        format: "text",
-      },
       command: {
         args: [
           "image",
@@ -540,15 +523,13 @@ describe("callTool", () => {
       );
       const body = parseJsonResult(result);
 
-      expect(result.isError).toBe(true);
-      expect(body).toMatchObject({
-        ok: false,
-        raw: {
-          stderr: expect.stringContaining("spawn bash ENOENT"),
-        },
-        command: {
-          args: [
-            "image",
+    expect(result.isError).toBe(true);
+    expect(body).toMatchObject({
+      ok: false,
+      diagnostic: expect.stringContaining("spawn bash ENOENT"),
+      command: {
+        args: [
+          "image",
             "create",
             "--no-launch",
             "--templateName",
@@ -558,16 +539,12 @@ describe("callTool", () => {
           exitCode: null,
         },
       });
-      expect(String((body.raw as { stderr?: unknown }).stderr)).toContain(
-        "command:",
-      );
-      expect(String((body.raw as { stderr?: unknown }).stderr)).toContain(
-        "args:",
-      );
-      expect(String((body.raw as { stderr?: unknown }).stderr)).toContain(
+      expect(String(body.diagnostic)).toContain("command:");
+      expect(String(body.diagnostic)).toContain("args:");
+      expect(String(body.diagnostic)).toContain(
         `PHARO_LAUNCHER_MCP_STATE_ROOT: ${config.profile.stateRoot}`,
       );
-      expect(String((body.raw as { stderr?: unknown }).stderr)).toContain(
+      expect(String(body.diagnostic)).toContain(
         `PHARO_LAUNCHER_MCP_LOGS_DIR: ${config.profile.logsDir}`,
       );
     } finally {
@@ -613,10 +590,6 @@ describe("callTool", () => {
       ok: false,
       diagnostic:
         "Image create command exited successfully, but target image Task was not listable and inspectable: Created image did not appear in image list.",
-      raw: {
-        stdout: "Created",
-        stderr: "",
-      },
       createVerification: {
         ok: false,
         targetImageName: "Task",
@@ -624,9 +597,6 @@ describe("callTool", () => {
         list: {
           ok: true,
           data: [],
-          raw: {
-            stdout: "OrderedCollection[]",
-          },
         },
       },
     });
@@ -659,7 +629,7 @@ describe("callTool", () => {
 
     const result = await callTool(
       "pharo_launcher_image_list",
-      { format: "ston" },
+      { format: "ston", includeRaw: true },
       { runner },
     );
 
@@ -713,9 +683,6 @@ describe("callTool", () => {
           vmId: "130-x64",
         },
       ],
-      raw: {
-        format: "ston",
-      },
       parser: {
         status: "parsed",
         format: "ston",

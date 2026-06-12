@@ -12,14 +12,13 @@ export class ToolInputError extends Error {
   }
 }
 
-const emptyInputSchema = {
-  type: "object",
-  properties: {},
-  additionalProperties: false,
-} as const;
-
 const stringSchema = { type: "string", minLength: 1 } as const;
 const booleanSchema = { type: "boolean" } as const;
+const includeRawSchema = {
+  type: "boolean",
+  description:
+    "Include raw Pharo Launcher stdout and stderr in the tool result.",
+} as const;
 const confirmationSchema = {
   type: "boolean",
   const: true,
@@ -42,11 +41,13 @@ function objectSchema(
 ) {
   return {
     type: "object",
-    properties,
+    properties: { ...properties, includeRaw: includeRawSchema },
     required,
     additionalProperties: false,
   } as const;
 }
+
+const emptyInputSchema = objectSchema({});
 
 const tableProperties = {
   format: formatSchema,
