@@ -208,9 +208,6 @@ describe("PharoLauncher live integration", () => {
         status: "parsed",
         format: "ston",
       },
-      raw: {
-        format: "ston",
-      },
       command: {
         args: ["image", "list", "--ston"],
         exitCode: 0,

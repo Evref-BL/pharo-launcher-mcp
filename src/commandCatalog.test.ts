@@ -57,6 +57,16 @@ describe("launcher command catalog", () => {
     );
   });
 
+  it("exposes the raw output opt-in on command-backed tools", () => {
+    for (const tool of launcherCommandTools) {
+      expect(tool.inputSchema.properties).toMatchObject({
+        includeRaw: {
+          type: "boolean",
+        },
+      });
+    }
+  });
+
   it.each([
     [
       "pharo_launcher_image_bisect",

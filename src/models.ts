@@ -10,7 +10,7 @@ export interface LauncherCommandResult<T = unknown> {
     format: LauncherOutputFormat;
     message?: string;
   };
-  raw: {
+  raw?: {
     stdout: string;
     stderr: string;
     format: LauncherOutputFormat;
