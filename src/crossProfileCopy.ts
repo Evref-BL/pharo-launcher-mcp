@@ -179,9 +179,83 @@ function isPathInside(parent: string, candidate: string): boolean {
 }
 
 function stonStringParts(source: string): string[] {
-  return [...source.matchAll(/'((?:''|[^'])*)'/g)].map((match) =>
-    (match[1] ?? "").replaceAll("''", "'"),
-  );
+  const parts: string[] = [];
+  let part: string | undefined;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (char !== "'") {
+      if (part !== undefined) {
+        part += char;
+      }
+      continue;
+    }
+
+    if (part === undefined) {
+      part = "";
+      continue;
+    }
+
+    if (source[index + 1] === "'") {
+      part += "'";
+      index += 1;
+      continue;
+    }
+
+    parts.push(part);
+    part = undefined;
+  }
+
+  return parts;
+}
+
+function relativePathBodyEnd(metadataContent: string, bracketStart: number): number {
+  let inString = false;
+
+  for (let index = bracketStart + 1; index < metadataContent.length; index += 1) {
+    const char = metadataContent[index];
+    if (char === "'") {
+      if (inString && metadataContent[index + 1] === "'") {
+        index += 1;
+        continue;
+      }
+      inString = !inString;
+      continue;
+    }
+
+    if (!inString && char === "]") {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function relativePathBodies(metadataContent: string): string[] {
+  const bodies: string[] = [];
+  let searchStart = 0;
+
+  while (searchStart < metadataContent.length) {
+    const relativePathStart = metadataContent.indexOf("RelativePath", searchStart);
+    if (relativePathStart < 0) {
+      break;
+    }
+
+    const bracketStart = metadataContent.indexOf("[", relativePathStart);
+    if (bracketStart < 0) {
+      break;
+    }
+
+    const bracketEnd = relativePathBodyEnd(metadataContent, bracketStart);
+    if (bracketEnd < 0) {
+      break;
+    }
+
+    bodies.push(metadataContent.slice(bracketStart + 1, bracketEnd));
+    searchStart = bracketEnd + 1;
+  }
+
+  return bodies;
 }
 
 function metadataReferencesImagePath(
@@ -197,12 +271,9 @@ function metadataReferencesImagePath(
 }
 
 function metadataImagePathReferences(metadataContent: string): string[][] {
-  const relativePaths = metadataContent.matchAll(
-    /RelativePath\s*\[\s*((?:'(?:''|[^'])*'\s*,?\s*)+)\]/g,
-  );
   const references: string[][] = [];
-  for (const relativePath of relativePaths) {
-    const parts = stonStringParts(relativePath[1] ?? "");
+  for (const relativePathBody of relativePathBodies(metadataContent)) {
+    const parts = stonStringParts(relativePathBody);
     if (parts.at(-1)?.endsWith(".image")) {
       references.push(parts);
     }

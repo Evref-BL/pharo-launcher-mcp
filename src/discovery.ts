@@ -17,6 +17,7 @@ import type {
   LauncherImage,
   LauncherTemplate,
 } from "./models.js";
+import { compactTokenText } from "./textTokens.js";
 import { parseLauncherTemplatesFromSton } from "./parser.js";
 import { normalizeLauncherResult } from "./resultNormalizer.js";
 
@@ -637,13 +638,15 @@ function architectureFromTemplate(
   template: LauncherTemplate,
 ): string | undefined {
   const source = `${template.name ?? ""} ${template.url ?? ""}`;
-  if (/\b(?:aarch64|arm64)\b/i.test(source)) {
+  const lower = source.toLowerCase();
+  const compact = compactTokenText(source);
+  if (lower.includes("aarch64") || lower.includes("arm64")) {
     return "arm64";
   }
-  if (/\b(?:x64|64\s*[- ]?\s*bit|64bit)\b/i.test(source)) {
+  if (lower.includes("x64") || compact.includes("64bit")) {
     return "64";
   }
-  if (/\b(?:x86|32\s*[- ]?\s*bit|32bit)\b/i.test(source)) {
+  if (lower.includes("x86") || compact.includes("32bit")) {
     return "32";
   }
 
@@ -1321,11 +1324,60 @@ export async function getPharoLauncherInventory(
   };
 }
 
+function isVersionTokenCharacter(char: string): boolean {
+  return (
+    (char >= "0" && char <= "9") ||
+    (char >= "A" && char <= "Z") ||
+    (char >= "a" && char <= "z") ||
+    char === "." ||
+    char === "-" ||
+    char === "+" ||
+    char === "_"
+  );
+}
+
+function isVersionLikeToken(token: string): boolean {
+  let digitCount = 0;
+  let dotCount = 0;
+
+  for (const char of token) {
+    if (char >= "0" && char <= "9") {
+      digitCount += 1;
+    } else if (char === ".") {
+      dotCount += 1;
+    }
+  }
+
+  return digitCount > 0 && dotCount > 0 && token[0] !== "." && token.at(-1) !== ".";
+}
+
+function firstVersionLikeToken(output: string): string | undefined {
+  let tokenStart: number | undefined;
+
+  for (let index = 0; index <= output.length; index += 1) {
+    const char = output[index];
+    if (char !== undefined && isVersionTokenCharacter(char)) {
+      tokenStart ??= index;
+      continue;
+    }
+
+    if (tokenStart === undefined) {
+      continue;
+    }
+
+    const token = output.slice(tokenStart, index);
+    if (isVersionLikeToken(token)) {
+      return token;
+    }
+    tokenStart = undefined;
+  }
+
+  return undefined;
+}
+
 function parseVersion(result: LauncherCliResult): string | undefined {
   const output = `${result.stdout}\n${result.stderr}`;
-  const firstVersionLikeToken = output.match(/\b\d+(?:\.\d+)+(?:[-+.\w]+)?\b/);
-
-  return firstVersionLikeToken?.[0];
+  return firstVersionLikeToken(output);
 }
 
 export async function getPharoLauncherVersion(

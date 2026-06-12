@@ -1,6 +1,13 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import type { LauncherCliResult } from "./launcherCli.js";
+import {
+  afterLeadingDigits,
+  hasCaseInsensitiveSuffix,
+  leadingDigits,
+  quotedValues,
+  whitespaceTokens,
+} from "./textTokens.js";
 
 type ProcessBackendId = "windows-powershell" | "posix-ps" | "unsupported";
 
@@ -46,11 +53,21 @@ function basenameWithoutImageExtension(imagePath: string): string {
   return path.basename(imagePath).replace(/\.image$/i, "");
 }
 
+function mentionsPharoRuntime(commandLine: string): boolean {
+  const lower = commandLine.toLowerCase();
+  return lower.includes("pharo") || lower.includes("squeak");
+}
+
 function imagePathFromCommandLine(commandLine: string): string | undefined {
-  const quoted = [...commandLine.matchAll(/"([^"]+\.image)"/gi)].map(
-    (match) => match[1],
+  const quoted = quotedValues(commandLine).find((value) =>
+    hasCaseInsensitiveSuffix(value, ".image"),
   );
-  return quoted[0] ?? commandLine.match(/(\S+\.image)\b/i)?.[1];
+  return (
+    quoted ??
+    whitespaceTokens(commandLine).find((value) =>
+      hasCaseInsensitiveSuffix(value, ".image"),
+    )
+  );
 }
 
 function processLine(process: PharoProcessRecord): string {
@@ -177,15 +194,15 @@ export function parsePosixProcessTable(source: string): PharoProcessRecord[] {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line): PharoProcessRecord | undefined => {
-      const match = line.match(/^(\d+)\s+(.+)$/);
-      if (!match) {
+      const pidText = leadingDigits(line);
+      const commandLine = afterLeadingDigits(line);
+      if (!pidText || !commandLine) {
         return undefined;
       }
 
-      const pid = Number(match[1]);
-      const commandLine = match[2] ?? "";
+      const pid = Number(pidText);
       const imagePath = imagePathFromCommandLine(commandLine);
-      if (!pid || !imagePath || !/(?:pharo|squeak)/i.test(commandLine)) {
+      if (!pid || !imagePath || !mentionsPharoRuntime(commandLine)) {
         return undefined;
       }
       const executablePath = executablePathFromCommandLine(commandLine);

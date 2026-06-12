@@ -6,6 +6,15 @@ import type {
   LauncherTemplate,
   LauncherVm,
 } from "./models.js";
+import {
+  hasCaseInsensitiveSuffix,
+  isAsciiDigit,
+  isWhitespace,
+  leadingDigits,
+  quotedValues,
+  stripLeadingNumber,
+  whitespaceTokens,
+} from "./textTokens.js";
 
 export interface ParseResult<T = unknown> {
   status: "parsed" | "unsupported" | "failed";
@@ -70,6 +79,40 @@ function relativePath(block: string): string | undefined {
   return parts.join("/");
 }
 
+function splitFixedColumns(value: string): string[] {
+  const columns: string[] = [];
+  let columnStart = 0;
+  let index = 0;
+
+  while (index < value.length) {
+    if (!isWhitespace(value[index])) {
+      index += 1;
+      continue;
+    }
+
+    const whitespaceStart = index;
+    while (isWhitespace(value[index])) {
+      index += 1;
+    }
+
+    if (index - whitespaceStart >= 2) {
+      columns.push(value.slice(columnStart, whitespaceStart).trim());
+      columnStart = index;
+    }
+  }
+
+  columns.push(value.slice(columnStart).trim());
+  return columns.filter((column) => column.length > 0);
+}
+
+function withoutBoundaryQuotes(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  return value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value;
+}
+
 function basenameWithoutImageExtension(imagePath: string): string {
   const basename = imagePath.split(/[\\/]/).at(-1) ?? imagePath;
   return basename.replace(/\.image$/i, "");
@@ -110,17 +153,24 @@ export function parseLauncherImagesFromText(source: string): LauncherImage[] {
   return source
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
-    .filter((line) => /^\d+\s+/.test(line))
+    .filter((line) => {
+      const digits = leadingDigits(line);
+      return Boolean(digits && isWhitespace(line[digits.length]));
+    })
     .map((line) => {
-      const match = line.match(/^(\d+)\s+(.+?)\s{2,}(\d+)\s+(\S+)/);
-      if (!match) {
-        return { name: line.replace(/^\d+\s+/, "").trim() };
+      const columns = splitFixedColumns(line);
+      const dataColumns =
+        columns[0] !== undefined && leadingDigits(columns[0]) === columns[0]
+          ? columns.slice(1)
+          : columns;
+      if (dataColumns.length < 3) {
+        return { name: stripLeadingNumber(line).trim() };
       }
 
       return {
-        name: match[2].trim(),
-        architecture: match[3],
-        pharoVersion: match[4],
+        name: stripLeadingNumber(dataColumns[0]).trim(),
+        architecture: dataColumns[1],
+        pharoVersion: whitespaceTokens(dataColumns[2])[0] ?? dataColumns[2],
       };
     });
 }
@@ -189,20 +239,24 @@ export function parseLauncherProcessesFromText(source: string): LauncherProcess[
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const pidText = line.match(/^(\d+)/)?.[1];
+      const pidText = leadingDigits(line);
       if (!pidText) {
         return undefined;
       }
 
-      const quotedValues = [...line.matchAll(/"([^"]+)"/g)].map(
-        (match) => match[1],
-      );
+      const values = quotedValues(line);
+      const commandText = stripLeadingNumber(line);
       const imagePath =
-        quotedValues.find((value) => /\.image$/i.test(value)) ??
-        line.match(/(\S+\.image)\b/i)?.[1];
+        values.find((value) => hasCaseInsensitiveSuffix(value, ".image")) ??
+        whitespaceTokens(commandText).find((value) =>
+          hasCaseInsensitiveSuffix(value, ".image"),
+        );
       const executablePath =
-        quotedValues.find((value) => /\.(?:exe|app)$/i.test(value)) ??
-        line.replace(/^\d+\s+/, "").split(/\s+/)[0]?.replace(/^"|"$/g, "");
+        values.find(
+          (value) =>
+            hasCaseInsensitiveSuffix(value, ".exe") ||
+            hasCaseInsensitiveSuffix(value, ".app"),
+        ) ?? withoutBoundaryQuotes(whitespaceTokens(commandText)[0]);
 
       return {
         pid: Number(pidText),
