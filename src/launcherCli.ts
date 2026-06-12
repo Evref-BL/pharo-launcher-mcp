@@ -56,6 +56,22 @@ interface ProfileImageLaunchPlan {
   vmUpdated: boolean;
 }
 
+interface ProfileImageLaunchTarget {
+  profile: PharoLauncherProfileConfig;
+  imageName: string;
+}
+
+interface ProfileImageInspection {
+  image?: LauncherImage;
+  imagePath: string;
+}
+
+interface ProfileVmResolution {
+  vmId: string;
+  vmPath: string;
+  vmUpdated: boolean;
+}
+
 type ImageLaunchDisplayMode = "headless" | "interactive";
 
 const POSIX_BASH_PATH_CANDIDATES = ["/bin/bash", "/usr/bin/bash"] as const;
@@ -744,13 +760,21 @@ async function launcherCliSubcommand(
   return runInvocation(invocation, timeoutMs, Date.now());
 }
 
-async function profileScopedImageLaunchPlan(
+function isLauncherCliResult(
+  value:
+    | LauncherCliResult
+    | ProfileImageLaunchTarget
+    | ProfileImageInspection
+    | ProfileVmResolution,
+): value is LauncherCliResult {
+  return "exitCode" in value;
+}
+
+function profileImageLaunchTarget(
   args: readonly string[],
   config: PharoLauncherConfig,
-  timeoutMs: number,
   startTime: number,
-  displayMode: ImageLaunchDisplayMode,
-): Promise<ProfileImageLaunchPlan | LauncherCliResult> {
+): ProfileImageLaunchTarget | LauncherCliResult {
   const profile = config.profile;
   const imageName = imageNameFromLaunchArgs(args);
   if (!profile || !imageName) {
@@ -760,12 +784,21 @@ async function profileScopedImageLaunchPlan(
     );
   }
 
-  const infoArgs = ["image", "info", "--ston", imageName];
+  return { profile, imageName };
+}
+
+async function inspectProfileImageForLaunch(
+  target: ProfileImageLaunchTarget,
+  config: PharoLauncherConfig,
+  timeoutMs: number,
+  startTime: number,
+): Promise<ProfileImageInspection | LauncherCliResult> {
+  const infoArgs = ["image", "info", "--ston", target.imageName];
   const infoResult = await launcherCliSubcommand(infoArgs, config, timeoutMs);
   if (infoResult.exitCode !== 0 || infoResult.timedOut) {
     return failedResult(
       [
-        `Profile-scoped image launch could not inspect image ${imageName}.`,
+        `Profile-scoped image launch could not inspect image ${target.imageName}.`,
         commandFailureDiagnostic("pharo_launcher_image_info", infoResult),
       ].join("\n"),
       startTime,
@@ -780,12 +813,13 @@ async function profileScopedImageLaunchPlan(
 
   const images = parsedImagesFromInfo(infoResult.stdout);
   const image =
-    images?.find((candidate) => candidate.name === imageName) ?? images?.[0];
-  const imagePath = profileImagePath(profile, imageName, image);
-  if (!isPathInside(profile.imagesDir, imagePath)) {
+    images?.find((candidate) => candidate.name === target.imageName) ??
+    images?.[0];
+  const imagePath = profileImagePath(target.profile, target.imageName, image);
+  if (!isPathInside(target.profile.imagesDir, imagePath)) {
     return failedResult(
       [
-        `Profile-scoped image launch refused image path outside PHARO_LAUNCHER_MCP_IMAGES_DIR (${profile.imagesDir}).`,
+        `Profile-scoped image launch refused image path outside PHARO_LAUNCHER_MCP_IMAGES_DIR (${target.profile.imagesDir}).`,
         `image: ${imagePath}`,
       ].join("\n"),
       startTime,
@@ -794,22 +828,32 @@ async function profileScopedImageLaunchPlan(
   if (!fs.existsSync(imagePath)) {
     return failedResult(
       [
-        `Profile-scoped image launch could not find image file for ${imageName}.`,
+        `Profile-scoped image launch could not find image file for ${target.imageName}.`,
         `expected: ${imagePath}`,
       ].join("\n"),
       startTime,
     );
   }
 
+  return { image, imagePath };
+}
+
+async function resolveProfileVmForLaunch(
+  target: ProfileImageLaunchTarget,
+  image: LauncherImage | undefined,
+  config: PharoLauncherConfig,
+  timeoutMs: number,
+  startTime: number,
+): Promise<ProfileVmResolution | LauncherCliResult> {
   const vmId = imageVmId(image);
   if (!vmId) {
     return failedResult(
-      `Profile-scoped image launch could not determine a VM id for image ${imageName}.`,
+      `Profile-scoped image launch could not determine a VM id for image ${target.imageName}.`,
       startTime,
     );
   }
 
-  let vmPath = resolveProfileVmExecutable(profile, vmId);
+  let vmPath = resolveProfileVmExecutable(target.profile, vmId);
   let vmUpdated = false;
   if (!vmPath) {
     const updateResult = await launcherCliSubcommand(
@@ -821,7 +865,7 @@ async function profileScopedImageLaunchPlan(
     if (!vmUpdated) {
       return failedResult(
         [
-          `Profile-scoped image launch could not install VM ${vmId} inside PHARO_LAUNCHER_MCP_VMS_DIR (${profile.vmsDir}).`,
+          `Profile-scoped image launch could not install VM ${vmId} inside PHARO_LAUNCHER_MCP_VMS_DIR (${target.profile.vmsDir}).`,
           commandFailureDiagnostic("pharo_launcher_vm_update", updateResult),
         ].join("\n"),
         startTime,
@@ -833,40 +877,76 @@ async function profileScopedImageLaunchPlan(
         },
       );
     }
-    vmPath = resolveProfileVmExecutable(profile, vmId);
+    vmPath = resolveProfileVmExecutable(target.profile, vmId);
   }
 
   if (!vmPath) {
     return failedResult(
       [
         `Profile-scoped image launch could not resolve a profile-local VM executable for ${vmId} after VM update.`,
-        `PHARO_LAUNCHER_MCP_VMS_DIR: ${profile.vmsDir}`,
+        `PHARO_LAUNCHER_MCP_VMS_DIR: ${target.profile.vmsDir}`,
       ].join("\n"),
       startTime,
     );
   }
 
+  return { vmId, vmPath, vmUpdated };
+}
+
+async function profileScopedImageLaunchPlan(
+  args: readonly string[],
+  config: PharoLauncherConfig,
+  timeoutMs: number,
+  startTime: number,
+  displayMode: ImageLaunchDisplayMode,
+): Promise<ProfileImageLaunchPlan | LauncherCliResult> {
+  const target = profileImageLaunchTarget(args, config, startTime);
+  if (isLauncherCliResult(target)) {
+    return target;
+  }
+
+  const inspection = await inspectProfileImageForLaunch(
+    target,
+    config,
+    timeoutMs,
+    startTime,
+  );
+  if (isLauncherCliResult(inspection)) {
+    return inspection;
+  }
+
+  const vm = await resolveProfileVmForLaunch(
+    target,
+    inspection.image,
+    config,
+    timeoutMs,
+    startTime,
+  );
+  if (isLauncherCliResult(vm)) {
+    return vm;
+  }
+
   const scriptPath = scriptPathFromLaunchArgs(args);
   const invocationArgs = [
     ...(displayMode === "headless" ? ["--headless"] : []),
-    imagePath,
+    inspection.imagePath,
     ...(scriptPath ? ["eval", scriptPath] : []),
   ];
   return {
-    imageName,
-    imagePath,
+    imageName: target.imageName,
+    imagePath: inspection.imagePath,
     ...(scriptPath ? { scriptPath } : {}),
     displayMode,
-    vmId,
-    vmPath,
+    vmId: vm.vmId,
+    vmPath: vm.vmPath,
     invocation: {
-      command: vmPath,
+      command: vm.vmPath,
       args: invocationArgs,
-      cwd: path.dirname(imagePath),
+      cwd: path.dirname(inspection.imagePath),
       env: launcherEnvironment(config),
       source: "direct",
     },
-    vmUpdated,
+    vmUpdated: vm.vmUpdated,
   };
 }
 
