@@ -1099,14 +1099,22 @@ function findLocalVmProof(
   };
 }
 
-function templateCreateReadiness(options: {
+interface TemplateCreateReadinessOptions {
   config: PharoLauncherConfig;
   request: PharoLauncherTemplateCreateRequest;
   installedTemplates: readonly PharoTemplateInventoryEntry[];
   downloadableTemplates: readonly PharoTemplateInventoryEntry[];
   existingImages: readonly PharoImageInventoryEntry[];
   existingKnown: boolean;
-}): PharoLauncherTemplateCreateReadinessReport {
+}
+
+function selectedTemplate(
+  options: TemplateCreateReadinessOptions,
+): {
+  installedTemplate?: PharoTemplateInventoryEntry;
+  downloadableTemplate?: PharoTemplateInventoryEntry;
+  template?: PharoTemplateInventoryEntry;
+} {
   const installedTemplate = options.installedTemplates.find((template) =>
     templateMatchesCreateRequest(template, options.request),
   );
@@ -1114,58 +1122,94 @@ function templateCreateReadiness(options: {
     templateMatchesCreateRequest(template, options.request),
   );
   const template = installedTemplate ?? downloadableTemplate;
+  return { installedTemplate, downloadableTemplate, template };
+}
+
+function templateSourceReadinessInput(
+  options: TemplateCreateReadinessOptions,
+  installedTemplate: PharoTemplateInventoryEntry | undefined,
+  downloadableTemplate: PharoTemplateInventoryEntry | undefined,
+): PharoLauncherOfflineReadinessInput {
+  if (installedTemplate) {
+    return {
+      name: "templateSource",
+      status: "ready",
+      templateId: installedTemplate.id,
+      ...(installedTemplate.sourcePath
+        ? { path: installedTemplate.sourcePath }
+        : {}),
+      diagnostic:
+        "The selected template is present in the active profile template source catalog.",
+    };
+  }
+
+  return {
+    name: "templateSource",
+    status: "missing",
+    ...(options.config.profile
+      ? { path: options.config.profile.templateSourcesDir }
+      : {}),
+    diagnostic: downloadableTemplate
+      ? "The selected template is known only from downloadable inventory, not from the active profile template source catalog."
+      : "The selected template is not present in the active profile template source catalog.",
+  };
+}
+
+function baseImageReadinessInput(
+  baseImage: PharoImageInventoryEntry | undefined,
+  existingKnown: boolean,
+): PharoLauncherOfflineReadinessInput {
+  if (baseImage) {
+    return {
+      name: "baseImage",
+      status: "ready",
+      imageId: baseImage.id,
+      ...(baseImage.imagePath ? { path: baseImage.imagePath } : {}),
+      diagnostic:
+        "An existing image proves the selected template base artifact is already local.",
+    };
+  }
+
+  return {
+    name: "baseImage",
+    status: existingKnown ? "missing" : "unknown",
+    diagnostic: existingKnown
+      ? "No existing image proves the selected template base artifact is already local."
+      : "Base image artifact readiness is unknown because existing image inventory could not be read.",
+  };
+}
+
+function readinessStatus(
+  inputs: readonly PharoLauncherOfflineReadinessInput[],
+): PharoLauncherTemplateCreateReadinessReport["status"] {
+  return inputs.some((input) => input.status === "missing")
+    ? "missing"
+    : inputs.some((input) => input.status === "unknown")
+      ? "unknown"
+      : "ready";
+}
+
+function templateCreateReadiness(
+  options: TemplateCreateReadinessOptions,
+): PharoLauncherTemplateCreateReadinessReport {
+  const { installedTemplate, downloadableTemplate, template } =
+    selectedTemplate(options);
   const baseImage =
     template &&
     options.existingImages.find((image) => imageMatchesTemplate(image, template));
 
   const inputs: PharoLauncherOfflineReadinessInput[] = [
-    installedTemplate
-      ? {
-          name: "templateSource",
-          status: "ready",
-          templateId: installedTemplate.id,
-          ...(installedTemplate.sourcePath
-            ? { path: installedTemplate.sourcePath }
-            : {}),
-          diagnostic:
-            "The selected template is present in the active profile template source catalog.",
-        }
-      : {
-          name: "templateSource",
-          status: "missing",
-          ...(options.config.profile
-            ? { path: options.config.profile.templateSourcesDir }
-            : {}),
-          diagnostic: downloadableTemplate
-            ? "The selected template is known only from downloadable inventory, not from the active profile template source catalog."
-            : "The selected template is not present in the active profile template source catalog.",
-        },
-    baseImage
-      ? {
-          name: "baseImage",
-          status: "ready",
-          imageId: baseImage.id,
-          ...(baseImage.imagePath ? { path: baseImage.imagePath } : {}),
-          diagnostic:
-            "An existing image proves the selected template base artifact is already local.",
-        }
-      : {
-          name: "baseImage",
-          status: options.existingKnown ? "missing" : "unknown",
-          diagnostic: options.existingKnown
-            ? "No existing image proves the selected template base artifact is already local."
-            : "Base image artifact readiness is unknown because existing image inventory could not be read.",
-        },
+    templateSourceReadinessInput(
+      options,
+      installedTemplate,
+      downloadableTemplate,
+    ),
+    baseImageReadinessInput(baseImage, options.existingKnown),
     findLocalVmProof(options.config, template),
   ];
-  const status = inputs.some((input) => input.status === "missing")
-    ? "missing"
-    : inputs.some((input) => input.status === "unknown")
-      ? "unknown"
-      : "ready";
 
   return {
-    status,
+    status: readinessStatus(inputs),
     request: options.request,
     inputs,
     ...(template ? { template } : {}),

@@ -384,6 +384,77 @@ interface ImageVerification {
   info?: LauncherCommandResult;
 }
 
+interface ImageVerificationAttempt {
+  listedImage?: LauncherImage;
+  inspectedImage?: LauncherImage;
+  list: LauncherCommandResult;
+  info?: LauncherCommandResult;
+  diagnostic?: string;
+}
+
+async function inspectImageVerificationAttempt(
+  runner: LauncherCliRunner,
+  newImageName: string,
+  operationLabel: "Copied" | "Created",
+  options: CallToolOptions,
+): Promise<ImageVerificationAttempt> {
+  const listArgs = buildLauncherCommandArgs("pharo_launcher_image_list", {
+    nameFilter: newImageName,
+    format: "ston",
+  });
+  const listResult = await runLauncherToolCommand(
+    runner,
+    listArgs ?? [],
+    options,
+  );
+  const normalizedList = normalizeLauncherResult(
+    "pharo_launcher_image_list",
+    listArgs ?? [],
+    listResult,
+  );
+  const listedImage = normalizedList.ok
+    ? namedImage(normalizedList.data, newImageName)
+    : undefined;
+
+  if (!normalizedList.ok || !listedImage) {
+    return {
+      list: normalizedList,
+      diagnostic: normalizedList.ok
+        ? `${operationLabel} image did not appear in image list.`
+        : `Image list failed while verifying ${operationLabel.toLowerCase()} image.`,
+    };
+  }
+
+  const infoArgs = buildLauncherCommandArgs("pharo_launcher_image_info", {
+    imageName: newImageName,
+    format: "ston",
+  });
+  const infoResult = await runLauncherToolCommand(
+    runner,
+    infoArgs ?? [],
+    options,
+  );
+  const normalizedInfo = normalizeLauncherResult(
+    "pharo_launcher_image_info",
+    infoArgs ?? [],
+    infoResult,
+  );
+  const inspectedImage = normalizedInfo.ok
+    ? namedImage(normalizedInfo.data, newImageName)
+    : undefined;
+
+  return {
+    listedImage,
+    ...(inspectedImage ? { inspectedImage } : {}),
+    list: normalizedList,
+    info: normalizedInfo,
+    diagnostic:
+      normalizedInfo.ok && !inspectedImage
+        ? `${operationLabel} image appeared in image list but could not be inspected.`
+        : `${operationLabel} image appeared in image list, but image info failed.`,
+  };
+}
+
 async function verifyImage(
   runner: LauncherCliRunner,
   newImageName: string,
@@ -405,66 +476,29 @@ async function verifyImage(
   while (true) {
     attempts += 1;
 
-    const listArgs = buildLauncherCommandArgs("pharo_launcher_image_list", {
-      nameFilter: newImageName,
-      format: "ston",
-    });
-    const listResult = await runLauncherToolCommand(
+    const attempt = await inspectImageVerificationAttempt(
       runner,
-      listArgs ?? [],
+      newImageName,
+      operationLabel,
       options,
     );
-    const normalizedList = normalizeLauncherResult(
-      "pharo_launcher_image_list",
-      listArgs ?? [],
-      listResult,
-    );
-    lastList = normalizedList;
-    const listedImage = normalizedList.ok
-      ? namedImage(normalizedList.data, newImageName)
-      : undefined;
+    lastList = attempt.list;
+    lastInfo = attempt.info;
 
-    if (normalizedList.ok && listedImage) {
-      const infoArgs = buildLauncherCommandArgs("pharo_launcher_image_info", {
-        imageName: newImageName,
-        format: "ston",
-      });
-      const infoResult = await runLauncherToolCommand(
-        runner,
-        infoArgs ?? [],
-        options,
-      );
-      const normalizedInfo = normalizeLauncherResult(
-        "pharo_launcher_image_info",
-        infoArgs ?? [],
-        infoResult,
-      );
-      lastInfo = normalizedInfo;
-      const inspectedImage = normalizedInfo.ok
-        ? namedImage(normalizedInfo.data, newImageName)
-        : undefined;
-
-      if (normalizedInfo.ok && inspectedImage) {
-        return {
-          ok: true,
-          targetImageName: newImageName,
-          attempts,
-          elapsedMs: Date.now() - startedAt,
-          listedImage,
-          inspectedImage,
-          list: normalizedList,
-          info: normalizedInfo,
-        };
-      }
-
-      diagnostic = normalizedInfo.ok
-        ? `${operationLabel} image appeared in image list but could not be inspected.`
-        : `${operationLabel} image appeared in image list, but image info failed.`;
-    } else {
-      diagnostic = normalizedList.ok
-        ? `${operationLabel} image did not appear in image list.`
-        : `Image list failed while verifying ${operationLabel.toLowerCase()} image.`;
+    if (attempt.listedImage && attempt.inspectedImage) {
+      return {
+        ok: true,
+        targetImageName: newImageName,
+        attempts,
+        elapsedMs: Date.now() - startedAt,
+        listedImage: attempt.listedImage,
+        inspectedImage: attempt.inspectedImage,
+        list: attempt.list,
+        ...(attempt.info ? { info: attempt.info } : {}),
+      };
     }
+
+    diagnostic = attempt.diagnostic ?? diagnostic;
 
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
@@ -778,6 +812,91 @@ async function cliResult(
   return jsonResult(normalizeLauncherResult(toolName, args, result), isError);
 }
 
+async function withToolInputErrorResult(
+  operation: () => Promise<ToolResult> | ToolResult,
+): Promise<ToolResult> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof ToolInputError) {
+      return jsonResult({ error: error.message }, true);
+    }
+
+    throw error;
+  }
+}
+
+async function launcherVersionResult(
+  runner: LauncherCliRunner,
+  options: CallToolOptions,
+): Promise<ToolResult> {
+  const result = await getPharoLauncherVersion(runner, options.config);
+  return jsonResult(result, !result.ok);
+}
+
+async function launcherInstallationValidationResult(
+  runner: LauncherCliRunner,
+  options: CallToolOptions,
+): Promise<ToolResult> {
+  const result = await validatePharoLauncherInstallation(
+    runner,
+    options.config,
+  );
+  return jsonResult(result, !result.ok);
+}
+
+async function launcherInventoryResult(
+  runner: LauncherCliRunner,
+  argumentsValue: unknown,
+  options: CallToolOptions,
+): Promise<ToolResult> {
+  return withToolInputErrorResult(async () => {
+    const templateCreateRequest =
+      templateCreateRequestFromInput(argumentsValue);
+    const result = await getPharoLauncherInventory(runner, options.config, {
+      declaredImages: declaredImagesFromInput(argumentsValue),
+      ...(templateCreateRequest ? { templateCreateRequest } : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    });
+    return jsonResult(result, !result.ok);
+  });
+}
+
+function profileImageCopyResult(argumentsValue: unknown): Promise<ToolResult> {
+  return withToolInputErrorResult(() => {
+    const result = copyImageBetweenProfiles(argumentsValue);
+    return jsonResult(result, !result.ok);
+  });
+}
+
+async function commandCatalogToolResult(
+  name: string,
+  argumentsValue: unknown,
+  options: CallToolOptions,
+): Promise<ToolResult> {
+  return withToolInputErrorResult(async () => {
+    const commandArgs = buildLauncherCommandArgs(name, argumentsValue);
+    if (commandArgs) {
+      return cliResult(name, commandArgs, options);
+    }
+
+    if (name === rawCommandTool.name) {
+      return cliResult(
+        name,
+        rawCommandTool.buildArgs(argumentsValue),
+        options,
+      );
+    }
+
+    return jsonResult(
+      {
+        error: `Unknown tool: ${name}`,
+      },
+      true,
+    );
+  });
+}
+
 export async function callTool(
   name: string,
   argumentsValue: unknown,
@@ -795,93 +914,20 @@ export async function callTool(
     case "pharo_launcher_config":
       return jsonResult(getPharoLauncherConfigReport(options.config));
 
-    case "pharo_launcher_version": {
-      const result = await getPharoLauncherVersion(runner, options.config);
-      return jsonResult(result, !result.ok);
-    }
+    case "pharo_launcher_version":
+      return launcherVersionResult(runner, options);
 
-    case "pharo_launcher_validate_installation": {
-      const result = await validatePharoLauncherInstallation(
-        runner,
-        options.config,
-      );
-      return jsonResult(result, !result.ok);
-    }
+    case "pharo_launcher_validate_installation":
+      return launcherInstallationValidationResult(runner, options);
 
-    case "pharo_launcher_inventory": {
-      try {
-        const templateCreateRequest =
-          templateCreateRequestFromInput(argumentsValue);
-        const result = await getPharoLauncherInventory(
-          runner,
-          options.config,
-          {
-            declaredImages: declaredImagesFromInput(argumentsValue),
-            ...(templateCreateRequest ? { templateCreateRequest } : {}),
-            ...(options.timeoutMs !== undefined
-              ? { timeoutMs: options.timeoutMs }
-              : {}),
-          },
-        );
-        return jsonResult(result, !result.ok);
-      } catch (error) {
-        if (error instanceof ToolInputError) {
-          return jsonResult({ error: error.message }, true);
-        }
+    case "pharo_launcher_inventory":
+      return launcherInventoryResult(runner, argumentsValue, options);
 
-        throw error;
-      }
-    }
-
-    case "pharo_launcher_image_copy_between_profiles": {
-      try {
-        const result = copyImageBetweenProfiles(argumentsValue);
-        return jsonResult(result, !result.ok);
-      } catch (error) {
-        if (error instanceof ToolInputError) {
-          return jsonResult({ error: error.message }, true);
-        }
-
-        throw error;
-      }
-    }
+    case "pharo_launcher_image_copy_between_profiles":
+      return profileImageCopyResult(argumentsValue);
 
     default:
-      try {
-        const commandArgs = buildLauncherCommandArgs(name, argumentsValue);
-        if (commandArgs) {
-          return cliResult(name, commandArgs, options);
-        }
-      } catch (error) {
-        if (error instanceof ToolInputError) {
-          return jsonResult({ error: error.message }, true);
-        }
-
-        throw error;
-      }
-
-      if (name === rawCommandTool.name) {
-        try {
-          return cliResult(
-            name,
-            rawCommandTool.buildArgs(argumentsValue),
-            options,
-          );
-        } catch (error) {
-          if (error instanceof ToolInputError) {
-            return jsonResult({ error: error.message }, true);
-          }
-
-          throw error;
-        }
-      }
-
-      return jsonResult(
-        {
-          error: `Unknown tool: ${name}`,
-        },
-        true,
-      );
+      return commandCatalogToolResult(name, argumentsValue, options);
   }
 }
 
