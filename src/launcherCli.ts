@@ -8,6 +8,7 @@ import {
 } from "./config.js";
 import { resolveLauncherScript } from "./launcherScript.js";
 import type { LauncherImage } from "./models.js";
+import { compactTokenText } from "./textTokens.js";
 import { parseLauncherOutput } from "./parser.js";
 import {
   shouldRunScriptThroughBash,
@@ -623,10 +624,12 @@ function pharoVersionFromTemplate(image: LauncherImage): string | undefined {
 
 function vmArchitectureSegment(image: LauncherImage): string {
   const source = `${image.architecture ?? ""} ${image.originTemplate?.name ?? ""} ${image.originTemplate?.url ?? ""}`;
-  if (/\b(?:aarch64|arm64)\b/i.test(source)) {
+  const lower = source.toLowerCase();
+  const compact = compactTokenText(source);
+  if (lower.includes("aarch64") || lower.includes("arm64")) {
     return "aarch64";
   }
-  if (/\b(?:x86|32\s*[- ]?\s*bit|32bit)\b/i.test(source)) {
+  if (lower.includes("x86") || compact.includes("32bit")) {
     return "x86";
   }
 
