@@ -106,6 +106,7 @@ export interface CrossProfileImageCopyResult {
   cleanup: CleanupGuidance;
   metadataRepair?: ImageMetadataRepairResult;
   verification?: CopyVerification;
+  message?: string;
   diagnostic?: string;
   action?: string;
   error?: string;
@@ -488,7 +489,13 @@ function resultBase(
   temporaryDirectory?: string,
 ): Omit<
   CrossProfileImageCopyResult,
-  "ok" | "metadataRepair" | "verification" | "diagnostic" | "action" | "error"
+  | "ok"
+  | "metadataRepair"
+  | "verification"
+  | "message"
+  | "diagnostic"
+  | "action"
+  | "error"
 > {
   const destinationImage = imageMetadata(
     request.destinationProfile,
@@ -508,6 +515,24 @@ function resultBase(
   };
 }
 
+// A caller that reports only the tool name says nothing a reader can act on,
+// and the structure below is only as good as the consumer that walks it. Lead
+// with one line naming both images, both profiles and the way out, so even a
+// consumer that quotes nothing else still says what went wrong.
+function copyFailureMessage(
+  request: CopyRequest,
+  diagnostic: string,
+  action: string,
+  error?: string,
+): string {
+  const source = `'${request.sourceImageName}' in profile '${request.sourceProfile.profileName}'`;
+  const destination = `'${request.destinationImageName}' in profile '${request.destinationProfile.profileName}'`;
+
+  return [`Cannot copy image ${source} to ${destination}: ${diagnostic}`, error, action]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function failureResult(
   request: CopyRequest,
   touchedPaths: TouchedPaths,
@@ -519,6 +544,7 @@ function failureResult(
   return {
     ...resultBase(request, touchedPaths, temporaryDirectory),
     ok: false,
+    message: copyFailureMessage(request, diagnostic, action, error),
     diagnostic,
     action,
     ...(error ? { error } : {}),
@@ -720,8 +746,10 @@ export function copyImageBetweenProfiles(
     return failureResult(
       request,
       touchedPaths,
-      "Destination image already exists.",
-      "Choose a different destinationImageName or delete the existing destination image with the destination profile active.",
+      `Destination image already exists at ${destinationImage.directory}, and an existing image is never replaced.`,
+      "Read destinationImage to see what is already there and adopt it if it fits,"
+        + " copy under a different destinationImageName,"
+        + " or delete that image with the destination profile active and retry.",
     );
   }
 
@@ -800,21 +828,25 @@ export function copyImageBetweenProfiles(
       request.sourceImageName,
       request.destinationImageName,
     );
-    const finalResult = {
+    if (!verification.ok) {
+      return {
+        ...failureResult(
+          request,
+          touchedPaths,
+          `Destination image verification failed: ${verification.diagnostic}`,
+          "Delete the destination image directory if it is caller-owned, then retry from a valid source image.",
+        ),
+        metadataRepair,
+        verification,
+      };
+    }
+
+    return {
       ...resultBase(request, touchedPaths),
-      ok: verification.ok,
+      ok: true,
       metadataRepair,
       verification,
-      ...(!verification.ok
-        ? {
-            diagnostic: `Destination image verification failed: ${verification.diagnostic}`,
-            action:
-              "Delete the destination image directory if it is caller-owned, then retry from a valid source image.",
-          }
-        : {}),
     };
-
-    return finalResult;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     removeTemporaryDirectory(temporaryDirectory, touchedPaths);

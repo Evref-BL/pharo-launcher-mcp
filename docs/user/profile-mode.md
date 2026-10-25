@@ -163,6 +163,13 @@ Example:
 The result reports source and destination image metadata, touched paths,
 metadata repair, verification, and cleanup guidance.
 
+A failure adds `message`, one line naming both images, both profiles, what went
+wrong and the way out, next to the `diagnostic` and `action` it is built from.
+A destination that already exists is named by its directory, so the caller can
+read `destinationImage`, adopt what is there, copy under another name, or
+delete it with the destination profile active. An existing image is never
+replaced.
+
 ## Cleanup Rules
 
 Only clean up caller-owned profile state. Keep command envelopes, log files,

@@ -454,13 +454,22 @@ describe("cross-profile image copy", () => {
 
       expect(result).toMatchObject({
         ok: false,
-        diagnostic: "Destination image already exists.",
-        action:
-          "Choose a different destinationImageName or delete the existing destination image with the destination profile active.",
+        diagnostic: `Destination image already exists at ${path.join(
+          destinationRoot,
+          "images",
+          "Task",
+        )}, and an existing image is never replaced.`,
         touchedPaths: {
           copiedDirectories: [],
         },
       });
+      // One line says it all, for a caller that reports nothing else.
+      expect(result.message).toContain("Cannot copy image 'Base'");
+      expect(result.message).toContain("to 'Task'");
+      expect(result.message).toContain(
+        path.join(destinationRoot, "images", "Task"),
+      );
+      expect(result.message).toContain("different destinationImageName");
     } finally {
       removeProfileRoot(sourceRoot);
       removeProfileRoot(destinationRoot);
