@@ -196,6 +196,20 @@ describe("result normalizer", () => {
     expect(result.raw).toBeUndefined();
   });
 
+  it("names an image after the directory the image file sits in", () => {
+    const nested = parseLauncherImagesFromSton(
+      "PhLImage{#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['images','MCP13','MCP13.image']}}}",
+    );
+    const flat = parseLauncherImagesFromSton(
+      "PhLImage{#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['MCP13.image']}}}",
+    );
+
+    expect(nested[0]?.name).toBe("MCP13");
+    // Nothing but the file to read it from, so read it off the file rather
+    // than calling the image MCP13.image.
+    expect(flat[0]?.name).toBe("MCP13");
+  });
+
   it("extracts LauncherImage models from STON output", () => {
     const images = parseLauncherImagesFromSton(
       "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['MCP13','MCP13.image'],#origin:#launcherImagesLocation}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'130-x64',#blessing:'stable'}}]}]",

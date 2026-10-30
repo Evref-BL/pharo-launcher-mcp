@@ -118,19 +118,23 @@ function basenameWithoutImageExtension(imagePath: string): string {
   return basename.replace(/\.image$/i, "");
 }
 
+// PharoLauncher keeps an image at <Name>/<Name>.image, so the directory the
+// image file sits in is the image's name — the same rule the metadata repair
+// reads. Metadata that stores only the file name has no directory to read, so
+// take the name off the file instead.
+function imageNameFromRelativePath(imagePath: string): string {
+  const parts = imagePath.split(/[\\/]/);
+  const parent = parts.at(-2);
+
+  return parent ?? basenameWithoutImageExtension(imagePath);
+}
+
 export function parseLauncherImagesFromSton(source: string): LauncherImage[] {
   return stonBlocks(source, "PhLImage").map((block) => {
     const imagePath = relativePath(block);
 
     return {
-      ...(imagePath
-        ? {
-            name:
-              imagePath.split(/[\\/]/)[0] ??
-              basenameWithoutImageExtension(imagePath),
-            imagePath,
-          }
-        : {}),
+      ...(imagePath ? { name: imageNameFromRelativePath(imagePath), imagePath } : {}),
       ...(field(block, "architecture")
         ? { architecture: field(block, "architecture") }
         : {}),
