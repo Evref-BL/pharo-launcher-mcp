@@ -757,12 +757,16 @@ function readInstalledTemplatesFromFile(
           template !== undefined,
       );
   } catch (error) {
+    // Say why. The caller cannot tell a permission error from malformed STON
+    // from the file name, and this is the only place that knows.
     diagnostics.push({
       severity: "warning",
       code: "installed_template_source_unreadable",
-      message: `Installed template source could not be read: ${filePath}`,
+      message: `Installed template source could not be read: ${filePath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
       action:
-        "Check file permissions or remove the unreadable template source from the active profile.",
+        "Read the error above, then repair, replace or remove that template source in the active profile.",
       path: filePath,
     });
     return [];
