@@ -464,6 +464,62 @@ describe("PharoLauncher discovery", () => {
     });
   });
 
+  it("does not let an arm64 VM prove readiness for an x86-64 template", async () => {
+    const config = tempProfileConfig();
+    fs.mkdirSync(path.join(config.profile.vmsDir, "130-arm64"));
+    const runner: LauncherCliRunner = async (args) => ({
+      exitCode: 0,
+      stdout:
+        args[0] === "template"
+          ? "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit',#category:'stable',#url:URL['https://example.test/130/latest.zip']}]"
+          : "OrderedCollection[]",
+      stderr: "",
+      durationMs: 2,
+      timedOut: false,
+    });
+
+    const x64 = await getPharoLauncherInventory(runner, config, {
+      templateCreateRequest: { templateName: "Pharo 13.0 - 64bit" },
+    });
+
+    expect(x64.templateCreateReadiness?.template?.architecture).toBe("64");
+    expect(x64.templateCreateReadiness?.inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "vm", status: "missing" }),
+      ]),
+    );
+  });
+
+  it("lets an arm64 VM prove readiness for an arm64 template", async () => {
+    const config = tempProfileConfig();
+    fs.mkdirSync(path.join(config.profile.vmsDir, "130-arm64"));
+    const runner: LauncherCliRunner = async (args) => ({
+      exitCode: 0,
+      stdout:
+        args[0] === "template"
+          ? "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13.0 - arm64',#category:'stable',#url:URL['https://example.test/130/latest.zip']}]"
+          : "OrderedCollection[]",
+      stderr: "",
+      durationMs: 2,
+      timedOut: false,
+    });
+
+    const arm = await getPharoLauncherInventory(runner, config, {
+      templateCreateRequest: { templateName: "Pharo 13.0 - arm64" },
+    });
+
+    expect(arm.templateCreateReadiness?.template?.architecture).toBe("arm64");
+    expect(arm.templateCreateReadiness?.inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "vm",
+          status: "ready",
+          path: path.join(config.profile.vmsDir, "130-arm64"),
+        }),
+      ]),
+    );
+  });
+
   it("reports missing template-source readiness separately from downloadable inventory", async () => {
     const config = tempProfileConfig();
     fs.mkdirSync(path.join(config.profile.vmsDir, "130-x64"));

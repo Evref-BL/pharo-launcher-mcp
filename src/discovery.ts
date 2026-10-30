@@ -1023,13 +1023,30 @@ function vmNameMatchesTemplate(value: string, template: PharoTemplateInventoryEn
     normalized.includes(version) ||
     Boolean(majorVersion && normalized.includes(majorVersion));
   const architecture = template.architecture?.toLowerCase();
-  const architectureMatches =
-    !architecture ||
-    normalized.includes(architecture) ||
-    (architecture === "64" && /\b(?:x64|64|64bit)\b/.test(normalized)) ||
-    (architecture === "arm64" && /\b(?:arm64|aarch64)\b/.test(normalized));
 
-  return versionMatches && architectureMatches;
+  return (
+    versionMatches &&
+    (!architecture || vmNameMatchesArchitecture(normalized, architecture))
+  );
+}
+
+// architectureFromTemplate spells Apple Silicon "arm64" and x86-64 "64", and
+// "arm64" contains "64", so asking whether the VM's name contains the
+// architecture proves an arm64 VM ready for an x86-64 template.
+function vmNameMatchesArchitecture(
+  normalized: string,
+  architecture: string,
+): boolean {
+  const arm = /arm64|aarch64/.test(normalized);
+  if (architecture === "arm64") {
+    return arm;
+  }
+
+  if (architecture === "64") {
+    return !arm && normalized.includes("64");
+  }
+
+  return normalized.includes(architecture);
 }
 
 function findLocalVmProof(
