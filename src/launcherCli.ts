@@ -950,22 +950,25 @@ async function profileScopedImageLaunchPlan(
   };
 }
 
-async function runDetachedProfileImageLaunch(
-  plan: ProfileImageLaunchPlan,
-  config: PharoLauncherConfig,
-  args: readonly string[],
+// Both launch paths detach the same way, so they detach here. A detached
+// child outlives this call and its error event arrives after the result has
+// gone back, so the one moment this can tell a launch from a failure to
+// launch is right after spawn: no pid means nothing is running.
+function spawnDetached(
+  invocation: LauncherCliInvocation,
+  logPaths: { stdoutPath: string; stderrPath: string },
   startTime: number,
-): Promise<LauncherCliResult> {
-  const logPaths = detachedLaunchLogPaths(config, args, startTime);
+  describe: (pid: number) => string[],
+): LauncherCliResult {
   fs.mkdirSync(path.dirname(logPaths.stdoutPath), { recursive: true });
   const stdoutFd = fs.openSync(logPaths.stdoutPath, "a");
   let stderrFd: number | undefined;
 
   try {
     stderrFd = fs.openSync(logPaths.stderrPath, "a");
-    const child = spawn(plan.invocation.command, plan.invocation.args, {
-      cwd: plan.invocation.cwd,
-      env: plan.invocation.env,
+    const child = spawn(invocation.command, invocation.args, {
+      cwd: invocation.cwd,
+      env: invocation.env,
       detached: true,
       stdio: ["ignore", stdoutFd, stderrFd],
       windowsHide: true,
@@ -976,15 +979,20 @@ async function runDetachedProfileImageLaunch(
     });
     child.unref();
 
+    if (child.pid === undefined) {
+      return failedResult(
+        launcherInvocationFailureDiagnostic(
+          invocation,
+          new Error("Detached launch did not start: the spawn returned no pid"),
+        ),
+        startTime,
+      );
+    }
+
     return {
       exitCode: 0,
       stdout: [
-        `Detached profile-scoped Pharo image pid ${child.pid ?? "unknown"}.`,
-        `image: ${plan.imagePath}`,
-        `displayMode: ${plan.displayMode}`,
-        `vm: ${plan.vmPath}`,
-        `vmId: ${plan.vmId}`,
-        `vmUpdated: ${plan.vmUpdated}`,
+        ...describe(child.pid),
         `stdout: ${logPaths.stdoutPath}`,
         `stderr: ${logPaths.stderrPath}`,
       ].join("\n"),
@@ -998,6 +1006,27 @@ async function runDetachedProfileImageLaunch(
       fs.closeSync(stderrFd);
     }
   }
+}
+
+function runDetachedProfileImageLaunch(
+  plan: ProfileImageLaunchPlan,
+  config: PharoLauncherConfig,
+  args: readonly string[],
+  startTime: number,
+): LauncherCliResult {
+  return spawnDetached(
+    plan.invocation,
+    detachedLaunchLogPaths(config, args, startTime),
+    startTime,
+    (pid) => [
+      `Detached profile-scoped Pharo image pid ${pid}.`,
+      `image: ${plan.imagePath}`,
+      `displayMode: ${plan.displayMode}`,
+      `vm: ${plan.vmPath}`,
+      `vmId: ${plan.vmId}`,
+      `vmUpdated: ${plan.vmUpdated}`,
+    ],
+  );
 }
 
 async function runProfileScopedImageLaunch(
@@ -1021,21 +1050,15 @@ async function runProfileScopedImageLaunch(
     return plan;
   }
 
-  if (detached) {
-    const setupFailure = validateInvocationSetup(
-      plan.invocation,
-      startTime,
-    );
-    if (setupFailure) {
-      return setupFailure;
-    }
-    return runDetachedProfileImageLaunch(plan, config, args, startTime);
-  }
-
   const setupFailure = validateInvocationSetup(plan.invocation, startTime);
   if (setupFailure) {
     return setupFailure;
   }
+
+  if (detached) {
+    return runDetachedProfileImageLaunch(plan, config, args, startTime);
+  }
+
   const result = await runInvocation(plan.invocation, timeoutMs, startTime);
   return {
     ...result,
@@ -1105,43 +1128,14 @@ export function runLauncherCli(
   }
 
   if (detachedImageLaunch) {
-    const logPaths = detachedLaunchLogPaths(config, args, startTime);
-    fs.mkdirSync(path.dirname(logPaths.stdoutPath), { recursive: true });
-    const stdoutFd = fs.openSync(logPaths.stdoutPath, "a");
-    let stderrFd: number | undefined;
-
-    try {
-      stderrFd = fs.openSync(logPaths.stderrPath, "a");
-      const child = spawn(invocation.command, invocation.args, {
-        cwd: invocation.cwd,
-        env: invocation.env,
-        detached: true,
-        stdio: ["ignore", stdoutFd, stderrFd],
-        windowsHide: true,
-      });
-      child.on("error", () => {
-        // Detached launches cannot report async spawn failures to the already
-        // returned result, but the listener prevents an unhandled error event.
-      });
-      child.unref();
-
-      return Promise.resolve({
-        exitCode: 0,
-        stdout: [
-          `Detached PharoLauncher CLI pid ${child.pid ?? "unknown"}.`,
-          `stdout: ${logPaths.stdoutPath}`,
-          `stderr: ${logPaths.stderrPath}`,
-        ].join("\n"),
-        stderr: "",
-        durationMs: Date.now() - startTime,
-        timedOut: false,
-      });
-    } finally {
-      fs.closeSync(stdoutFd);
-      if (stderrFd !== undefined) {
-        fs.closeSync(stderrFd);
-      }
-    }
+    return Promise.resolve(
+      spawnDetached(
+        invocation,
+        detachedLaunchLogPaths(config, args, startTime),
+        startTime,
+        (pid) => [`Detached PharoLauncher CLI pid ${pid}.`],
+      ),
+    );
   }
 
   return runInvocation(invocation, timeoutMs, startTime);
