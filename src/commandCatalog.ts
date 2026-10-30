@@ -244,8 +244,9 @@ function imageDelete(input: unknown): string[] {
   return args;
 }
 
-function imageLaunch(input: unknown): string[] {
+function imageStart(input: unknown): string[] {
   const object = inputObject(input);
+  // PharoLauncher's subcommand is still `launch`; only the tool name moved.
   const args = ["image", "launch"];
   addOption(args, "--script", optionalString(object, "script"));
   addOption(args, "--displayMode", optionalDisplayMode(object));
@@ -474,20 +475,6 @@ export const launcherCommandTools: LauncherCommandTool[] = [
     buildArgs: imageInfo,
   },
   {
-    name: "pharo_launcher_image_launch",
-    description: "Launch an image, optionally with a launch script.",
-    inputSchema: objectSchema(
-      {
-        imageName: stringSchema,
-        script: stringSchema,
-        detached: booleanSchema,
-        displayMode: displayModeSchema,
-      },
-      ["imageName"],
-    ),
-    buildArgs: imageLaunch,
-  },
-  {
     name: "pharo_launcher_image_list",
     description: "List local images.",
     inputSchema: objectSchema({
@@ -515,6 +502,20 @@ export const launcherCommandTools: LauncherCommandTool[] = [
     description: "Recreate a local image.",
     inputSchema: objectSchema({ imageName: stringSchema }, ["imageName"]),
     buildArgs: imageRecreate,
+  },
+  {
+    name: "pharo_launcher_image_start",
+    description: "Start an image, optionally with a launch script.",
+    inputSchema: objectSchema(
+      {
+        imageName: stringSchema,
+        script: stringSchema,
+        detached: booleanSchema,
+        displayMode: displayModeSchema,
+      },
+      ["imageName"],
+    ),
+    buildArgs: imageStart,
   },
   {
     name: "pharo_launcher_process_kill",

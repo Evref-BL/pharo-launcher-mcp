@@ -172,7 +172,7 @@ describe("result normalizer", () => {
 
   it("normalizes profile-scoped image launch refusals as VM store diagnostics", () => {
     const result = normalizeLauncherResult(
-      "pharo_launcher_image_launch",
+      "pharo_launcher_image_start",
       ["image", "launch", "--script", "bootstrap.st", "ScopedImage"],
       {
         ...cliResult,

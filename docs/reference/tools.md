@@ -40,7 +40,7 @@ mutating anything:
 | `pharo_launcher_image_create` | `templateName`, `newImageName`, `templateCategory`, `dev`, `noLaunch` |
 | `pharo_launcher_image_copy` | `imageName`, `newImageName` |
 | `pharo_launcher_image_copy_between_profiles` | `sourceProfile`, `destinationProfile`, `sourceImageName`, `destinationImageName` |
-| `pharo_launcher_image_launch` | `imageName`, `script`, `detached`, `displayMode` |
+| `pharo_launcher_image_start` | `imageName`, `script`, `detached`, `displayMode` |
 | `pharo_launcher_image_package` | `imageName`, `location`, `zip`, `vm` |
 | `pharo_launcher_image_bisect` | `pharoVersion` |
 | `pharo_launcher_image_create_from_build` | `buildNumber`, `pharoVersion`, `newImageName` |
@@ -54,7 +54,7 @@ mutating anything:
 image after Launcher returns. A successful Launcher exit is not enough: the MCP
 result is successful only when the target image can be listed and inspected.
 
-`pharo_launcher_image_launch` supports:
+`pharo_launcher_image_start` supports:
 
 - `displayMode: "headless"` or `"interactive"`
 - `detached: true` for detached launches with log paths in the result

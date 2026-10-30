@@ -151,7 +151,7 @@ Launch an image:
 
 ```json
 {
-  "tool": "pharo_launcher_image_launch",
+  "tool": "pharo_launcher_image_start",
   "arguments": {
     "imageName": "sample-130-copy",
     "displayMode": "headless",

@@ -17,10 +17,10 @@ describe("launcher command catalog", () => {
       "pharo_launcher_image_create_from_sha",
       "pharo_launcher_image_delete",
       "pharo_launcher_image_info",
-      "pharo_launcher_image_launch",
       "pharo_launcher_image_list",
       "pharo_launcher_image_package",
       "pharo_launcher_image_recreate",
+      "pharo_launcher_image_start",
       "pharo_launcher_process_kill",
       "pharo_launcher_process_list",
       "pharo_launcher_template_category_list",
@@ -43,7 +43,7 @@ describe("launcher command catalog", () => {
       "pharo_launcher_template_list",
       "pharo_launcher_image_create",
       "pharo_launcher_image_copy",
-      "pharo_launcher_image_launch",
+      "pharo_launcher_image_start",
       "pharo_launcher_process_list",
       "pharo_launcher_process_kill",
       "pharo_launcher_image_info",
@@ -145,12 +145,12 @@ describe("launcher command catalog", () => {
       ["image", "info", "--ston", "Task"],
     ],
     [
-      "pharo_launcher_image_launch",
+      "pharo_launcher_image_start",
       { imageName: "Task", script: "bootstrap.st", detached: true },
       ["image", "launch", "--script", "bootstrap.st", "--detached", "Task"],
     ],
     [
-      "pharo_launcher_image_launch",
+      "pharo_launcher_image_start",
       { imageName: "Task", displayMode: "interactive" },
       ["image", "launch", "--displayMode", "interactive", "Task"],
     ],
@@ -248,12 +248,12 @@ describe("launcher command catalog", () => {
       }),
     ).toThrow("imageName is required");
     expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_launch", {
+      buildLauncherCommandArgs("pharo_launcher_image_start", {
         detached: true,
       }),
     ).toThrow("imageName is required");
     expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_launch", {
+      buildLauncherCommandArgs("pharo_launcher_image_start", {
         imageName: "Task",
         displayMode: "visible",
       }),

@@ -246,7 +246,7 @@ describe("PharoLauncher image lifecycle integration", () => {
 
       const launched = await callLiveTool(
         profile,
-        "pharo_launcher_image_launch",
+        "pharo_launcher_image_start",
         {
           imageName: copiedImageName,
           detached: true,
