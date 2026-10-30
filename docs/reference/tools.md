@@ -111,9 +111,13 @@ On Windows, process tools use PowerShell/CIM. On macOS and Linux, they use
 `ps -axo pid=,args=`. Unsupported platforms return an explicit unsupported
 backend error.
 
-Prefer PID-based cleanup when a prior detached launch returned a PID. Image-name
-cleanup can match more than one process if multiple command lines contain the
-same image name.
+A kill matches the target it was given. An all-digit target is a PID and
+matches that process only. Any other target is an image, and matches a process
+whose image name or image path is exactly that. An image launched more than
+once has more than one process, so an image-name kill can still stop several.
+
+Prefer the PID returned by a prior detached launch when cleaning up a launch
+you own.
 
 ## Raw Command
 

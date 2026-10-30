@@ -227,13 +227,21 @@ async function listPosixPharoProcesses(
   return parsePosixProcessTable(stdout);
 }
 
+// A pid names one process, so match one process. The caller spells its target
+// as a pid or an image name and the Launcher CLI takes one positional either
+// way, so the kind is read back off the target: all digits is a pid, anything
+// else is an image. Matching the command line as well used to make a pid kill
+// reach every process whose command line merely contained those digits.
 function matchesTarget(process: PharoProcessRecord, target: string): boolean {
-  return (
-    String(process.pid) === target ||
-    process.imageName === target ||
-    process.imagePath === target ||
-    process.commandLine.includes(target)
-  );
+  if (isPid(target)) {
+    return String(process.pid) === target;
+  }
+
+  return process.imageName === target || process.imagePath === target;
+}
+
+function isPid(target: string): boolean {
+  return /^\d+$/.test(target);
 }
 
 export function nativeProcessToolCapability(
