@@ -14,7 +14,7 @@ workflow.
 ## Reference
 
 - [Tool reference](reference/tools.md) lists the MCP tools, arguments, result
-  shape, confirmation gates, and special handling.
+  shape, the mutation boundary, and special handling.
 - [Troubleshooting](troubleshooting.md) maps common setup, profile, timeout, and
   live Launcher failures to concrete checks.
 

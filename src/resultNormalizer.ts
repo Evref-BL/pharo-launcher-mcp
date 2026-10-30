@@ -110,7 +110,7 @@ function scopedImageLaunchVmStoreDiagnostic(
   toolName: string,
   result: LauncherCliResult,
 ): Pick<LauncherCommandResult, "diagnostic" | "action"> | undefined {
-  if (toolName !== "pharo_launcher_image_launch") {
+  if (toolName !== "pharo_launcher_image_start") {
     return undefined;
   }
 

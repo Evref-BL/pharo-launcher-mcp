@@ -412,6 +412,38 @@ describe("buildLauncherCliInvocation", () => {
     expect(isDetachedImageLaunch(["image", "list"])).toBe(false);
   });
 
+  it("does not report a detached launch that never started", async () => {
+    const stateRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-detached-failure-"),
+    );
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(stateRoot);
+      const result = await runLauncherCli(
+        ["image", "launch", "--detached", "Task"],
+        {
+          config: launcherConfig({
+            launcherDir: stateRoot,
+            launcherVm: "unused",
+            launcherImage: path.join(stateRoot, "PharoLauncher.image"),
+            // Relative and extensionless, so it is run as a command rather
+            // than through bash or cmd, and reaches spawn as it is.
+            launcherScript: "no-such-launcher-command",
+          }),
+          timeoutMs: 2_000,
+        },
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("Detached launch did not start");
+      expect(result.stderr).toContain("no-such-launcher-command");
+    } finally {
+      process.chdir(originalCwd);
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("redirects detached launcher output to default log files without a profile", async () => {
     const stateRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pharo-launcher-mcp-detached-"),

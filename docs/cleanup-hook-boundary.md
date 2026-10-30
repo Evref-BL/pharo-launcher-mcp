@@ -49,10 +49,9 @@ Raw output is diagnostic evidence, not ownership proof.
 
 The mutation hooks that can participate in cleanup are:
 
-- `pharo_launcher_process_kill` with `confirm: true`
-- `pharo_launcher_image_delete` with `confirm: true`
-- `pharo_launcher_image_recreate` with `confirm: true`, only for explicitly
-  disposable images
+- `pharo_launcher_process_kill`
+- `pharo_launcher_image_delete`
+- `pharo_launcher_image_recreate`, only for explicitly disposable images
 - profile-root cleanup by the caller after logs and diagnostics are retained
 
 The caller must pass either a recorded pid or an owned image name. Ambiguous

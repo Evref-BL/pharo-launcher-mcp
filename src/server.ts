@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -23,7 +24,6 @@ import {
   getPharoLauncherInventory,
   getPharoLauncherVersion,
   type LauncherCliRunner,
-  type PharoLauncherDeclaredImage,
   type PharoLauncherTemplateCreateRequest,
   validatePharoLauncherInstallation,
 } from "./discovery.js";
@@ -41,7 +41,12 @@ import { normalizeLauncherResult } from "./resultNormalizer.js";
 import type { LauncherCliResult } from "./launcherCli.js";
 import type { LauncherCommandResult, LauncherImage } from "./models.js";
 
-const serverVersion = "0.1.1";
+// Read the version, do not keep a copy of it. The copy that used to live here
+// said 0.1.1 while the package was 0.1.4, so every client was told the wrong
+// version at initialize and by pharo_launcher_health.
+const serverVersion = (
+  createRequire(import.meta.url)("../package.json") as { version: string }
+).version;
 const imageCopyVerificationTimeoutMs = 30_000;
 const imageCopyVerificationPollMs = 1_000;
 const defaultTemplateSourcesUrl =
@@ -54,21 +59,6 @@ const emptyInputSchema = {
   additionalProperties: false,
 } as const;
 const stringSchema = { type: "string", minLength: 1 } as const;
-const booleanSchema = { type: "boolean" } as const;
-const declaredImageSchema = {
-  type: "object",
-  properties: {
-    imageId: stringSchema,
-    imageName: stringSchema,
-    projectId: stringSchema,
-    workspaceId: stringSchema,
-    targetId: stringSchema,
-    active: booleanSchema,
-    status: stringSchema,
-  },
-  required: ["imageId"],
-  additionalProperties: false,
-} as const;
 const templateCreateRequestSchema = {
   type: "object",
   properties: {
@@ -81,12 +71,6 @@ const templateCreateRequestSchema = {
 const inventoryInputSchema = {
   type: "object",
   properties: {
-    declaredImages: {
-      type: "array",
-      items: declaredImageSchema,
-      description:
-        "Project/workspace-declared image handles supplied by a scoped caller.",
-    },
     templateCreateRequest: {
       ...templateCreateRequestSchema,
       description:
@@ -153,7 +137,7 @@ const tools = [
   {
     name: "pharo_launcher_inventory",
     description:
-      "Return read-only scoped Pharo Launcher templates, versions, active profile roots, existing images, and caller-declared image handles for safe lifecycle planning.",
+      "Return read-only scoped Pharo Launcher templates, versions, active profile roots, and existing images.",
     inputSchema: inventoryInputSchema,
   },
   {
@@ -259,48 +243,6 @@ function normalizeToolResult(
 ): LauncherCommandResult {
   return normalizeLauncherResult(toolName, args, result, {
     includeRaw: options.includeRaw,
-  });
-}
-
-function declaredImagesFromInput(input: unknown): PharoLauncherDeclaredImage[] {
-  const object = inputObject(input);
-  const declaredImages = object.declaredImages;
-  if (declaredImages === undefined) {
-    return [];
-  }
-
-  if (!Array.isArray(declaredImages)) {
-    throw new ToolInputError("declaredImages must be an array");
-  }
-
-  return declaredImages.map((candidate, index) => {
-    const image = inputObject(candidate);
-    const imageId = optionalString(image, "imageId");
-    if (!imageId) {
-      throw new ToolInputError(`declaredImages[${index}].imageId is required`);
-    }
-
-    return {
-      imageId,
-      ...(optionalString(image, "imageName")
-        ? { imageName: optionalString(image, "imageName") }
-        : {}),
-      ...(optionalString(image, "projectId")
-        ? { projectId: optionalString(image, "projectId") }
-        : {}),
-      ...(optionalString(image, "workspaceId")
-        ? { workspaceId: optionalString(image, "workspaceId") }
-        : {}),
-      ...(optionalString(image, "targetId")
-        ? { targetId: optionalString(image, "targetId") }
-        : {}),
-      ...(optionalBoolean(image, "active") !== undefined
-        ? { active: optionalBoolean(image, "active") }
-        : {}),
-      ...(optionalString(image, "status")
-        ? { status: optionalString(image, "status") }
-        : {}),
-    };
   });
 }
 
@@ -470,10 +412,16 @@ async function inspectImageVerificationAttempt(
     ...(inspectedImage ? { inspectedImage } : {}),
     list: normalizedList,
     info: normalizedInfo,
-    diagnostic:
-      normalizedInfo.ok && !inspectedImage
-        ? `${operationLabel} image appeared in image list but could not be inspected.`
-        : `${operationLabel} image appeared in image list, but image info failed.`,
+    // Only a failed attempt has something to report. The success path used to
+    // carry "image info failed" as well, unread by its one caller and wrong
+    // for anyone who read it next.
+    ...(inspectedImage
+      ? {}
+      : {
+          diagnostic: normalizedInfo.ok
+            ? `${operationLabel} image appeared in image list but could not be inspected.`
+            : `${operationLabel} image appeared in image list, but image info failed.`,
+        }),
   };
 }
 
@@ -880,7 +828,6 @@ async function launcherInventoryResult(
     const templateCreateRequest =
       templateCreateRequestFromInput(argumentsValue);
     const result = await getPharoLauncherInventory(runner, options.config, {
-      declaredImages: declaredImagesFromInput(argumentsValue),
       ...(templateCreateRequest ? { templateCreateRequest } : {}),
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     });
