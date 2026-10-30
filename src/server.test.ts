@@ -139,7 +139,7 @@ describe("callTool", () => {
     expect(body.ok).toBe(false);
   });
 
-  it("exposes inventory with caller-declared image handles", async () => {
+  it("exposes inventory and template create readiness", async () => {
     const config = tempLauncherConfig();
     const calls: readonly string[][] = [];
     const runner: LauncherCliRunner = async (args) => {
@@ -160,13 +160,6 @@ describe("callTool", () => {
     const result = await callTool(
       "pharo_launcher_inventory",
       {
-        declaredImages: [
-          {
-            imageId: "dev",
-            imageName: "Workspace-dev",
-            workspaceId: "workspace",
-          },
-        ],
         templateCreateRequest: {
           templateName: "Pharo 13",
           templateCategory: "stable",
@@ -193,13 +186,6 @@ describe("callTool", () => {
       },
       images: {
         existing: [],
-        declared: [
-          {
-            imageId: "dev",
-            imageName: "Workspace-dev",
-            workspaceId: "workspace",
-          },
-        ],
       },
       templateCreateReadiness: {
         status: "missing",

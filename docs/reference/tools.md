@@ -12,20 +12,22 @@ only inspect local paths.
 | `pharo_launcher_config` | No | Reports resolved installation, profile, wrapper, and configuration paths. |
 | `pharo_launcher_version` | Yes | Runs `--version`. |
 | `pharo_launcher_validate_installation` | Yes | Checks resolved paths and runs `--version`. |
-| `pharo_launcher_inventory` | Yes | Reports profile roots, templates, image identities, declared image handles, probes, and diagnostics. |
+| `pharo_launcher_inventory` | Yes | Reports profile roots, templates, image identities, probes, and diagnostics. |
 
-`pharo_launcher_inventory` accepts optional `declaredImages` supplied by a
-scoped caller:
+`pharo_launcher_inventory` reports what the host has. It holds no caller state
+and takes no declaration of what should exist; a caller that tracks its own
+images matches them against `images.existing` itself.
+
+`pharo_launcher_inventory` accepts an optional `templateCreateRequest` and
+answers whether that image could be created offline, without downloading or
+mutating anything:
 
 ```json
 {
-  "declaredImages": [
-    {
-      "imageId": "image:sample-130",
-      "imageName": "sample-130",
-      "status": "active"
-    }
-  ]
+  "templateCreateRequest": {
+    "templateName": "Pharo 13.0 - 64bit",
+    "templateCategory": "Official distributions"
+  }
 }
 ```
 

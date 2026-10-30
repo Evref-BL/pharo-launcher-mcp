@@ -260,7 +260,7 @@ describe("PharoLauncher discovery", () => {
     expect(report.harmlessCliCall.result?.stderr).toBe("boom");
   });
 
-  it("reports scoped template, version, image, declaration, and profile inventory", async () => {
+  it("reports scoped template, version, image, and profile inventory", async () => {
     const config = tempProfileConfig();
     fs.writeFileSync(
       path.join(config.profile.templateSourcesDir, "local.ston"),
@@ -283,19 +283,7 @@ describe("PharoLauncher discovery", () => {
       };
     };
 
-    const report = await getPharoLauncherInventory(runner, config, {
-      declaredImages: [
-        {
-          imageId: "dev",
-          imageName: "Task",
-          projectId: "project",
-          workspaceId: "workspace",
-          targetId: "target",
-          active: true,
-          status: "declared",
-        },
-      ],
-    });
+    const report = await getPharoLauncherInventory(runner, config);
 
     expect(report.ok).toBe(true);
     expect(report.profiles.active).toMatchObject({
@@ -370,13 +358,6 @@ describe("PharoLauncher discovery", () => {
           vmId: "130-x64",
         }),
         copyRequest: { imageName: "Task" },
-      }),
-    ]);
-    expect(report.images.declared).toEqual([
-      expect.objectContaining({
-        imageId: "dev",
-        imageName: "Task",
-        workspaceId: "workspace",
       }),
     ]);
     expect(report.versions).toEqual([
@@ -603,7 +584,6 @@ describe("PharoLauncher discovery", () => {
     expect(report.templates.downloadableKnown).toBe(true);
     expect(report.images.existing).toEqual([]);
     expect(report.images.existingKnown).toBe(true);
-    expect(report.images.declared).toEqual([]);
     expect(report.versions).toEqual([]);
     expect(report.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({

@@ -90,16 +90,6 @@ export type LauncherCliRunner = (
   options?: { config?: PharoLauncherConfig; timeoutMs?: number },
 ) => Promise<LauncherCliResult>;
 
-export interface PharoLauncherDeclaredImage {
-  imageId: string;
-  imageName?: string;
-  projectId?: string;
-  workspaceId?: string;
-  targetId?: string;
-  active?: boolean;
-  status?: string;
-}
-
 export interface PharoLauncherInventoryDiagnostic {
   severity: "error" | "warning";
   code: string;
@@ -239,7 +229,6 @@ export interface PharoLauncherInventoryReport {
   images: {
     existing: PharoImageInventoryEntry[];
     existingKnown: boolean;
-    declared: PharoLauncherDeclaredImage[];
   };
   probes: {
     templateList?: PharoLauncherInventoryProbe;
@@ -250,7 +239,6 @@ export interface PharoLauncherInventoryReport {
 }
 
 export interface PharoLauncherInventoryOptions {
-  declaredImages?: readonly PharoLauncherDeclaredImage[];
   templateCreateRequest?: PharoLauncherTemplateCreateRequest;
   timeoutMs?: number;
 }
@@ -1360,7 +1348,6 @@ export async function getPharoLauncherInventory(
     images: {
       existing: existingImages,
       existingKnown,
-      declared: [...(options.declaredImages ?? [])],
     },
     probes,
     ...(readiness ? { templateCreateReadiness: readiness } : {}),
