@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -40,7 +41,12 @@ import { normalizeLauncherResult } from "./resultNormalizer.js";
 import type { LauncherCliResult } from "./launcherCli.js";
 import type { LauncherCommandResult, LauncherImage } from "./models.js";
 
-const serverVersion = "0.1.1";
+// Read the version, do not keep a copy of it. The copy that used to live here
+// said 0.1.1 while the package was 0.1.4, so every client was told the wrong
+// version at initialize and by pharo_launcher_health.
+const serverVersion = (
+  createRequire(import.meta.url)("../package.json") as { version: string }
+).version;
 const imageCopyVerificationTimeoutMs = 30_000;
 const imageCopyVerificationPollMs = 1_000;
 const defaultTemplateSourcesUrl =
