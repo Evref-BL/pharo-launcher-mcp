@@ -391,10 +391,7 @@ export function buildLauncherCliInvocation(
   const env = launcherEnvironment(config);
   const launcherScript =
     config.launcherScript ??
-    (options.resolveScript ?? ((value: PharoLauncherConfig) =>
-      resolveLauncherScript({
-        launcherDir: value.launcherDir,
-      })))(config);
+    (options.resolveScript ?? (() => resolveLauncherScript({})))(config);
 
   if (launcherScript) {
     const commandAndArgs = scriptCommandAndArgs(

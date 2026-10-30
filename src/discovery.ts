@@ -537,7 +537,6 @@ export function getPharoLauncherConfigReport(
     installationLauncherImage: pathStatus(config.installationLauncherImage),
     launcherImage: pathStatus(config.launcherImage),
     launcherScript: resolveLauncherScriptDetails({
-      launcherDir: config.launcherDir,
       env: {
         ...process.env,
         ...(config.launcherScript

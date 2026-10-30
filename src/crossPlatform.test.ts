@@ -53,7 +53,6 @@ describe("cross-platform pharo-launcher-mcp contract", () => {
       const scripts = candidateLauncherScriptPaths({
         env: {},
         platform: platformCase.platform,
-        launcherDir: config.launcherDir,
       });
       const processCapability = nativeProcessToolCapability(
         platformCase.platform,
