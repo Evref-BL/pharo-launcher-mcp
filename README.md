@@ -5,9 +5,8 @@ process.
 
 It exposes Pharo Launcher image, template, VM, and process operations as MCP
 tools. An MCP client can ask it what Launcher installation it resolved, list
-templates, create or copy images, launch images, package images, inspect running
-Pharo processes, and delete caller-owned images or VMs when explicitly
-confirmed.
+templates, create or copy images, start images, package images, inspect running
+Pharo processes, and delete caller-owned images or VMs.
 
 The server works outside the target images. It does not install code into those
 images, keep project state, or decide which images are safe to mutate. It is the
@@ -176,18 +175,14 @@ Package an image:
 
 ## Safety Model
 
-Mutating tools are explicit. The destructive ones require `confirm: true`:
+Mutating tools are explicit, and name what they act on. There is no
+confirmation argument: calling a tool is the decision to call it, and a second
+spelling of the same intent protects nothing.
 
-```text
-pharo_launcher_image_delete
-pharo_launcher_image_recreate
-pharo_launcher_vm_delete
-pharo_launcher_process_kill
-pharo_launcher_raw_command
-```
-
-`pharo_launcher_process_kill` requires exactly one target: `pid` or
-`imageName`. Prefer a recorded PID when cleaning up a known launch.
+What does protect something is the target. `pharo_launcher_process_kill`
+requires exactly one of `pid` or `imageName`, and a PID stops that process
+alone. Prefer the PID a detached launch returned when cleaning up a launch you
+own.
 
 `pharo_launcher_image_create` and `pharo_launcher_image_copy` verify the target
 image after Launcher reports success. If the target image cannot be listed and

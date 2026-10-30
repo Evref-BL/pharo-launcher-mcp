@@ -698,13 +698,15 @@ describe("callTool", () => {
     const result = await callTool(
       "pharo_launcher_image_delete",
       {
-        imageName: "Task",
+        imageName: 42,
       },
       { runner },
     );
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toContain("requires confirm: true");
+    expect(result.content[0]?.text).toContain(
+      "imageName must be a non-empty string",
+    );
   });
 
   it("bootstraps scoped template sources after template update", async () => {
@@ -823,7 +825,6 @@ describe("callTool", () => {
       "pharo_launcher_raw_command",
       {
         args: ["image", "list"],
-        confirm: true,
       },
       { runner },
     );

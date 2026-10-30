@@ -45,8 +45,8 @@ scoped caller:
 | `pharo_launcher_image_create_from_pull_request` | `pullRequest`, `newImageName`, `templateName`, `templateCategory` |
 | `pharo_launcher_image_create_from_repo` | `repository`, `newImageName`, `templateName`, `templateCategory`, `subfolder`, `baseline`, `group` |
 | `pharo_launcher_image_create_from_sha` | `sha`, `pharoVersion`, `newImageName` |
-| `pharo_launcher_image_delete` | `imageName`, `force`, `confirm: true` |
-| `pharo_launcher_image_recreate` | `imageName`, `confirm: true` |
+| `pharo_launcher_image_delete` | `imageName`, `force` |
+| `pharo_launcher_image_recreate` | `imageName` |
 
 `pharo_launcher_image_create` and `pharo_launcher_image_copy` verify the target
 image after Launcher returns. A successful Launcher exit is not enough: the MCP
@@ -95,7 +95,7 @@ profile source list is usable and probes `template list`.
 | `pharo_launcher_vm_list` | `vmId`, table options |
 | `pharo_launcher_vm_info` | `vmId` |
 | `pharo_launcher_vm_update` | `vmId` |
-| `pharo_launcher_vm_delete` | `vmId`, `confirm: true` |
+| `pharo_launcher_vm_delete` | `vmId` |
 
 VM update can download or install VM files. Use profile mode when automation
 needs VM state isolated from a user's normal Launcher installation.
@@ -105,7 +105,7 @@ needs VM state isolated from a user's normal Launcher installation.
 | Tool | Arguments |
 | --- | --- |
 | `pharo_launcher_process_list` | none |
-| `pharo_launcher_process_kill` | exactly one of `pid` or `imageName`, plus `confirm: true` |
+| `pharo_launcher_process_kill` | exactly one of `pid` or `imageName` |
 
 On Windows, process tools use PowerShell/CIM. On macOS and Linux, they use
 `ps -axo pid=,args=`. Unsupported platforms return an explicit unsupported
@@ -126,12 +126,9 @@ covered by a dedicated MCP tool:
 
 ```json
 {
-  "args": ["image", "list", "--ston"],
-  "confirm": true
+  "args": ["image", "list", "--ston"]
 }
 ```
-
-It always requires `confirm: true`.
 
 ## Result Envelope
 
@@ -166,18 +163,15 @@ Launcher tools return JSON shaped like this:
 Use `ok` and normalized `data` for program flow. Treat `raw.stdout` and
 `raw.stderr` as diagnostics.
 
-## Confirmation Gates
+## Mutation Boundary
 
-These tools require `confirm: true`:
+No tool takes a confirmation argument. A confirmation could only say that the
+caller meant to call the tool, which calling it already says; it never proved
+the image, VM, profile, or process was caller-owned, and that is the thing
+worth knowing.
 
-```text
-pharo_launcher_image_delete
-pharo_launcher_image_recreate
-pharo_launcher_vm_delete
-pharo_launcher_process_kill
-pharo_launcher_raw_command
-```
-
-The confirmation flag only confirms that the caller meant to cross that tool's
-mutation boundary. It does not prove the image, VM, profile, or process is
-caller-owned.
+Deciding what is caller-owned is the caller's job. What this server offers
+towards it: `pharo_launcher_inventory` and `pharo_launcher_image_list` for what
+exists, `pharo_launcher_process_list` for what runs, profile scoping for
+keeping a caller's images and VMs out of the user's own Launcher state, and
+targets that mean one thing — a PID stops one process.

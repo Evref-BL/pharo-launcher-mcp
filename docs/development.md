@@ -131,7 +131,7 @@ the Pharo Launcher control image. It includes live checks for:
 - image delete
 - process list
 - process kill
-- raw command with explicit confirmation
+- raw command
 
 External-source image creation variants such as build, pull request,
 repository, SHA, and VM mutation commands should use explicit fixtures because

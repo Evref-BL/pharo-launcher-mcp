@@ -265,47 +265,48 @@ describe("launcher command catalog", () => {
     ).toThrow("imageName is required");
   });
 
-  it("requires confirmation for destructive actions", () => {
-    expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_delete", {
-        imageName: "Task",
-      }),
-    ).toThrow("requires confirm: true");
+  it("builds destructive actions from their target alone", () => {
     expect(
       buildLauncherCommandArgs("pharo_launcher_image_delete", {
         imageName: "Task",
         force: true,
-        confirm: true,
       }),
     ).toEqual(["image", "delete", "--force", "Task"]);
 
     expect(
       buildLauncherCommandArgs("pharo_launcher_image_recreate", {
         imageName: "Task",
-        confirm: true,
       }),
     ).toEqual(["image", "recreate", "Task"]);
 
     expect(
       buildLauncherCommandArgs("pharo_launcher_process_kill", {
         imageName: "Task",
-        confirm: true,
       }),
     ).toEqual(["process", "kill", "Task"]);
 
     expect(
-      buildLauncherCommandArgs("pharo_launcher_process_kill", {
-        pid: 1234,
-        confirm: true,
-      }),
+      buildLauncherCommandArgs("pharo_launcher_process_kill", { pid: 1234 }),
     ).toEqual(["process", "kill", "1234"]);
 
     expect(
-      buildLauncherCommandArgs("pharo_launcher_vm_delete", {
-        vmId: "130-x64",
+      buildLauncherCommandArgs("pharo_launcher_vm_delete", { vmId: "130-x64" }),
+    ).toEqual(["vm", "delete", "130-x64"]);
+  });
+
+  // Callers built against the confirmation gate keep working: the server
+  // validates no schema, so a key nothing reads is a key nothing trips over.
+  it("ignores a confirm argument left over from an older caller", () => {
+    expect(
+      buildLauncherCommandArgs("pharo_launcher_image_delete", {
+        imageName: "Task",
         confirm: true,
       }),
-    ).toEqual(["vm", "delete", "130-x64"]);
+    ).toEqual(["image", "delete", "Task"]);
+    expect(rawCommandArgs({ args: ["image", "list"], confirm: true })).toEqual([
+      "image",
+      "list",
+    ]);
   });
 
   it.each([
@@ -317,26 +318,18 @@ describe("launcher command catalog", () => {
     expect(() => buildLauncherCommandArgs(toolName, {})).toThrow();
   });
 
-  it("rejects confirmed destructive calls without an explicit target", () => {
+  it("rejects destructive calls without an explicit target", () => {
     expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_delete", {
-        confirm: true,
-      }),
+      buildLauncherCommandArgs("pharo_launcher_image_delete", {}),
     ).toThrow("imageName is required");
     expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_recreate", {
-        confirm: true,
-      }),
+      buildLauncherCommandArgs("pharo_launcher_image_recreate", {}),
     ).toThrow("imageName is required");
     expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_process_kill", {
-        confirm: true,
-      }),
+      buildLauncherCommandArgs("pharo_launcher_process_kill", {}),
     ).toThrow("requires pid or imageName");
     expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_vm_delete", {
-        confirm: true,
-      }),
+      buildLauncherCommandArgs("pharo_launcher_vm_delete", {}),
     ).toThrow("vmId is required");
   });
 
@@ -345,19 +338,17 @@ describe("launcher command catalog", () => {
       buildLauncherCommandArgs("pharo_launcher_process_kill", {
         imageName: "Task",
         pid: 1234,
-        confirm: true,
       }),
     ).toThrow("requires exactly one of pid or imageName");
   });
 
-  it("keeps raw command access behind an explicit confirmation", () => {
-    expect(() => rawCommandArgs({ args: ["image", "list"] })).toThrow(
-      "requires confirm: true",
-    );
-
-    expect(rawCommandArgs({ args: ["image", "list"], confirm: true })).toEqual([
+  it("passes raw command args straight through", () => {
+    expect(rawCommandArgs({ args: ["image", "list"] })).toEqual([
       "image",
       "list",
     ]);
+    expect(() => rawCommandArgs({ args: [] })).toThrow(
+      "requires a non-empty args array",
+    );
   });
 });
