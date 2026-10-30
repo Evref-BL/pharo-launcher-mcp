@@ -412,10 +412,16 @@ async function inspectImageVerificationAttempt(
     ...(inspectedImage ? { inspectedImage } : {}),
     list: normalizedList,
     info: normalizedInfo,
-    diagnostic:
-      normalizedInfo.ok && !inspectedImage
-        ? `${operationLabel} image appeared in image list but could not be inspected.`
-        : `${operationLabel} image appeared in image list, but image info failed.`,
+    // Only a failed attempt has something to report. The success path used to
+    // carry "image info failed" as well, unread by its one caller and wrong
+    // for anyone who read it next.
+    ...(inspectedImage
+      ? {}
+      : {
+          diagnostic: normalizedInfo.ok
+            ? `${operationLabel} image appeared in image list but could not be inspected.`
+            : `${operationLabel} image appeared in image list, but image info failed.`,
+        }),
   };
 }
 
