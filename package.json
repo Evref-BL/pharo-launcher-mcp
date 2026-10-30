@@ -18,8 +18,14 @@
     "type": "git",
     "url": "git+https://github.com/Evref-BL/pharo-launcher-mcp.git"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
+  "exports": {
+    ".": "./dist/server.js",
+    "./config": "./dist/config.js",
+    "./platform": "./dist/platform.js",
+    "./package.json": "./package.json"
+  },
   "files": [
     "bin",
     "docs",

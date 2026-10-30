@@ -36,6 +36,18 @@ npx @evref-bl/pharo-launcher-mcp
 The package also provides the `pharo-launcher-mcp` executable when installed in
 a project or globally.
 
+A host that embeds the server rather than spawning it imports what the package
+exports:
+
+```js
+import { callTool, createServer } from "@evref-bl/pharo-launcher-mcp";
+import { loadPharoLauncherConfig } from "@evref-bl/pharo-launcher-mcp/config";
+import { defaultLauncherDir } from "@evref-bl/pharo-launcher-mcp/platform";
+```
+
+Those three are the published surface. The executable is reachable as a
+command, not as an import: loading it starts a server on stdio.
+
 ## Terms
 
 - A **Pharo Launcher installation** is the app or data directory, VM executable,
