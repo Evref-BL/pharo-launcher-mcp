@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   callLiveTool,
+  expectOkTool,
   type IntegrationProfile,
   prepareIntegrationProfile,
   removeIntegrationProfile,

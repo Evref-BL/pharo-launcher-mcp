@@ -37,6 +37,12 @@ npm run test:integration
 `npm run check` runs type checking, build, and unit tests. `npm test` runs unit
 coverage only. It does not invoke a local Pharo Launcher.
 
+Type checking reads `tsconfig.check.json`, which covers the unit and
+integration tests as well as the production code; the build reads
+`tsconfig.json`, which leaves the tests out of `dist`. The integration tests
+need a live Pharo Launcher to run, so type checking is the only thing that
+reads them on CI.
+
 ## Platform contract
 
 The production code handles Windows, macOS, and Linux explicitly:
