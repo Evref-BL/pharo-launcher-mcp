@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 30
     environment: npm-publish
     permissions:
-      contents: read
+      contents: write
       id-token: write
 
     steps:
@@ -72,6 +72,26 @@ jobs:
       - name: Publish to npm
         if: steps.version.outputs.published != 'true'
         run: npm publish --access public --tag latest
+
+      # Every other repository in this stack leaves a tagged GitHub release
+      # behind for each published version; this one published quietly. The tag
+      # is cut here rather than by hand, so it always names the commit that was
+      # actually published.
+      - name: Create the GitHub release
+        if: steps.version.outputs.published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.package.outputs.version }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::$TAG already exists, leaving it alone"
+            exit 0
+          fi
+
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes
 
       # PLexus pins this package exactly, so a release reaches nobody until
       # that pin moves. Tell it, the way MCP and PLexus tell their own
