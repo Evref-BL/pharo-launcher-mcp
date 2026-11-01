@@ -36,8 +36,34 @@ npx @evref-bl/pharo-launcher-mcp
 The package also provides the `pharo-launcher-mcp` executable when installed in
 a project or globally.
 
-A host that embeds the server rather than spawning it imports what the package
-exports:
+## Use it as a library
+
+A Node caller does not need the protocol. The tools are functions:
+
+```js
+import { openPharoLauncher } from "@evref-bl/pharo-launcher-mcp/launcher";
+
+const launcher = openPharoLauncher();
+const running = await launcher.listProcesses();
+const images = await launcher.listImages({ nameFilter: "Task" });
+```
+
+Each call answers the normalized launcher result directly, with its `ok`,
+`data`, `diagnostic` and `command` fields typed, rather than JSON inside an MCP
+text block that the caller parses back.
+
+Scope is a config, not a process. A caller that works inside a profile passes
+the environment that describes it, instead of spawning a process to hold those
+variables:
+
+```js
+const scoped = openPharoLauncher({
+  env: { PHARO_LAUNCHER_MCP_PROFILE: "isolated", PHARO_LAUNCHER_MCP_STATE_ROOT: stateRoot },
+});
+```
+
+The MCP server is an adapter over the same functions, so a host that embeds it
+rather than spawning it imports that instead:
 
 ```js
 import { callTool, createServer } from "@evref-bl/pharo-launcher-mcp";
@@ -45,8 +71,8 @@ import { loadPharoLauncherConfig } from "@evref-bl/pharo-launcher-mcp/config";
 import { defaultLauncherDir } from "@evref-bl/pharo-launcher-mcp/platform";
 ```
 
-Those three are the published surface. The executable is reachable as a
-command, not as an import: loading it starts a server on stdio.
+The executable is reachable as a command, not as an import: loading it starts a
+server on stdio.
 
 ## Terms
 

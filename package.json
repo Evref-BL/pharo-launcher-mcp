@@ -22,6 +22,7 @@
   "types": "./dist/server.d.ts",
   "exports": {
     ".": "./dist/server.js",
+    "./launcher": "./dist/launcher.js",
     "./config": "./dist/config.js",
     "./platform": "./dist/platform.js",
     "./package.json": "./package.json"
