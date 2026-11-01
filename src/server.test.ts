@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";
 import type { LauncherCliRunner } from "./discovery.js";
-import { callTool } from "./server.js";
+import { callTool, createServer } from "./server.js";
 
 function parseJsonResult(result: Awaited<ReturnType<typeof callTool>>) {
   return JSON.parse(result.content[0]?.text ?? "{}") as Record<string, unknown>;
@@ -83,30 +85,20 @@ describe("callTool", () => {
   const taskImageSton =
     "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13',#url:URL['https://example.test/latest.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['Task','Task.image']}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'130-x64'}}]}]";
 
-  it("returns health without invoking PharoLauncher", async () => {
-    const runner: LauncherCliRunner = async () => {
-      throw new Error("runner should not be called");
-    };
-    const result = await callTool("pharo_launcher_health", {}, { runner });
-
-    expect(result.isError).toBeUndefined();
-    expect(result.content[0]?.type).toBe("text");
-    expect(result.content[0]?.text).toContain("\"service\": \"pharo-launcher-mcp\"");
-  });
-
-  it("reports the version the package was published with", async () => {
+  it("announces the version the package was published with", async () => {
     const packaged = JSON.parse(
       fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
     ) as { version: string };
-    const runner: LauncherCliRunner = async () => {
-      throw new Error("runner should not be called");
-    };
+    const client = new Client({ name: "probe", version: "0.0.0" }, {});
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await createServer().connect(serverTransport);
+    await client.connect(clientTransport);
 
-    const body = parseJsonResult(
-      await callTool("pharo_launcher_health", {}, { runner }),
-    );
-
-    expect(body.version).toBe(packaged.version);
+    // The health tool used to report this. Initialize is where it lives now,
+    // and it is still read from package.json rather than kept by hand.
+    expect(client.getServerVersion()?.version).toBe(packaged.version);
+    await client.close();
   });
 
   it("returns resolved configuration without invoking PharoLauncher", async () => {
@@ -119,101 +111,6 @@ describe("callTool", () => {
     expect(result.isError).toBeUndefined();
     expect(body).toHaveProperty("launcherDir");
     expect(body).toHaveProperty("launcherScript");
-  });
-
-  it("runs version through the runner", async () => {
-    const runner: LauncherCliRunner = async (args) => ({
-      exitCode: args[0] === "--version" ? 0 : 1,
-      stdout: "Pharo Launcher 3.0.1",
-      stderr: "",
-      durationMs: 4,
-      timedOut: false,
-    });
-    const result = await callTool("pharo_launcher_version", {}, { runner });
-    const body = parseJsonResult(result);
-
-    expect(result.isError).toBeUndefined();
-    expect(body.ok).toBe(true);
-    expect(body.version).toBe("3.0.1");
-  });
-
-  it("marks validation as an MCP tool error when the harmless call fails", async () => {
-    const runner: LauncherCliRunner = async () => ({
-      exitCode: 1,
-      stdout: "",
-      stderr: "not available",
-      durationMs: 4,
-      timedOut: false,
-    });
-    const result = await callTool("pharo_launcher_validate_installation", {}, {
-      runner,
-    });
-    const body = parseJsonResult(result);
-
-    expect(result.isError).toBe(true);
-    expect(body.ok).toBe(false);
-  });
-
-  it("exposes inventory and template create readiness", async () => {
-    const config = tempLauncherConfig();
-    const calls: readonly string[][] = [];
-    const runner: LauncherCliRunner = async (args) => {
-      (calls as string[][]).push([...args]);
-
-      return {
-        exitCode: 0,
-        stdout:
-          args[0] === "template"
-            ? "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13',#category:'stable',#url:URL['https://example.test/130/latest.zip']}]"
-            : "OrderedCollection[]",
-        stderr: "",
-        durationMs: 4,
-        timedOut: false,
-      };
-    };
-
-    const result = await callTool(
-      "pharo_launcher_inventory",
-      {
-        templateCreateRequest: {
-          templateName: "Pharo 13",
-          templateCategory: "stable",
-        },
-      },
-      { runner, config },
-    );
-    const body = parseJsonResult(result);
-
-    fs.rmSync(config.launcherDir, { recursive: true, force: true });
-    expect(result.isError).toBeUndefined();
-    expect(body).toMatchObject({
-      ok: true,
-      service: "pharo-launcher-mcp",
-      templates: {
-        installed: [],
-        downloadable: [
-          {
-            name: "Pharo 13",
-            category: "stable",
-            pharoVersion: "130",
-          },
-        ],
-      },
-      images: {
-        existing: [],
-      },
-      templateCreateReadiness: {
-        status: "missing",
-        request: {
-          templateName: "Pharo 13",
-          templateCategory: "stable",
-        },
-      },
-    });
-    expect(calls).toEqual([
-      ["template", "list", "--ston"],
-      ["image", "list", "--ston"],
-    ]);
   });
 
   it("verifies copied images with list and info before reporting success", async () => {
@@ -808,30 +705,29 @@ describe("callTool", () => {
     fs.rmSync(config.profile.stateRoot, { recursive: true, force: true });
   });
 
-  it("keeps raw command access behind pharo_launcher_raw_command", async () => {
-    const calls: readonly string[][] = [];
-    const runner: LauncherCliRunner = async (args) => {
-      (calls as string[][]).push([...args]);
+  it.each([
+    "pharo_launcher_health",
+    "pharo_launcher_version",
+    "pharo_launcher_validate_installation",
+    "pharo_launcher_inventory",
+    "pharo_launcher_raw_command",
+    "pharo_launcher_image_bisect",
+    "pharo_launcher_image_package",
+    "pharo_launcher_image_recreate",
+    "pharo_launcher_image_create_from_build",
+    "pharo_launcher_image_create_from_pull_request",
+    "pharo_launcher_image_create_from_repo",
+    "pharo_launcher_image_create_from_sha",
+    "pharo_launcher_template_info",
+    "pharo_launcher_vm_list",
+    "pharo_launcher_vm_info",
+    "pharo_launcher_vm_update",
+    "pharo_launcher_vm_delete",
+  ])("no longer answers for %s", async (name) => {
+    const result = await callTool(name, {});
 
-      return {
-        exitCode: 0,
-        stdout: "raw",
-        stderr: "",
-        durationMs: 4,
-        timedOut: false,
-      };
-    };
-
-    const result = await callTool(
-      "pharo_launcher_raw_command",
-      {
-        args: ["image", "list"],
-      },
-      { runner },
-    );
-
-    expect(result.isError).toBeUndefined();
-    expect(calls).toEqual([["image", "list"]]);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("Unknown tool");
   });
 
   it("reports unknown tools as MCP tool errors", async () => {

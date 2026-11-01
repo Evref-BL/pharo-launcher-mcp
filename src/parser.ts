@@ -4,7 +4,6 @@ import type {
   LauncherOutputFormat,
   LauncherProcess,
   LauncherTemplate,
-  LauncherVm,
 } from "./models.js";
 import {
   hasCaseInsensitiveSuffix,
@@ -214,29 +213,6 @@ export function parseTemplateCategoriesFromText(source: string): string[] {
     .map((line) => line.replace(/^\d+\s+/, ""));
 }
 
-export function parseLauncherVmsFromSton(source: string): LauncherVm[] {
-  return stonBlocks(source, "PhLVirtualMachine").map((block) => ({
-    ...(field(block, "id") ? { id: field(block, "id") } : {}),
-    ...(field(block, "name") ? { name: field(block, "name") } : {}),
-    ...(field(block, "arch") ? { architecture: field(block, "arch") } : {}),
-    ...(relativePath(block) ? { executablePath: relativePath(block) } : {}),
-    ...(field(block, "status") ? { status: field(block, "status") } : {}),
-    ...(field(block, "blessing") ? { blessing: field(block, "blessing") } : {}),
-  }));
-}
-
-export function parseLauncherVmsFromText(source: string): LauncherVm[] {
-  return source
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !line.startsWith("#") && !line.startsWith("--"))
-    .map((line) => {
-      const id = line.split(/\s+/)[0];
-      return { id, status: line };
-    });
-}
-
 export function parseLauncherProcessesFromText(source: string): LauncherProcess[] {
   return source
     .split(/\r?\n/)
@@ -334,31 +310,6 @@ export function parseLauncherOutput(
         format === "ston"
           ? parseLauncherTemplatesFromSton(stdout)
           : parseLauncherTemplatesFromText(stdout),
-      );
-
-    case "pharo_launcher_template_info":
-      return parseWithStatus(format, () =>
-        singleOrArray(
-          format === "ston"
-            ? parseLauncherTemplatesFromSton(stdout)
-            : parseLauncherTemplatesFromText(stdout),
-        ),
-      );
-
-    case "pharo_launcher_vm_list":
-      return parseWithStatus(format, () =>
-        format === "ston"
-          ? parseLauncherVmsFromSton(stdout)
-          : parseLauncherVmsFromText(stdout),
-      );
-
-    case "pharo_launcher_vm_info":
-      return parseWithStatus(format, () =>
-        singleOrArray(
-          format === "ston"
-            ? parseLauncherVmsFromSton(stdout)
-            : parseLauncherVmsFromText(stdout),
-        ),
       );
 
     case "pharo_launcher_process_list":

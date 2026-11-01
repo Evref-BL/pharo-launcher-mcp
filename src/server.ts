@@ -10,7 +10,6 @@ import {
 import {
   buildLauncherCommandArgs,
   launcherCommandTools,
-  rawCommandTool,
   ToolInputError,
 } from "./commandCatalog.js";
 import { copyImageBetweenProfiles } from "./crossProfileCopy.js";
@@ -20,12 +19,7 @@ import {
 } from "./config.js";
 import {
   getPharoLauncherConfigReport,
-  getPharoLauncherHealth,
-  getPharoLauncherInventory,
-  getPharoLauncherVersion,
   type LauncherCliRunner,
-  type PharoLauncherTemplateCreateRequest,
-  validatePharoLauncherInstallation,
 } from "./discovery.js";
 import {
   buildLauncherCliInvocation,
@@ -43,7 +37,7 @@ import type { LauncherCommandResult, LauncherImage } from "./models.js";
 
 // Read the version, do not keep a copy of it. The copy that used to live here
 // said 0.1.1 while the package was 0.1.4, so every client was told the wrong
-// version at initialize and by pharo_launcher_health.
+// version at initialize.
 const serverVersion = (
   createRequire(import.meta.url)("../package.json") as { version: string }
 ).version;
@@ -59,26 +53,6 @@ const emptyInputSchema = {
   additionalProperties: false,
 } as const;
 const stringSchema = { type: "string", minLength: 1 } as const;
-const templateCreateRequestSchema = {
-  type: "object",
-  properties: {
-    templateName: stringSchema,
-    templateCategory: stringSchema,
-  },
-  required: ["templateName"],
-  additionalProperties: false,
-} as const;
-const inventoryInputSchema = {
-  type: "object",
-  properties: {
-    templateCreateRequest: {
-      ...templateCreateRequestSchema,
-      description:
-        "Optional template image create request to evaluate for offline readiness without mutation or download.",
-    },
-  },
-  additionalProperties: false,
-} as const;
 const scopedProfileSchema = {
   type: "object",
   properties: {
@@ -112,33 +86,10 @@ const copyBetweenProfilesInputSchema = {
 
 const tools = [
   {
-    name: "pharo_launcher_health",
-    description:
-      "Return pharo-launcher-mcp health, resolved paths, script source, and file existence without invoking PharoLauncher.",
-    inputSchema: emptyInputSchema,
-  },
-  {
     name: "pharo_launcher_config",
     description:
       "Return resolved PharoLauncher configuration paths, script source, and file existence.",
     inputSchema: emptyInputSchema,
-  },
-  {
-    name: "pharo_launcher_version",
-    description: "Run a harmless PharoLauncher --version call.",
-    inputSchema: emptyInputSchema,
-  },
-  {
-    name: "pharo_launcher_validate_installation",
-    description:
-      "Validate resolved paths and run a harmless PharoLauncher --version call.",
-    inputSchema: emptyInputSchema,
-  },
-  {
-    name: "pharo_launcher_inventory",
-    description:
-      "Return read-only scoped Pharo Launcher templates, versions, active profile roots, and existing images.",
-    inputSchema: inventoryInputSchema,
   },
   {
     name: "pharo_launcher_image_copy_between_profiles",
@@ -147,7 +98,6 @@ const tools = [
     inputSchema: copyBetweenProfilesInputSchema,
   },
   ...launcherCommandTools,
-  rawCommandTool,
 ] as const;
 
 type ToolResult = {
@@ -195,22 +145,6 @@ function inputObject(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
-function optionalString(
-  input: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const value = input[key];
-  if (value === undefined) {
-    return undefined;
-  }
-
-  if (typeof value !== "string" || value.length === 0) {
-    throw new ToolInputError(`${key} must be a non-empty string`);
-  }
-
-  return value;
-}
-
 function optionalBoolean(
   input: Record<string, unknown>,
   key: string,
@@ -244,28 +178,6 @@ function normalizeToolResult(
   return normalizeLauncherResult(toolName, args, result, {
     includeRaw: options.includeRaw,
   });
-}
-
-function templateCreateRequestFromInput(
-  input: unknown,
-): PharoLauncherTemplateCreateRequest | undefined {
-  const object = inputObject(input);
-  const value = object.templateCreateRequest;
-  if (value === undefined) {
-    return undefined;
-  }
-
-  const request = inputObject(value);
-  const templateName = optionalString(request, "templateName");
-  if (!templateName) {
-    throw new ToolInputError("templateCreateRequest.templateName is required");
-  }
-
-  const templateCategory = optionalString(request, "templateCategory");
-  return {
-    templateName,
-    ...(templateCategory ? { templateCategory } : {}),
-  };
 }
 
 async function runLauncherToolCommand(
@@ -746,7 +658,7 @@ async function templateUpdateResult(
           "Pharo Launcher template update completed, but template list still failed for the active profile.",
         action:
           probeResult.action ??
-          "Inspect pharo_launcher_inventory diagnostics before planning image creation.",
+          "Inspect pharo_launcher_template_list diagnostics before planning image creation.",
         templateSourcesBootstrap: bootstrap,
         templateSourcesProbe: probeResult,
       },
@@ -800,41 +712,6 @@ async function withToolInputErrorResult(
   }
 }
 
-async function launcherVersionResult(
-  runner: LauncherCliRunner,
-  options: CallToolOptions,
-): Promise<ToolResult> {
-  const result = await getPharoLauncherVersion(runner, options.config);
-  return jsonResult(result, !result.ok);
-}
-
-async function launcherInstallationValidationResult(
-  runner: LauncherCliRunner,
-  options: CallToolOptions,
-): Promise<ToolResult> {
-  const result = await validatePharoLauncherInstallation(
-    runner,
-    options.config,
-  );
-  return jsonResult(result, !result.ok);
-}
-
-async function launcherInventoryResult(
-  runner: LauncherCliRunner,
-  argumentsValue: unknown,
-  options: CallToolOptions,
-): Promise<ToolResult> {
-  return withToolInputErrorResult(async () => {
-    const templateCreateRequest =
-      templateCreateRequestFromInput(argumentsValue);
-    const result = await getPharoLauncherInventory(runner, options.config, {
-      ...(templateCreateRequest ? { templateCreateRequest } : {}),
-      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-    });
-    return jsonResult(result, !result.ok);
-  });
-}
-
 function profileImageCopyResult(argumentsValue: unknown): Promise<ToolResult> {
   return withToolInputErrorResult(() => {
     const result = copyImageBetweenProfiles(argumentsValue);
@@ -854,14 +731,6 @@ async function commandCatalogToolResult(
       return cliResult(name, commandArgs, resultOptions);
     }
 
-    if (name === rawCommandTool.name) {
-      return cliResult(
-        name,
-        rawCommandTool.buildArgs(argumentsValue),
-        resultOptions,
-      );
-    }
-
     return jsonResult(
       {
         error: `Unknown tool: ${name}`,
@@ -879,23 +748,8 @@ export async function callTool(
   const runner = options.runner ?? runLauncherCli;
 
   switch (name) {
-    case "pharo_launcher_health":
-      return jsonResult({
-        version: serverVersion,
-        ...getPharoLauncherHealth(options.config),
-      });
-
     case "pharo_launcher_config":
       return jsonResult(getPharoLauncherConfigReport(options.config));
-
-    case "pharo_launcher_version":
-      return launcherVersionResult(runner, options);
-
-    case "pharo_launcher_validate_installation":
-      return launcherInstallationValidationResult(runner, options);
-
-    case "pharo_launcher_inventory":
-      return launcherInventoryResult(runner, argumentsValue, options);
 
     case "pharo_launcher_image_copy_between_profiles":
       return profileImageCopyResult(argumentsValue);

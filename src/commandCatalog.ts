@@ -183,59 +183,6 @@ function imageCreate(input: unknown): string[] {
   return args;
 }
 
-function imageCreateFromBuild(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = ["image", "create", "fromBuild"];
-  addOption(args, "--pharoVersion", optionalStringOrNumber(object, "pharoVersion"));
-  addOption(args, "--newImageName", optionalString(object, "newImageName"));
-  const buildNumber = optionalStringOrNumber(object, "buildNumber");
-  if (buildNumber) {
-    args.push(buildNumber);
-  }
-  return args;
-}
-
-function imageCreateFromPullRequest(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = ["image", "create", "fromPR"];
-  addOption(args, "--newImageName", optionalString(object, "newImageName"));
-  addOption(args, "--templateName", optionalString(object, "templateName"));
-  addOption(args, "--templateCategory", optionalString(object, "templateCategory"));
-  const pullRequest = optionalStringOrNumber(object, "pullRequest");
-  if (pullRequest) {
-    args.push(pullRequest);
-  }
-  return args;
-}
-
-function imageCreateFromRepo(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = ["image", "create", "fromRepo"];
-  addOption(args, "--newImageName", optionalString(object, "newImageName"));
-  addOption(args, "--templateName", optionalString(object, "templateName"));
-  addOption(args, "--templateCategory", optionalString(object, "templateCategory"));
-  addOption(args, "--subfolder", optionalString(object, "subfolder"));
-  addOption(args, "--baseline", optionalString(object, "baseline"));
-  addOption(args, "--group", optionalString(object, "group"));
-  const repository = optionalString(object, "repository");
-  if (repository) {
-    args.push(repository);
-  }
-  return args;
-}
-
-function imageCreateFromSha(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = ["image", "create", "fromSHA"];
-  addOption(args, "--pharoVersion", optionalStringOrNumber(object, "pharoVersion"));
-  addOption(args, "--newImageName", optionalString(object, "newImageName"));
-  const sha = optionalString(object, "sha");
-  if (sha) {
-    args.push(sha);
-  }
-  return args;
-}
-
 function imageDelete(input: unknown): string[] {
   const object = inputObject(input);
   const args = ["image", "delete"];
@@ -255,21 +202,6 @@ function imageStart(input: unknown): string[] {
   return args;
 }
 
-function imagePackage(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = ["image", "package"];
-  addFlag(args, "--zip", optionalBoolean(object, "zip"));
-  addOption(args, "--vm", optionalString(object, "vm"));
-  args.push(requiredString(object, "imageName"));
-  args.push(requiredString(object, "location"));
-  return args;
-}
-
-function imageRecreate(input: unknown): string[] {
-  const object = inputObject(input);
-  return ["image", "recreate", requiredString(object, "imageName")];
-}
-
 function imageCopy(input: unknown): string[] {
   const object = inputObject(input);
   return [
@@ -278,13 +210,6 @@ function imageCopy(input: unknown): string[] {
     requiredString(object, "imageName"),
     requiredString(object, "newImageName"),
   ];
-}
-
-function imageBisect(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = ["image", "bisect"];
-  addOption(args, "--pharoVersion", optionalStringOrNumber(object, "pharoVersion"));
-  return args;
 }
 
 function processKill(input: unknown): string[] {
@@ -317,17 +242,6 @@ function templateCategoryList(input: unknown): string[] {
   return args;
 }
 
-function templateInfo(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = ["template", "info"];
-  addOption(args, "--templateCategory", optionalString(object, "templateCategory"));
-  const templateName = optionalString(object, "templateName");
-  if (templateName) {
-    args.push(templateName);
-  }
-  return args;
-}
-
 function templateList(input: unknown): string[] {
   const object = inputObject(input);
   const args = ["template", "list"];
@@ -336,50 +250,7 @@ function templateList(input: unknown): string[] {
   return args;
 }
 
-function vmDelete(input: unknown): string[] {
-  const object = inputObject(input);
-  return ["vm", "delete", requiredString(object, "vmId")];
-}
-
-function vmInfo(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = ["vm", "info"];
-  const vmId = optionalString(object, "vmId");
-  if (vmId) {
-    args.push(vmId);
-  }
-  return args;
-}
-
-function vmList(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = ["vm", "list"];
-  addTableOptions(args, object);
-  const vmId = optionalString(object, "vmId");
-  if (vmId) {
-    args.push(vmId);
-  }
-  return args;
-}
-
-function vmUpdate(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = ["vm", "update"];
-  const vmId = optionalString(object, "vmId");
-  if (vmId) {
-    args.push(vmId);
-  }
-  return args;
-}
-
 export const launcherCommandTools: LauncherCommandTool[] = [
-  {
-    name: "pharo_launcher_image_bisect",
-    description:
-      "Run PharoLauncher image bisect. This command may require interactive CLI input.",
-    inputSchema: objectSchema({ pharoVersion: { anyOf: [stringSchema, { type: "number" }] } }),
-    buildArgs: imageBisect,
-  },
   {
     name: "pharo_launcher_image_copy",
     description: "Copy an existing PharoLauncher image to a new image name.",
@@ -404,51 +275,6 @@ export const launcherCommandTools: LauncherCommandTool[] = [
       ["newImageName", "templateName"],
     ),
     buildArgs: imageCreate,
-  },
-  {
-    name: "pharo_launcher_image_create_from_build",
-    description: "Create a new image from a Pharo build number.",
-    inputSchema: objectSchema({
-      buildNumber: { anyOf: [stringSchema, { type: "number" }] },
-      pharoVersion: { anyOf: [stringSchema, { type: "number" }] },
-      newImageName: stringSchema,
-    }),
-    buildArgs: imageCreateFromBuild,
-  },
-  {
-    name: "pharo_launcher_image_create_from_pull_request",
-    description: "Create a new image from a Pharo pull request build.",
-    inputSchema: objectSchema({
-      pullRequest: { anyOf: [stringSchema, { type: "number" }] },
-      newImageName: stringSchema,
-      templateName: stringSchema,
-      templateCategory: stringSchema,
-    }),
-    buildArgs: imageCreateFromPullRequest,
-  },
-  {
-    name: "pharo_launcher_image_create_from_repo",
-    description: "Create a new image from a template and load a GitHub repository.",
-    inputSchema: objectSchema({
-      repository: stringSchema,
-      newImageName: stringSchema,
-      templateName: stringSchema,
-      templateCategory: stringSchema,
-      subfolder: stringSchema,
-      baseline: stringSchema,
-      group: stringSchema,
-    }),
-    buildArgs: imageCreateFromRepo,
-  },
-  {
-    name: "pharo_launcher_image_create_from_sha",
-    description: "Create a new image from a Pharo build commit SHA.",
-    inputSchema: objectSchema({
-      sha: stringSchema,
-      pharoVersion: { anyOf: [stringSchema, { type: "number" }] },
-      newImageName: stringSchema,
-    }),
-    buildArgs: imageCreateFromSha,
   },
   {
     name: "pharo_launcher_image_delete",
@@ -482,26 +308,6 @@ export const launcherCommandTools: LauncherCommandTool[] = [
       ...tableProperties,
     }),
     buildArgs: imageList,
-  },
-  {
-    name: "pharo_launcher_image_package",
-    description: "Create a package containing the image and launch artefacts.",
-    inputSchema: objectSchema(
-      {
-        imageName: stringSchema,
-        location: stringSchema,
-        zip: booleanSchema,
-        vm: stringSchema,
-      },
-      ["imageName", "location"],
-    ),
-    buildArgs: imagePackage,
-  },
-  {
-    name: "pharo_launcher_image_recreate",
-    description: "Recreate a local image.",
-    inputSchema: objectSchema({ imageName: stringSchema }, ["imageName"]),
-    buildArgs: imageRecreate,
   },
   {
     name: "pharo_launcher_image_start",
@@ -541,15 +347,6 @@ export const launcherCommandTools: LauncherCommandTool[] = [
     buildArgs: templateCategoryList,
   },
   {
-    name: "pharo_launcher_template_info",
-    description: "Print information about an image template.",
-    inputSchema: objectSchema({
-      templateName: stringSchema,
-      templateCategory: stringSchema,
-    }),
-    buildArgs: templateInfo,
-  },
-  {
     name: "pharo_launcher_template_list",
     description: "List image templates.",
     inputSchema: objectSchema({
@@ -564,33 +361,6 @@ export const launcherCommandTools: LauncherCommandTool[] = [
     inputSchema: emptyInputSchema,
     buildArgs: () => ["template", "update"],
   },
-  {
-    name: "pharo_launcher_vm_delete",
-    description: "Delete a VM executable and dependencies.",
-    inputSchema: objectSchema({ vmId: stringSchema }, ["vmId"]),
-    buildArgs: vmDelete,
-  },
-  {
-    name: "pharo_launcher_vm_info",
-    description: "Print information about a VM.",
-    inputSchema: objectSchema({ vmId: stringSchema }),
-    buildArgs: vmInfo,
-  },
-  {
-    name: "pharo_launcher_vm_list",
-    description: "List available VMs.",
-    inputSchema: objectSchema({
-      vmId: stringSchema,
-      ...tableProperties,
-    }),
-    buildArgs: vmList,
-  },
-  {
-    name: "pharo_launcher_vm_update",
-    description: "Update a VM executable and dependencies.",
-    inputSchema: objectSchema({ vmId: stringSchema }),
-    buildArgs: vmUpdate,
-  },
 ];
 
 export const launcherCommandToolByName = new Map(
@@ -600,37 +370,3 @@ export const launcherCommandToolByName = new Map(
 export function buildLauncherCommandArgs(name: string, input: unknown): string[] | undefined {
   return launcherCommandToolByName.get(name)?.buildArgs(input);
 }
-
-export function rawCommandArgs(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = object.args;
-  if (!Array.isArray(args) || args.length === 0) {
-    throw new ToolInputError(
-      "pharo_launcher_raw_command requires a non-empty args array",
-    );
-  }
-
-  if (!args.every((arg) => typeof arg === "string" && arg.length > 0)) {
-    throw new ToolInputError(
-      "pharo_launcher_raw_command args must be non-empty strings",
-    );
-  }
-
-  return [...args];
-}
-
-export const rawCommandTool: LauncherCommandTool = {
-  name: "pharo_launcher_raw_command",
-  description: "Run raw PharoLauncher clap args as an escape hatch.",
-  inputSchema: objectSchema(
-    {
-      args: {
-        type: "array",
-        items: stringSchema,
-        minItems: 1,
-      },
-    },
-    ["args"],
-  ),
-  buildArgs: rawCommandArgs,
-};

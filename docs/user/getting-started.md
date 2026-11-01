@@ -110,25 +110,17 @@ client entry. See [Profile mode](profile-mode.md).
 
 ## First Tools
 
-Run read-only checks first:
+Check the installation from the command line, before connecting a client:
 
-```text
-pharo_launcher_health
-pharo_launcher_config
-pharo_launcher_validate_installation
-pharo_launcher_inventory
+```sh
+npx @evref-bl/pharo-launcher-mcp --health
+npx @evref-bl/pharo-launcher-mcp --validate-installation
 ```
 
-Use the output this way:
-
-- `pharo_launcher_health` confirms whether the resolved directory, VM, control
-  image, and wrapper exist. It does not invoke Pharo Launcher.
-- `pharo_launcher_config` shows the same resolved configuration in a direct
-  report.
-- `pharo_launcher_validate_installation` runs `--version` and verifies that the
-  launcher command can start.
-- `pharo_launcher_inventory` gathers templates, images, profile roots, and
-  declared image handles for lifecycle planning.
+`--health` confirms whether the resolved directory, VM, control image, and
+wrapper exist, without invoking Pharo Launcher. `--validate-installation` runs
+`--version` and verifies that the launcher command can start. Connected,
+`pharo_launcher_config` reports the same resolved configuration.
 
 After validation, list templates:
 

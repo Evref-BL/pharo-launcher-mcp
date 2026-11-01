@@ -96,15 +96,17 @@ looks like this:
 Once connected, start with these tools:
 
 ```text
-pharo_launcher_health
 pharo_launcher_config
-pharo_launcher_validate_installation
-pharo_launcher_inventory
+pharo_launcher_image_list
+pharo_launcher_template_list
 ```
 
-`pharo_launcher_health` and `pharo_launcher_config` only inspect resolved
-configuration. `pharo_launcher_validate_installation` invokes `--version`, so it
-crosses the live Launcher boundary.
+`pharo_launcher_config` only inspects resolved configuration; the other two
+cross the live Launcher boundary.
+
+Checking the installation before connecting is the executable's job, not a
+tool's. `pharo-launcher-mcp --health`, `--version-check`,
+`--validate-installation` and `--probe-images` each print JSON and exit.
 
 ## Profile Quick Start
 
@@ -172,19 +174,6 @@ Launch an image:
 }
 ```
 
-Package an image:
-
-```json
-{
-  "tool": "pharo_launcher_image_package",
-  "arguments": {
-    "imageName": "sample-130-copy",
-    "location": "/path/to/packages",
-    "zip": true
-  }
-}
-```
-
 ## Safety Model
 
 Mutating tools are explicit, and name what they act on. There is no
@@ -200,10 +189,6 @@ own.
 image after Launcher reports success. If the target image cannot be listed and
 inspected, the MCP result is an error with the command output and verification
 diagnostics.
-
-Profile-scoped `pharo_launcher_image_create_from_build` is refused before
-Launcher is invoked, because that Launcher path can launch and download VMs
-outside the configured profile VM directory.
 
 ## Documentation
 

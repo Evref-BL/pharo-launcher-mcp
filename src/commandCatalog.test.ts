@@ -2,35 +2,22 @@ import { describe, expect, it } from "vitest";
 import {
   buildLauncherCommandArgs,
   launcherCommandTools,
-  rawCommandArgs,
 } from "./commandCatalog.js";
 
 describe("launcher command catalog", () => {
-  it("registers every typed PharoLauncher action", () => {
+  it("registers the actions something asks for", () => {
     expect(launcherCommandTools.map((tool) => tool.name)).toEqual([
-      "pharo_launcher_image_bisect",
       "pharo_launcher_image_copy",
       "pharo_launcher_image_create",
-      "pharo_launcher_image_create_from_build",
-      "pharo_launcher_image_create_from_pull_request",
-      "pharo_launcher_image_create_from_repo",
-      "pharo_launcher_image_create_from_sha",
       "pharo_launcher_image_delete",
       "pharo_launcher_image_info",
       "pharo_launcher_image_list",
-      "pharo_launcher_image_package",
-      "pharo_launcher_image_recreate",
       "pharo_launcher_image_start",
       "pharo_launcher_process_kill",
       "pharo_launcher_process_list",
       "pharo_launcher_template_category_list",
-      "pharo_launcher_template_info",
       "pharo_launcher_template_list",
       "pharo_launcher_template_update",
-      "pharo_launcher_vm_delete",
-      "pharo_launcher_vm_info",
-      "pharo_launcher_vm_list",
-      "pharo_launcher_vm_update",
     ]);
   });
 
@@ -48,8 +35,6 @@ describe("launcher command catalog", () => {
       "pharo_launcher_process_kill",
       "pharo_launcher_image_info",
       "pharo_launcher_image_delete",
-      "pharo_launcher_image_recreate",
-      "pharo_launcher_image_package",
     ];
 
     expect(requiredToolNames.every((name) => registeredToolNames.has(name))).toBe(
@@ -68,11 +53,6 @@ describe("launcher command catalog", () => {
   });
 
   it.each([
-    [
-      "pharo_launcher_image_bisect",
-      { pharoVersion: 130 },
-      ["image", "bisect", "--pharoVersion", "130"],
-    ],
     [
       "pharo_launcher_image_copy",
       { imageName: "Base", newImageName: "Task" },
@@ -95,51 +75,6 @@ describe("launcher command catalog", () => {
       ],
     ],
     [
-      "pharo_launcher_image_create_from_build",
-      { buildNumber: 123, pharoVersion: 130, newImageName: "Build123" },
-      [
-        "image",
-        "create",
-        "fromBuild",
-        "--pharoVersion",
-        "130",
-        "--newImageName",
-        "Build123",
-        "123",
-      ],
-    ],
-    [
-      "pharo_launcher_image_create_from_pull_request",
-      { pullRequest: 42, newImageName: "PR42" },
-      ["image", "create", "fromPR", "--newImageName", "PR42", "42"],
-    ],
-    [
-      "pharo_launcher_image_create_from_repo",
-      {
-        repository: "owner/project:branch",
-        newImageName: "Repo",
-        baseline: "Project",
-        group: "default",
-      },
-      [
-        "image",
-        "create",
-        "fromRepo",
-        "--newImageName",
-        "Repo",
-        "--baseline",
-        "Project",
-        "--group",
-        "default",
-        "owner/project:branch",
-      ],
-    ],
-    [
-      "pharo_launcher_image_create_from_sha",
-      { sha: "abcdef1", pharoVersion: 130 },
-      ["image", "create", "fromSHA", "--pharoVersion", "130", "abcdef1"],
-    ],
-    [
       "pharo_launcher_image_info",
       { imageName: "Task", format: "ston" },
       ["image", "info", "--ston", "Task"],
@@ -160,11 +95,6 @@ describe("launcher command catalog", () => {
       ["image", "list", "--nameFilter", "Task", "--brief"],
     ],
     [
-      "pharo_launcher_image_package",
-      { imageName: "Task", location: "C:\\out", zip: true, vm: "130-x64" },
-      ["image", "package", "--zip", "--vm", "130-x64", "Task", "C:\\out"],
-    ],
-    [
       "pharo_launcher_process_list",
       {},
       ["process", "list"],
@@ -175,11 +105,6 @@ describe("launcher command catalog", () => {
       ["template", "categories", "--ston"],
     ],
     [
-      "pharo_launcher_template_info",
-      { templateName: "Pharo 13", templateCategory: "Official" },
-      ["template", "info", "--templateCategory", "Official", "Pharo 13"],
-    ],
-    [
       "pharo_launcher_template_list",
       { templateCategory: "Official", format: "text", rowMode: true },
       ["template", "list", "--templateCategory", "Official", "--rowMode"],
@@ -188,21 +113,6 @@ describe("launcher command catalog", () => {
       "pharo_launcher_template_update",
       {},
       ["template", "update"],
-    ],
-    [
-      "pharo_launcher_vm_info",
-      { vmId: "130-x64" },
-      ["vm", "info", "130-x64"],
-    ],
-    [
-      "pharo_launcher_vm_list",
-      { vmId: "130-x64", format: "ston" },
-      ["vm", "list", "--ston", "130-x64"],
-    ],
-    [
-      "pharo_launcher_vm_update",
-      { vmId: "130-x64" },
-      ["vm", "update", "130-x64"],
     ],
   ])("builds args for %s", (name, input, expected) => {
     expect(buildLauncherCommandArgs(name, input)).toEqual(expected);
@@ -258,11 +168,6 @@ describe("launcher command catalog", () => {
         displayMode: "visible",
       }),
     ).toThrow("displayMode must be headless or interactive");
-    expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_package", {
-        location: "C:\\out",
-      }),
-    ).toThrow("imageName is required");
   });
 
   it("builds destructive actions from their target alone", () => {
@@ -274,12 +179,6 @@ describe("launcher command catalog", () => {
     ).toEqual(["image", "delete", "--force", "Task"]);
 
     expect(
-      buildLauncherCommandArgs("pharo_launcher_image_recreate", {
-        imageName: "Task",
-      }),
-    ).toEqual(["image", "recreate", "Task"]);
-
-    expect(
       buildLauncherCommandArgs("pharo_launcher_process_kill", {
         imageName: "Task",
       }),
@@ -288,10 +187,6 @@ describe("launcher command catalog", () => {
     expect(
       buildLauncherCommandArgs("pharo_launcher_process_kill", { pid: 1234 }),
     ).toEqual(["process", "kill", "1234"]);
-
-    expect(
-      buildLauncherCommandArgs("pharo_launcher_vm_delete", { vmId: "130-x64" }),
-    ).toEqual(["vm", "delete", "130-x64"]);
   });
 
   // Callers built against the confirmation gate keep working: the server
@@ -303,17 +198,11 @@ describe("launcher command catalog", () => {
         confirm: true,
       }),
     ).toEqual(["image", "delete", "Task"]);
-    expect(rawCommandArgs({ args: ["image", "list"], confirm: true })).toEqual([
-      "image",
-      "list",
-    ]);
   });
 
   it.each([
     "pharo_launcher_image_delete",
-    "pharo_launcher_image_recreate",
     "pharo_launcher_process_kill",
-    "pharo_launcher_vm_delete",
   ])("rejects empty input for destructive tool %s", (toolName) => {
     expect(() => buildLauncherCommandArgs(toolName, {})).toThrow();
   });
@@ -323,14 +212,8 @@ describe("launcher command catalog", () => {
       buildLauncherCommandArgs("pharo_launcher_image_delete", {}),
     ).toThrow("imageName is required");
     expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_recreate", {}),
-    ).toThrow("imageName is required");
-    expect(() =>
       buildLauncherCommandArgs("pharo_launcher_process_kill", {}),
     ).toThrow("requires pid or imageName");
-    expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_vm_delete", {}),
-    ).toThrow("vmId is required");
   });
 
   it("rejects ambiguous process kill targets", () => {
@@ -340,15 +223,5 @@ describe("launcher command catalog", () => {
         pid: 1234,
       }),
     ).toThrow("requires exactly one of pid or imageName");
-  });
-
-  it("passes raw command args straight through", () => {
-    expect(rawCommandArgs({ args: ["image", "list"] })).toEqual([
-      "image",
-      "list",
-    ]);
-    expect(() => rawCommandArgs({ args: [] })).toThrow(
-      "requires a non-empty args array",
-    );
   });
 });
