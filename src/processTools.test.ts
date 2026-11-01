@@ -111,6 +111,66 @@ describe("runNativeProcessTool", () => {
     expect(killed).toEqual([3093]);
   });
 
+  it("kills the pid it was given and no process that merely mentions it", async () => {
+    const killed: number[] = [];
+    const runCommand: NativeProcessCommandRunner = async () =>
+      [
+        "4711 /opt/pharo/pharo --headless /home/ada/images/MCP13/MCP13.image",
+        "99 /opt/pharo/pharo --headless /home/ada/images/port-4711/scratch.image",
+      ].join("\n");
+
+    const result = await runNativeProcessTool(["process", "kill", "4711"], {
+      platform: "linux",
+      runCommand,
+      killProcess: (pid) => {
+        killed.push(pid);
+      },
+    });
+
+    expect(killed).toEqual([4711]);
+    expect(result.stdout).toBe("Killed 4711");
+  });
+
+  it("kills images whose name matches, not images whose name starts the same", async () => {
+    const killed: number[] = [];
+    const runCommand: NativeProcessCommandRunner = async () =>
+      [
+        "3093 /opt/pharo/pharo --headless /home/ada/images/MCP13/MCP13.image",
+        "3094 /opt/pharo/pharo --headless /home/ada/images/MCP13-copy/MCP13-copy.image",
+      ].join("\n");
+
+    const result = await runNativeProcessTool(["process", "kill", "MCP13"], {
+      platform: "linux",
+      runCommand,
+      killProcess: (pid) => {
+        killed.push(pid);
+      },
+    });
+
+    expect(killed).toEqual([3093]);
+    expect(result.stdout).toBe("Killed 3093");
+  });
+
+  it("kills an image addressed by its full image path", async () => {
+    const killed: number[] = [];
+    const runCommand: NativeProcessCommandRunner = async () =>
+      "3093 /opt/pharo/pharo --headless /home/ada/images/MCP13/MCP13.image";
+
+    const result = await runNativeProcessTool(
+      ["process", "kill", "/home/ada/images/MCP13/MCP13.image"],
+      {
+        platform: "linux",
+        runCommand,
+        killProcess: (pid) => {
+          killed.push(pid);
+        },
+      },
+    );
+
+    expect(killed).toEqual([3093]);
+    expect(result.exitCode).toBe(0);
+  });
+
   it("returns a clean unsupported result when no native backend exists", async () => {
     const result = await runNativeProcessTool(["process", "list"], {
       platform: "aix",

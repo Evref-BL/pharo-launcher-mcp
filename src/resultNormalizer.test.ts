@@ -172,7 +172,7 @@ describe("result normalizer", () => {
 
   it("normalizes profile-scoped image launch refusals as VM store diagnostics", () => {
     const result = normalizeLauncherResult(
-      "pharo_launcher_image_launch",
+      "pharo_launcher_image_start",
       ["image", "launch", "--script", "bootstrap.st", "ScopedImage"],
       {
         ...cliResult,
@@ -194,6 +194,20 @@ describe("result normalizer", () => {
       },
     });
     expect(result.raw).toBeUndefined();
+  });
+
+  it("names an image after the directory the image file sits in", () => {
+    const nested = parseLauncherImagesFromSton(
+      "PhLImage{#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['images','MCP13','MCP13.image']}}}",
+    );
+    const flat = parseLauncherImagesFromSton(
+      "PhLImage{#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['MCP13.image']}}}",
+    );
+
+    expect(nested[0]?.name).toBe("MCP13");
+    // Nothing but the file to read it from, so read it off the file rather
+    // than calling the image MCP13.image.
+    expect(flat[0]?.name).toBe("MCP13");
   });
 
   it("extracts LauncherImage models from STON output", () => {

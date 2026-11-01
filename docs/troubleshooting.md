@@ -109,9 +109,10 @@ Process tools use native host process queries:
 - macOS and Linux: `ps -axo pid=,args=`
 
 The process must have a Pharo or Squeak command line that includes a `.image`
-path. For cleanup, prefer a PID captured from the detached launch result. If
-using `imageName`, confirm that no unrelated process command line contains the
-same text.
+path. For cleanup, prefer a PID captured from the detached launch result, which
+stops that process and nothing else. An `imageName` has to match the process's
+image name or image path exactly, so an image that is not listed by
+`pharo_launcher_process_list` under that exact name will not be found.
 
 ## Commands Time Out
 

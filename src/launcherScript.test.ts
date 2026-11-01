@@ -11,7 +11,6 @@ describe("candidateLauncherScriptPaths", () => {
         PHARO_LAUNCHER_SCRIPT: "C:\\custom\\pharo-launcher.cmd",
       },
       platform: "win32",
-      launcherDir: "C:\\PL",
     });
 
     expect(candidates[0]).toBe("C:\\custom\\pharo-launcher.cmd");
@@ -21,7 +20,6 @@ describe("candidateLauncherScriptPaths", () => {
     const candidates = candidateLauncherScriptPaths({
       env: {},
       platform: "win32",
-      launcherDir: "C:\\PL",
     });
 
     expect(candidates).toEqual([bundledLauncherScriptPath("win32")]);
@@ -31,7 +29,6 @@ describe("candidateLauncherScriptPaths", () => {
     const candidates = candidateLauncherScriptPaths({
       env: {},
       platform: "linux",
-      launcherDir: "/opt/pharo-launcher",
     });
 
     expect(candidates).toEqual([bundledLauncherScriptPath("linux")]);
@@ -41,7 +38,6 @@ describe("candidateLauncherScriptPaths", () => {
     const candidates = candidateLauncherScriptPaths({
       env: {},
       platform: "darwin",
-      launcherDir: "/Applications/Pharo Launcher",
     });
 
     expect(candidates).toEqual([bundledLauncherScriptPath("darwin")]);

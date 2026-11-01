@@ -551,6 +551,31 @@ function failureResult(
   };
 }
 
+// Everything the copy touched was touched inside the temporary directory, and
+// the move is what makes the copy real. Say where those paths are now: a
+// caller that walks touchedPaths to clean up can only act on a path that
+// exists, and until the move is recorded every one of them named the
+// temporary directory the copy had just left.
+function recordTemporaryDirectoryMove(
+  touchedPaths: TouchedPaths,
+  from: string,
+  to: string,
+): void {
+  const relocate = (value: string): string =>
+    value === from || isPathInside(from, value)
+      ? path.join(to, path.relative(from, value))
+      : value;
+
+  for (const copied of touchedPaths.copiedDirectories) {
+    copied.to = relocate(copied.to);
+  }
+  for (const renamed of touchedPaths.renamedFiles) {
+    renamed.from = relocate(renamed.from);
+    renamed.to = relocate(renamed.to);
+  }
+  touchedPaths.repairedFiles = touchedPaths.repairedFiles.map(relocate);
+}
+
 function removeTemporaryDirectory(
   temporaryDirectory: string | undefined,
   touchedPaths: TouchedPaths,
@@ -822,6 +847,11 @@ export function copyImageBetweenProfiles(
     }
 
     fs.renameSync(temporaryDirectory, destinationImage.directory);
+    recordTemporaryDirectoryMove(
+      touchedPaths,
+      temporaryDirectory,
+      destinationImage.directory,
+    );
     temporaryDirectory = undefined;
     const verification = verifyDestinationImage(
       destinationImage.directory,

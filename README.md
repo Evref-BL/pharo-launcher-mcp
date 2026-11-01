@@ -5,9 +5,8 @@ process.
 
 It exposes Pharo Launcher image, template, VM, and process operations as MCP
 tools. An MCP client can ask it what Launcher installation it resolved, list
-templates, create or copy images, launch images, package images, inspect running
-Pharo processes, and delete caller-owned images or VMs when explicitly
-confirmed.
+templates, create or copy images, start images, package images, inspect running
+Pharo processes, and delete caller-owned images or VMs.
 
 The server works outside the target images. It does not install code into those
 images, keep project state, or decide which images are safe to mutate. It is the
@@ -36,6 +35,18 @@ npx @evref-bl/pharo-launcher-mcp
 
 The package also provides the `pharo-launcher-mcp` executable when installed in
 a project or globally.
+
+A host that embeds the server rather than spawning it imports what the package
+exports:
+
+```js
+import { callTool, createServer } from "@evref-bl/pharo-launcher-mcp";
+import { loadPharoLauncherConfig } from "@evref-bl/pharo-launcher-mcp/config";
+import { defaultLauncherDir } from "@evref-bl/pharo-launcher-mcp/platform";
+```
+
+Those three are the published surface. The executable is reachable as a
+command, not as an import: loading it starts a server on stdio.
 
 ## Terms
 
@@ -152,7 +163,7 @@ Launch an image:
 
 ```json
 {
-  "tool": "pharo_launcher_image_launch",
+  "tool": "pharo_launcher_image_start",
   "arguments": {
     "imageName": "sample-130-copy",
     "displayMode": "headless",
@@ -176,18 +187,14 @@ Package an image:
 
 ## Safety Model
 
-Mutating tools are explicit. The destructive ones require `confirm: true`:
+Mutating tools are explicit, and name what they act on. There is no
+confirmation argument: calling a tool is the decision to call it, and a second
+spelling of the same intent protects nothing.
 
-```text
-pharo_launcher_image_delete
-pharo_launcher_image_recreate
-pharo_launcher_vm_delete
-pharo_launcher_process_kill
-pharo_launcher_raw_command
-```
-
-`pharo_launcher_process_kill` requires exactly one target: `pid` or
-`imageName`. Prefer a recorded PID when cleaning up a known launch.
+What does protect something is the target. `pharo_launcher_process_kill`
+requires exactly one of `pid` or `imageName`, and a PID stops that process
+alone. Prefer the PID a detached launch returned when cleaning up a launch you
+own.
 
 `pharo_launcher_image_create` and `pharo_launcher_image_copy` verify the target
 image after Launcher reports success. If the target image cannot be listed and

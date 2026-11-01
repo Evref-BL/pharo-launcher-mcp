@@ -108,7 +108,7 @@ async function deleteImageIfPresent(
   await callLiveTool(
     profile,
     "pharo_launcher_image_delete",
-    { imageName, force: true, confirm: true },
+    { imageName, force: true },
     { timeoutMs: lifecycleTimeoutMs },
   ).catch(() => undefined);
 }
@@ -120,7 +120,7 @@ async function killProcessIfPresent(
   await callLiveTool(
     profile,
     "pharo_launcher_process_kill",
-    { imageName, confirm: true },
+    { imageName },
     { timeoutMs: lifecycleTimeoutMs },
   ).catch(() => undefined);
 }
@@ -246,7 +246,7 @@ describe("PharoLauncher image lifecycle integration", () => {
 
       const launched = await callLiveTool(
         profile,
-        "pharo_launcher_image_launch",
+        "pharo_launcher_image_start",
         {
           imageName: copiedImageName,
           detached: true,
@@ -264,7 +264,7 @@ describe("PharoLauncher image lifecycle integration", () => {
       const killed = await callLiveTool(
         profile,
         "pharo_launcher_process_kill",
-        { imageName: copiedImageName, confirm: true },
+        { imageName: copiedImageName },
         { timeoutMs: lifecycleTimeoutMs },
       );
       expectSuccessfulTool("process kill", killed);
@@ -272,7 +272,7 @@ describe("PharoLauncher image lifecycle integration", () => {
       const recreated = await callLiveTool(
         profile,
         "pharo_launcher_image_recreate",
-        { imageName: copiedImageName, confirm: true },
+        { imageName: copiedImageName },
         { timeoutMs: lifecycleTimeoutMs },
       );
       expectSuccessfulTool("image recreate", recreated);
@@ -280,7 +280,7 @@ describe("PharoLauncher image lifecycle integration", () => {
       const deletedCopy = await callLiveTool(
         profile,
         "pharo_launcher_image_delete",
-        { imageName: copiedImageName, force: true, confirm: true },
+        { imageName: copiedImageName, force: true },
         { timeoutMs: lifecycleTimeoutMs },
       );
       expectSuccessfulTool("image delete copy", deletedCopy);
@@ -288,7 +288,7 @@ describe("PharoLauncher image lifecycle integration", () => {
       const deletedSource = await callLiveTool(
         profile,
         "pharo_launcher_image_delete",
-        { imageName: sourceImageName, force: true, confirm: true },
+        { imageName: sourceImageName, force: true },
         { timeoutMs: lifecycleTimeoutMs },
       );
       expectSuccessfulTool("image delete source", deletedSource);

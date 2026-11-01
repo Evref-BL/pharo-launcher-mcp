@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   callLiveTool,
+  expectOkTool,
   type IntegrationProfile,
   prepareIntegrationProfile,
   removeIntegrationProfile,
@@ -237,13 +238,12 @@ describe("PharoLauncher live integration", () => {
     });
   });
 
-  it("keeps raw command access behind an explicit confirmed escape hatch", async () => {
+  it("keeps raw command access as the escape hatch", async () => {
     const { result, body } = await callLiveTool(
       profile,
       "pharo_launcher_raw_command",
       {
         args: ["--version"],
-        confirm: true,
       },
     );
 

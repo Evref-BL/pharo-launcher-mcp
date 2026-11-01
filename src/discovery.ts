@@ -90,16 +90,6 @@ export type LauncherCliRunner = (
   options?: { config?: PharoLauncherConfig; timeoutMs?: number },
 ) => Promise<LauncherCliResult>;
 
-export interface PharoLauncherDeclaredImage {
-  imageId: string;
-  imageName?: string;
-  projectId?: string;
-  workspaceId?: string;
-  targetId?: string;
-  active?: boolean;
-  status?: string;
-}
-
 export interface PharoLauncherInventoryDiagnostic {
   severity: "error" | "warning";
   code: string;
@@ -239,7 +229,6 @@ export interface PharoLauncherInventoryReport {
   images: {
     existing: PharoImageInventoryEntry[];
     existingKnown: boolean;
-    declared: PharoLauncherDeclaredImage[];
   };
   probes: {
     templateList?: PharoLauncherInventoryProbe;
@@ -250,7 +239,6 @@ export interface PharoLauncherInventoryReport {
 }
 
 export interface PharoLauncherInventoryOptions {
-  declaredImages?: readonly PharoLauncherDeclaredImage[];
   templateCreateRequest?: PharoLauncherTemplateCreateRequest;
   timeoutMs?: number;
 }
@@ -549,7 +537,6 @@ export function getPharoLauncherConfigReport(
     installationLauncherImage: pathStatus(config.installationLauncherImage),
     launcherImage: pathStatus(config.launcherImage),
     launcherScript: resolveLauncherScriptDetails({
-      launcherDir: config.launcherDir,
       env: {
         ...process.env,
         ...(config.launcherScript
@@ -769,12 +756,16 @@ function readInstalledTemplatesFromFile(
           template !== undefined,
       );
   } catch (error) {
+    // Say why. The caller cannot tell a permission error from malformed STON
+    // from the file name, and this is the only place that knows.
     diagnostics.push({
       severity: "warning",
       code: "installed_template_source_unreadable",
-      message: `Installed template source could not be read: ${filePath}`,
+      message: `Installed template source could not be read: ${filePath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
       action:
-        "Check file permissions or remove the unreadable template source from the active profile.",
+        "Read the error above, then repair, replace or remove that template source in the active profile.",
       path: filePath,
     });
     return [];
@@ -1035,13 +1026,30 @@ function vmNameMatchesTemplate(value: string, template: PharoTemplateInventoryEn
     normalized.includes(version) ||
     Boolean(majorVersion && normalized.includes(majorVersion));
   const architecture = template.architecture?.toLowerCase();
-  const architectureMatches =
-    !architecture ||
-    normalized.includes(architecture) ||
-    (architecture === "64" && /\b(?:x64|64|64bit)\b/.test(normalized)) ||
-    (architecture === "arm64" && /\b(?:arm64|aarch64)\b/.test(normalized));
 
-  return versionMatches && architectureMatches;
+  return (
+    versionMatches &&
+    (!architecture || vmNameMatchesArchitecture(normalized, architecture))
+  );
+}
+
+// architectureFromTemplate spells Apple Silicon "arm64" and x86-64 "64", and
+// "arm64" contains "64", so asking whether the VM's name contains the
+// architecture proves an arm64 VM ready for an x86-64 template.
+function vmNameMatchesArchitecture(
+  normalized: string,
+  architecture: string,
+): boolean {
+  const arm = /arm64|aarch64/.test(normalized);
+  if (architecture === "arm64") {
+    return arm;
+  }
+
+  if (architecture === "64") {
+    return !arm && normalized.includes("64");
+  }
+
+  return normalized.includes(architecture);
 }
 
 function findLocalVmProof(
@@ -1360,7 +1368,6 @@ export async function getPharoLauncherInventory(
     images: {
       existing: existingImages,
       existingKnown,
-      declared: [...(options.declaredImages ?? [])],
     },
     probes,
     ...(readiness ? { templateCreateReadiness: readiness } : {}),

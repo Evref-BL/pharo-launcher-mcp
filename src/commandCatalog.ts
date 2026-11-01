@@ -19,11 +19,6 @@ const includeRawSchema = {
   description:
     "Include raw Pharo Launcher stdout and stderr in the tool result.",
 } as const;
-const confirmationSchema = {
-  type: "boolean",
-  const: true,
-  description: "Must be true for destructive actions.",
-} as const;
 const formatSchema = {
   type: "string",
   enum: ["ston", "text"],
@@ -132,12 +127,6 @@ function optionalDisplayMode(
   }
 
   throw new ToolInputError("displayMode must be headless or interactive");
-}
-
-function requireConfirmation(input: Record<string, unknown>, toolName: string): void {
-  if (input.confirm !== true) {
-    throw new ToolInputError(`${toolName} requires confirm: true`);
-  }
 }
 
 function addOption(args: string[], flag: string, value: string | undefined): void {
@@ -249,15 +238,15 @@ function imageCreateFromSha(input: unknown): string[] {
 
 function imageDelete(input: unknown): string[] {
   const object = inputObject(input);
-  requireConfirmation(object, "pharo_launcher_image_delete");
   const args = ["image", "delete"];
   addFlag(args, "--force", optionalBoolean(object, "force"));
   args.push(requiredString(object, "imageName"));
   return args;
 }
 
-function imageLaunch(input: unknown): string[] {
+function imageStart(input: unknown): string[] {
   const object = inputObject(input);
+  // PharoLauncher's subcommand is still `launch`; only the tool name moved.
   const args = ["image", "launch"];
   addOption(args, "--script", optionalString(object, "script"));
   addOption(args, "--displayMode", optionalDisplayMode(object));
@@ -278,7 +267,6 @@ function imagePackage(input: unknown): string[] {
 
 function imageRecreate(input: unknown): string[] {
   const object = inputObject(input);
-  requireConfirmation(object, "pharo_launcher_image_recreate");
   return ["image", "recreate", requiredString(object, "imageName")];
 }
 
@@ -301,7 +289,6 @@ function imageBisect(input: unknown): string[] {
 
 function processKill(input: unknown): string[] {
   const object = inputObject(input);
-  requireConfirmation(object, "pharo_launcher_process_kill");
   const args = ["process", "kill"];
   const pid = optionalStringOrNumber(object, "pid");
   const imageName = optionalString(object, "imageName");
@@ -351,7 +338,6 @@ function templateList(input: unknown): string[] {
 
 function vmDelete(input: unknown): string[] {
   const object = inputObject(input);
-  requireConfirmation(object, "pharo_launcher_vm_delete");
   return ["vm", "delete", requiredString(object, "vmId")];
 }
 
@@ -466,14 +452,13 @@ export const launcherCommandTools: LauncherCommandTool[] = [
   },
   {
     name: "pharo_launcher_image_delete",
-    description: "Delete a local image. Requires imageName and confirm: true.",
+    description: "Delete a local image.",
     inputSchema: objectSchema(
       {
         imageName: stringSchema,
         force: booleanSchema,
-        confirm: confirmationSchema,
       },
-      ["imageName", "confirm"],
+      ["imageName"],
     ),
     buildArgs: imageDelete,
   },
@@ -488,20 +473,6 @@ export const launcherCommandTools: LauncherCommandTool[] = [
       ["imageName"],
     ),
     buildArgs: imageInfo,
-  },
-  {
-    name: "pharo_launcher_image_launch",
-    description: "Launch an image, optionally with a launch script.",
-    inputSchema: objectSchema(
-      {
-        imageName: stringSchema,
-        script: stringSchema,
-        detached: booleanSchema,
-        displayMode: displayModeSchema,
-      },
-      ["imageName"],
-    ),
-    buildArgs: imageLaunch,
   },
   {
     name: "pharo_launcher_image_list",
@@ -528,28 +499,33 @@ export const launcherCommandTools: LauncherCommandTool[] = [
   },
   {
     name: "pharo_launcher_image_recreate",
-    description: "Recreate a local image. Requires imageName and confirm: true.",
+    description: "Recreate a local image.",
+    inputSchema: objectSchema({ imageName: stringSchema }, ["imageName"]),
+    buildArgs: imageRecreate,
+  },
+  {
+    name: "pharo_launcher_image_start",
+    description: "Start an image, optionally with a launch script.",
     inputSchema: objectSchema(
       {
         imageName: stringSchema,
-        confirm: confirmationSchema,
+        script: stringSchema,
+        detached: booleanSchema,
+        displayMode: displayModeSchema,
       },
-      ["imageName", "confirm"],
+      ["imageName"],
     ),
-    buildArgs: imageRecreate,
+    buildArgs: imageStart,
   },
   {
     name: "pharo_launcher_process_kill",
     description:
-      "Kill a running Pharo process by image name or PID. Requires confirm: true.",
-    inputSchema: objectSchema(
-      {
-        imageName: stringSchema,
-        pid: { anyOf: [stringSchema, { type: "number" }] },
-        confirm: confirmationSchema,
-      },
-      ["confirm"],
-    ),
+      "Kill a running Pharo process by image name or PID. A PID stops that " +
+      "process alone; an image name stops every process running that image.",
+    inputSchema: objectSchema({
+      imageName: stringSchema,
+      pid: { anyOf: [stringSchema, { type: "number" }] },
+    }),
     buildArgs: processKill,
   },
   {
@@ -590,14 +566,8 @@ export const launcherCommandTools: LauncherCommandTool[] = [
   },
   {
     name: "pharo_launcher_vm_delete",
-    description: "Delete a VM executable and dependencies. Requires confirm: true.",
-    inputSchema: objectSchema(
-      {
-        vmId: stringSchema,
-        confirm: confirmationSchema,
-      },
-      ["vmId", "confirm"],
-    ),
+    description: "Delete a VM executable and dependencies.",
+    inputSchema: objectSchema({ vmId: stringSchema }, ["vmId"]),
     buildArgs: vmDelete,
   },
   {
@@ -646,17 +616,12 @@ export function rawCommandArgs(input: unknown): string[] {
     );
   }
 
-  if (object.confirm !== true) {
-    throw new ToolInputError("pharo_launcher_raw_command requires confirm: true");
-  }
-
   return [...args];
 }
 
 export const rawCommandTool: LauncherCommandTool = {
   name: "pharo_launcher_raw_command",
-  description:
-    "Run raw PharoLauncher clap args as an escape hatch. Requires confirm: true.",
+  description: "Run raw PharoLauncher clap args as an escape hatch.",
   inputSchema: objectSchema(
     {
       args: {
@@ -664,9 +629,8 @@ export const rawCommandTool: LauncherCommandTool = {
         items: stringSchema,
         minItems: 1,
       },
-      confirm: confirmationSchema,
     },
-    ["args", "confirm"],
+    ["args"],
   ),
   buildArgs: rawCommandArgs,
 };

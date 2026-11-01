@@ -12,20 +12,22 @@ only inspect local paths.
 | `pharo_launcher_config` | No | Reports resolved installation, profile, wrapper, and configuration paths. |
 | `pharo_launcher_version` | Yes | Runs `--version`. |
 | `pharo_launcher_validate_installation` | Yes | Checks resolved paths and runs `--version`. |
-| `pharo_launcher_inventory` | Yes | Reports profile roots, templates, image identities, declared image handles, probes, and diagnostics. |
+| `pharo_launcher_inventory` | Yes | Reports profile roots, templates, image identities, probes, and diagnostics. |
 
-`pharo_launcher_inventory` accepts optional `declaredImages` supplied by a
-scoped caller:
+`pharo_launcher_inventory` reports what the host has. It holds no caller state
+and takes no declaration of what should exist; a caller that tracks its own
+images matches them against `images.existing` itself.
+
+`pharo_launcher_inventory` accepts an optional `templateCreateRequest` and
+answers whether that image could be created offline, without downloading or
+mutating anything:
 
 ```json
 {
-  "declaredImages": [
-    {
-      "imageId": "image:sample-130",
-      "imageName": "sample-130",
-      "status": "active"
-    }
-  ]
+  "templateCreateRequest": {
+    "templateName": "Pharo 13.0 - 64bit",
+    "templateCategory": "Official distributions"
+  }
 }
 ```
 
@@ -38,21 +40,21 @@ scoped caller:
 | `pharo_launcher_image_create` | `templateName`, `newImageName`, `templateCategory`, `dev`, `noLaunch` |
 | `pharo_launcher_image_copy` | `imageName`, `newImageName` |
 | `pharo_launcher_image_copy_between_profiles` | `sourceProfile`, `destinationProfile`, `sourceImageName`, `destinationImageName` |
-| `pharo_launcher_image_launch` | `imageName`, `script`, `detached`, `displayMode` |
+| `pharo_launcher_image_start` | `imageName`, `script`, `detached`, `displayMode` |
 | `pharo_launcher_image_package` | `imageName`, `location`, `zip`, `vm` |
 | `pharo_launcher_image_bisect` | `pharoVersion` |
 | `pharo_launcher_image_create_from_build` | `buildNumber`, `pharoVersion`, `newImageName` |
 | `pharo_launcher_image_create_from_pull_request` | `pullRequest`, `newImageName`, `templateName`, `templateCategory` |
 | `pharo_launcher_image_create_from_repo` | `repository`, `newImageName`, `templateName`, `templateCategory`, `subfolder`, `baseline`, `group` |
 | `pharo_launcher_image_create_from_sha` | `sha`, `pharoVersion`, `newImageName` |
-| `pharo_launcher_image_delete` | `imageName`, `force`, `confirm: true` |
-| `pharo_launcher_image_recreate` | `imageName`, `confirm: true` |
+| `pharo_launcher_image_delete` | `imageName`, `force` |
+| `pharo_launcher_image_recreate` | `imageName` |
 
 `pharo_launcher_image_create` and `pharo_launcher_image_copy` verify the target
 image after Launcher returns. A successful Launcher exit is not enough: the MCP
 result is successful only when the target image can be listed and inspected.
 
-`pharo_launcher_image_launch` supports:
+`pharo_launcher_image_start` supports:
 
 - `displayMode: "headless"` or `"interactive"`
 - `detached: true` for detached launches with log paths in the result
@@ -95,7 +97,7 @@ profile source list is usable and probes `template list`.
 | `pharo_launcher_vm_list` | `vmId`, table options |
 | `pharo_launcher_vm_info` | `vmId` |
 | `pharo_launcher_vm_update` | `vmId` |
-| `pharo_launcher_vm_delete` | `vmId`, `confirm: true` |
+| `pharo_launcher_vm_delete` | `vmId` |
 
 VM update can download or install VM files. Use profile mode when automation
 needs VM state isolated from a user's normal Launcher installation.
@@ -105,15 +107,19 @@ needs VM state isolated from a user's normal Launcher installation.
 | Tool | Arguments |
 | --- | --- |
 | `pharo_launcher_process_list` | none |
-| `pharo_launcher_process_kill` | exactly one of `pid` or `imageName`, plus `confirm: true` |
+| `pharo_launcher_process_kill` | exactly one of `pid` or `imageName` |
 
 On Windows, process tools use PowerShell/CIM. On macOS and Linux, they use
 `ps -axo pid=,args=`. Unsupported platforms return an explicit unsupported
 backend error.
 
-Prefer PID-based cleanup when a prior detached launch returned a PID. Image-name
-cleanup can match more than one process if multiple command lines contain the
-same image name.
+A kill matches the target it was given. An all-digit target is a PID and
+matches that process only. Any other target is an image, and matches a process
+whose image name or image path is exactly that. An image launched more than
+once has more than one process, so an image-name kill can still stop several.
+
+Prefer the PID returned by a prior detached launch when cleaning up a launch
+you own.
 
 ## Raw Command
 
@@ -122,12 +128,9 @@ covered by a dedicated MCP tool:
 
 ```json
 {
-  "args": ["image", "list", "--ston"],
-  "confirm": true
+  "args": ["image", "list", "--ston"]
 }
 ```
-
-It always requires `confirm: true`.
 
 ## Result Envelope
 
@@ -162,18 +165,15 @@ Launcher tools return JSON shaped like this:
 Use `ok` and normalized `data` for program flow. Treat `raw.stdout` and
 `raw.stderr` as diagnostics.
 
-## Confirmation Gates
+## Mutation Boundary
 
-These tools require `confirm: true`:
+No tool takes a confirmation argument. A confirmation could only say that the
+caller meant to call the tool, which calling it already says; it never proved
+the image, VM, profile, or process was caller-owned, and that is the thing
+worth knowing.
 
-```text
-pharo_launcher_image_delete
-pharo_launcher_image_recreate
-pharo_launcher_vm_delete
-pharo_launcher_process_kill
-pharo_launcher_raw_command
-```
-
-The confirmation flag only confirms that the caller meant to cross that tool's
-mutation boundary. It does not prove the image, VM, profile, or process is
-caller-owned.
+Deciding what is caller-owned is the caller's job. What this server offers
+towards it: `pharo_launcher_inventory` and `pharo_launcher_image_list` for what
+exists, `pharo_launcher_process_list` for what runs, profile scoping for
+keeping a caller's images and VMs out of the user's own Launcher state, and
+targets that mean one thing — a PID stops one process.

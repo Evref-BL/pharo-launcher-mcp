@@ -94,6 +94,21 @@ describe("callTool", () => {
     expect(result.content[0]?.text).toContain("\"service\": \"pharo-launcher-mcp\"");
   });
 
+  it("reports the version the package was published with", async () => {
+    const packaged = JSON.parse(
+      fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { version: string };
+    const runner: LauncherCliRunner = async () => {
+      throw new Error("runner should not be called");
+    };
+
+    const body = parseJsonResult(
+      await callTool("pharo_launcher_health", {}, { runner }),
+    );
+
+    expect(body.version).toBe(packaged.version);
+  });
+
   it("returns resolved configuration without invoking PharoLauncher", async () => {
     const runner: LauncherCliRunner = async () => {
       throw new Error("runner should not be called");
@@ -139,7 +154,7 @@ describe("callTool", () => {
     expect(body.ok).toBe(false);
   });
 
-  it("exposes inventory with caller-declared image handles", async () => {
+  it("exposes inventory and template create readiness", async () => {
     const config = tempLauncherConfig();
     const calls: readonly string[][] = [];
     const runner: LauncherCliRunner = async (args) => {
@@ -160,13 +175,6 @@ describe("callTool", () => {
     const result = await callTool(
       "pharo_launcher_inventory",
       {
-        declaredImages: [
-          {
-            imageId: "dev",
-            imageName: "Workspace-dev",
-            workspaceId: "workspace",
-          },
-        ],
         templateCreateRequest: {
           templateName: "Pharo 13",
           templateCategory: "stable",
@@ -193,13 +201,6 @@ describe("callTool", () => {
       },
       images: {
         existing: [],
-        declared: [
-          {
-            imageId: "dev",
-            imageName: "Workspace-dev",
-            workspaceId: "workspace",
-          },
-        ],
       },
       templateCreateReadiness: {
         status: "missing",
@@ -698,13 +699,15 @@ describe("callTool", () => {
     const result = await callTool(
       "pharo_launcher_image_delete",
       {
-        imageName: "Task",
+        imageName: 42,
       },
       { runner },
     );
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toContain("requires confirm: true");
+    expect(result.content[0]?.text).toContain(
+      "imageName must be a non-empty string",
+    );
   });
 
   it("bootstraps scoped template sources after template update", async () => {
@@ -823,7 +826,6 @@ describe("callTool", () => {
       "pharo_launcher_raw_command",
       {
         args: ["image", "list"],
-        confirm: true,
       },
       { runner },
     );

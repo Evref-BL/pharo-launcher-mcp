@@ -18,8 +18,14 @@
     "type": "git",
     "url": "git+https://github.com/Evref-BL/pharo-launcher-mcp.git"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
+  "exports": {
+    ".": "./dist/server.js",
+    "./config": "./dist/config.js",
+    "./platform": "./dist/platform.js",
+    "./package.json": "./package.json"
+  },
   "files": [
     "bin",
     "docs",
@@ -37,7 +43,7 @@
     "check": "npm run typecheck && npm run build && npm test",
     "build": "tsc -p tsconfig.json",
     "prepack": "npm run build",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.check.json",
     "test": "npm run test:unit",
     "test:unit": "vitest run --exclude **/*.integration.test.ts",
     "coverage": "vitest run --exclude **/*.integration.test.ts --coverage --coverage.reporter=text --coverage.reporter=lcov",

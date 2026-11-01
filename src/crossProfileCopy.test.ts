@@ -231,9 +231,18 @@ describe("cross-profile image copy", () => {
       expect(
         fs.readFileSync(path.join(destinationDirectory, "meta-inf.ston"), "utf8"),
       ).toContain("RelativePath [ 'Task', 'Task.image' ]");
-      expect(result.touchedPaths.copiedDirectories[0]).toMatchObject({
+      // Where the copy landed, not where it passed through: every path in
+      // touchedPaths has to exist for a caller to act on it.
+      expect(result.touchedPaths.copiedDirectories[0]).toEqual({
         from: imageDirectory(sourceRoot, "Base"),
+        to: destinationDirectory,
       });
+      for (const renamed of result.touchedPaths.renamedFiles) {
+        expect(fs.existsSync(renamed.to)).toBe(true);
+      }
+      for (const repaired of result.touchedPaths.repairedFiles) {
+        expect(fs.existsSync(repaired)).toBe(true);
+      }
       expect(result.cleanup.destinationImageDirectory).toBe(destinationDirectory);
     } finally {
       removeProfileRoot(sourceRoot);

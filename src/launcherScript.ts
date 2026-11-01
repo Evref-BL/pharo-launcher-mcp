@@ -3,10 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundledLauncherScriptName } from "./platform.js";
 
+// The script is the environment's or the bundled one. Where PharoLauncher is
+// installed does not come into it.
 export interface ResolveLauncherScriptOptions {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
-  launcherDir: string;
 }
 
 export type LauncherScriptSource = "env" | "bundled" | "none";
