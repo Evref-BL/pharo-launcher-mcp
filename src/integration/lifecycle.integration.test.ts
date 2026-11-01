@@ -5,6 +5,7 @@ import {
   callLiveTool,
   expectOkTool,
   type IntegrationProfile,
+  localPharoVersions,
   prepareIntegrationProfile,
   removeIntegrationProfile,
   stringField,
@@ -50,17 +51,7 @@ function expectSuccessfulTool(
 }
 
 async function firstTemplate(profile: IntegrationProfile): Promise<TemplateChoice> {
-  const vms = await callLiveTool(
-    profile,
-    "pharo_launcher_vm_list",
-    { format: "ston" },
-    { timeoutMs: lifecycleTimeoutMs },
-  );
-  expect(vms.result.isError).toBeUndefined();
-  expectOkTool(vms.body);
-  const availableVersions = dataArray(vms.body)
-    .map((vm) => (typeof vm.id === "string" ? vm.id.match(/^(\d+)-/)?.[1] : undefined))
-    .filter((version): version is string => Boolean(version));
+  const availableVersions = localPharoVersions(profile);
 
   const update = await callLiveTool(
     profile,
@@ -219,16 +210,6 @@ describe("PharoLauncher image lifecycle integration", () => {
       );
       expectSuccessfulTool("image copy", copied);
 
-      const packageDirectory = path.join(profile.stateRoot, "packages");
-      const packaged = await callLiveTool(
-        profile,
-        "pharo_launcher_image_package",
-        { imageName: copiedImageName, location: packageDirectory },
-        { timeoutMs: lifecycleTimeoutMs },
-      );
-      expectSuccessfulTool("image package", packaged);
-      expect(fs.existsSync(packageDirectory)).toBe(true);
-
       const launchScript = path.join(
         profile.stateRoot,
         "init-scripts",
@@ -268,14 +249,6 @@ describe("PharoLauncher image lifecycle integration", () => {
         { timeoutMs: lifecycleTimeoutMs },
       );
       expectSuccessfulTool("process kill", killed);
-
-      const recreated = await callLiveTool(
-        profile,
-        "pharo_launcher_image_recreate",
-        { imageName: copiedImageName },
-        { timeoutMs: lifecycleTimeoutMs },
-      );
-      expectSuccessfulTool("image recreate", recreated);
 
       const deletedCopy = await callLiveTool(
         profile,

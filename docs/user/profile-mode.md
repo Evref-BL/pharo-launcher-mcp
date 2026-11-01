@@ -97,11 +97,10 @@ probes `template list`.
 If template listing still fails, inspect:
 
 ```text
-pharo_launcher_inventory
 pharo_launcher_config
 ```
 
-The inventory diagnostics include missing or unreadable profile directories and
+Its report includes missing or unreadable profile directories and
 configuration files.
 
 ## Image Launch In Profile Mode
@@ -121,12 +120,10 @@ Launch supports:
 }
 ```
 
-`displayMode` can be `headless` or `interactive`. Detached launches return the
-spawned PID when available and log paths under the profile log directory.
-
-Profile-scoped `pharo_launcher_image_create_from_build` is refused before
-Launcher is invoked. That Launcher path can launch automatically and may use VM
-state outside `PHARO_LAUNCHER_MCP_VMS_DIR`.
+`displayMode` can be `headless` or `interactive`, and only here: PharoLauncher's
+own `image launch` has no display mode, so outside profile mode a launch that
+asks for one is refused. Detached launches return the spawned PID and log paths
+under the profile log directory.
 
 ## Cross-Profile Image Copy
 

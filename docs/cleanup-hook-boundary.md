@@ -13,16 +13,15 @@ These checks are safe for planning and static verification:
 - `git status --short --branch`
 - source review of command schemas, parser behavior, result envelopes, and
   timeout handling
-- `pharo_launcher_health`, because it reports resolved paths without invoking
-  Pharo Launcher
+- `pharo-launcher-mcp --health`, because it reports resolved paths without
+  invoking Pharo Launcher
 - `pharo_launcher_config`, because it reports resolved configuration without
   invoking Pharo Launcher
 
 These checks inspect live host state or invoke Pharo Launcher. Run them only
 when the caller has chosen to cross that boundary:
 
-- `pharo_launcher_version`
-- `pharo_launcher_validate_installation`
+- `pharo-launcher-mcp --version-check` and `--validate-installation`
 - `pharo_launcher_image_list`
 - `pharo_launcher_image_info`
 - `pharo_launcher_process_list`
@@ -51,7 +50,6 @@ The mutation hooks that can participate in cleanup are:
 
 - `pharo_launcher_process_kill`
 - `pharo_launcher_image_delete`
-- `pharo_launcher_image_recreate`, only for explicitly disposable images
 - profile-root cleanup by the caller after logs and diagnostics are retained
 
 The caller must pass either a recorded pid or an owned image name. Ambiguous

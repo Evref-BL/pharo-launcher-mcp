@@ -3,6 +3,7 @@ import {
   callLiveTool,
   expectOkTool,
   type IntegrationProfile,
+  localPharoVersions,
   prepareIntegrationProfile,
   removeIntegrationProfile,
   stringField,
@@ -77,17 +78,7 @@ function expectSuccessfulTool(
 }
 
 async function firstTemplate(profile: IntegrationProfile): Promise<TemplateChoice> {
-  const vms = await callLiveTool(
-    profile,
-    "pharo_launcher_vm_list",
-    { format: "ston" },
-    { timeoutMs: copyTimeoutMs },
-  );
-  expect(vms.result.isError).toBeUndefined();
-  expectOkTool(vms.body);
-  const availableVersions = dataArray(vms.body)
-    .map((vm) => (typeof vm.id === "string" ? vm.id.match(/^(\d+)-/)?.[1] : undefined))
-    .filter((version): version is string => Boolean(version));
+  const availableVersions = localPharoVersions(profile);
 
   const update = await callLiveTool(
     profile,

@@ -83,26 +83,7 @@ function templateSourceBootstrapDiagnostic(
     diagnostic:
       "Pharo Launcher could not list default templates because the active template source inventory is empty or not bootstrapped.",
     action:
-      "Inspect pharo_launcher_inventory diagnostics, verify PHARO_LAUNCHER_MCP_TEMPLATE_SOURCES_DIR, and refresh or seed the active profile template sources before planning image creation.",
-  };
-}
-
-function scopedFromBuildVmStoreDiagnostic(
-  toolName: string,
-  result: LauncherCliResult,
-): Pick<LauncherCommandResult, "diagnostic" | "action"> | undefined {
-  if (
-    toolName !== "pharo_launcher_image_create_from_build" ||
-    !result.stderr.includes("profile-scoped image create fromBuild")
-  ) {
-    return undefined;
-  }
-
-  return {
-    diagnostic:
-      "Profile-scoped fromBuild was refused because Pharo Launcher can launch with the default VM store instead of the configured profile VM directory.",
-    action:
-      "Use a non-fromBuild creation path with explicit launch control, or fix Pharo Launcher to initialize PhLVirtualMachineManager from the CLI configuration before fromBuild launch.",
+      "Verify PHARO_LAUNCHER_MCP_TEMPLATE_SOURCES_DIR, then refresh or seed the active profile template sources with pharo_launcher_template_update before planning image creation.",
   };
 }
 
@@ -131,7 +112,7 @@ function scopedImageLaunchVmStoreDiagnostic(
     diagnostic:
       "Profile-scoped image launch could not prepare the profile-local image and VM paths needed for direct launch.",
     action:
-      "Inspect image info, PHARO_LAUNCHER_MCP_IMAGES_DIR, PHARO_LAUNCHER_MCP_VMS_DIR, and pharo_launcher_vm_update output before retrying the launch.",
+      "Inspect pharo_launcher_image_info, PHARO_LAUNCHER_MCP_IMAGES_DIR and PHARO_LAUNCHER_MCP_VMS_DIR before retrying the launch.",
   };
 }
 
@@ -201,7 +182,6 @@ export function normalizeLauncherResult(
   const diagnostic = templateSourceBootstrapDiagnostic(toolName, args, result);
   const commandDiagnostic =
     diagnostic ??
-    scopedFromBuildVmStoreDiagnostic(toolName, result) ??
     scopedImageLaunchVmStoreDiagnostic(toolName, result) ??
     (!ok
       ? failedOutputDiagnostic(

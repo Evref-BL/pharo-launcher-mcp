@@ -3,7 +3,6 @@ import {
   parseLauncherImagesFromSton,
   parseLauncherProcessesFromText,
   parseLauncherTemplatesFromSton,
-  parseLauncherVmsFromSton,
   parseLauncherImagesFromText,
   parseLauncherOutput,
 } from "./parser.js";
@@ -133,41 +132,6 @@ describe("result normalizer", () => {
     expect(result.ok).toBe(false);
     expect(result.diagnostic).toContain("Image template category 'unknown'");
     expect(result.action).toBeUndefined();
-  });
-
-  it("normalizes profile-scoped fromBuild refusals as VM store diagnostics", () => {
-    const result = normalizeLauncherResult(
-      "pharo_launcher_image_create_from_build",
-      [
-        "image",
-        "create",
-        "fromBuild",
-        "--pharoVersion",
-        "13",
-        "--newImageName",
-        "ScopedBuild",
-        "1",
-      ],
-      {
-        ...cliResult,
-        exitCode: 1,
-        stdout: "",
-        stderr:
-          "Refusing profile-scoped image create fromBuild before invoking Pharo Launcher.\nThat launch can download or run VMs outside PHARO_LAUNCHER_MCP_VMS_DIR (/tmp/profile/vms).",
-      },
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      diagnostic:
-        "Profile-scoped fromBuild was refused because Pharo Launcher can launch with the default VM store instead of the configured profile VM directory.",
-      action: expect.stringContaining("PhLVirtualMachineManager"),
-      parser: {
-        status: "skipped",
-        format: "text",
-      },
-    });
-    expect(result.raw).toBeUndefined();
   });
 
   it("normalizes profile-scoped image launch refusals as VM store diagnostics", () => {
@@ -319,21 +283,6 @@ describe("result normalizer", () => {
       {
         name: "Pharo 13.0 - 64bit (stable)",
         url: "https://files.pharo.org/image/130/latest-64.zip",
-      },
-    ]);
-  });
-
-  it("extracts LauncherVm models", () => {
-    const vms = parseLauncherVmsFromSton(
-      "OrderedCollection[PhLVirtualMachine{#executableRef:FileLocator{#path:RelativePath['130-x64','Pharo.exe']},#id:'130-x64',#blessing:'stable',#arch:'64'}]",
-    );
-
-    expect(vms).toEqual([
-      {
-        id: "130-x64",
-        architecture: "64",
-        executablePath: "130-x64/Pharo.exe",
-        blessing: "stable",
       },
     ]);
   });

@@ -826,76 +826,25 @@ describe("buildLauncherCliInvocation", () => {
     }
   });
 
-  it("refuses profile-scoped fromBuild before launcher VM store selection can escape", async () => {
-    const stateRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), "pharo-launcher-mcp-from-build-"),
+  it("refuses a display mode it cannot apply", async () => {
+    // PharoLauncher's `image launch` takes --script and --detached, nothing
+    // else. Without a profile this server runs that command rather than the
+    // VM, so there is nowhere to put the mode.
+    const result = await runLauncherCli(
+      ["image", "launch", "--displayMode", "headless", "Task"],
+      {
+        config: launcherConfig({
+          launcherDir: process.cwd(),
+          launcherVm: "unused",
+          launcherImage: "unused",
+          launcherScript: process.execPath,
+        }),
+        timeoutMs: 2_000,
+      },
     );
-    const markerPath = path.join(stateRoot, "spawned.txt");
-    const scriptPath =
-      process.platform === "win32"
-        ? path.join(stateRoot, "launcher.cmd")
-        : path.join(stateRoot, "launcher.sh");
-    const profile = {
-      name: "isolated",
-      stateRoot,
-      launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
-      imagesDir: path.join(stateRoot, "images"),
-      vmsDir: path.join(stateRoot, "vms"),
-      templateSourcesDir: path.join(stateRoot, "templates"),
-      initScriptsDir: path.join(stateRoot, "init-scripts"),
-      logsDir: path.join(stateRoot, "logs"),
-    };
 
-    fs.writeFileSync(
-      scriptPath,
-      process.platform === "win32"
-        ? `@echo off\r\necho spawned > "${markerPath}"\r\n`
-        : `#!/usr/bin/env sh\necho spawned > "${markerPath}"\n`,
-      "utf8",
-    );
-    if (process.platform !== "win32") {
-      fs.chmodSync(scriptPath, 0o755);
-    }
-
-    try {
-      const result = await runLauncherCli(
-        [
-          "image",
-          "create",
-          "fromBuild",
-          "--pharoVersion",
-          "13",
-          "--newImageName",
-          "ScopedBuild",
-          "1",
-        ],
-        {
-          config: launcherConfig({
-            launcherDir: stateRoot,
-            launcherVm: "unused",
-            launcherImage: profile.launcherImage,
-            launcherScript: scriptPath,
-            launcherConfiguration: path.join(
-              stateRoot,
-              "launcher",
-              "pharo-launcher-cli-config.ston",
-            ),
-            profile,
-          }),
-          timeoutMs: 2_000,
-        },
-      );
-
-      expect(result.exitCode).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain("profile-scoped image create fromBuild");
-      expect(result.stderr).toContain("PHARO_LAUNCHER_MCP_VMS_DIR");
-      expect(result.stderr).toContain(profile.vmsDir);
-      expect(result.timedOut).toBe(false);
-      expect(fs.existsSync(markerPath)).toBe(false);
-    } finally {
-      fs.rmSync(stateRoot, { recursive: true, force: true });
-    }
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("needs a scoped launcher profile");
   });
 
   it("captures stdout, stderr, exit code, and duration", async () => {

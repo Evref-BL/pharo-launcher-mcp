@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Start with `pharo_launcher_health` or the local CLI health check:
+Start with the executable's own health check:
 
 ```sh
 npx @evref-bl/pharo-launcher-mcp --health
@@ -41,12 +41,12 @@ If a selected wrapper path exists but is not executable, the command result
 contains a startup diagnostic with the command, args, working directory, PATH,
 and active profile variables.
 
-## `validate_installation` Fails
+## Installation Validation Fails
 
-`pharo_launcher_validate_installation` runs `--version`. If it fails:
+`pharo-launcher-mcp --validate-installation` runs `--version`. If it fails:
 
 1. Run `pharo_launcher_config` and confirm the VM and control image paths.
-2. Run `pharo_launcher_health` and check `launcherScript.exists`.
+2. Run `pharo-launcher-mcp --health` and check `launcherScript.exists`.
 3. If using a profile, confirm the installation control image exists. The
    profile control image is copied from that source before live commands.
 4. Try `node ./dist/index.js --version-check` from a local build to separate MCP
@@ -78,12 +78,12 @@ Run:
 
 ```text
 pharo_launcher_template_update
-pharo_launcher_inventory
+pharo_launcher_template_list
 ```
 
 `template_update` seeds the active profile source list when Launcher leaves it
-missing or empty, then probes `template list`. Inventory diagnostics report
-missing profile directories, missing configuration files, and failed probes.
+missing or empty, then probes `template list`. Its diagnostics report missing
+profile directories, missing configuration files, and failed probes.
 
 ## Image Create Or Copy Reports An Error After Launcher Succeeds
 
@@ -126,11 +126,3 @@ Every Launcher command is bounded by a timeout. Timeout results include:
 A timeout does not authorize broader host cleanup. Cleanup should use only
 recorded image names, profile roots, and PIDs that the caller owns.
 
-## Profile `create_from_build` Is Refused
-
-Profile-scoped `pharo_launcher_image_create_from_build` is refused before
-Launcher starts. That Launcher path can automatically launch the image and may
-download or use VMs outside `PHARO_LAUNCHER_MCP_VMS_DIR`.
-
-Use a non-`fromBuild` creation path with explicit launch control, or run the
-operation outside profile mode when using the normal Launcher state is intended.

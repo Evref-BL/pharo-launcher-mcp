@@ -37,41 +37,6 @@ describe("PharoLauncher live integration", () => {
     removeIntegrationProfile(profile);
   });
 
-  it("reports health for an isolated launcher profile without invoking PharoLauncher", async () => {
-    const { result, body } = await callLiveTool(profile, "pharo_launcher_health");
-
-    expect(result.isError).toBeUndefined();
-    expect(body.ok).toBe(true);
-    expect(body.service).toBe("pharo-launcher-mcp");
-    expect(body).toHaveProperty("config.profile");
-  });
-
-  it("runs the harmless PharoLauncher version call", async () => {
-    const { result, body } = await callLiveTool(profile, "pharo_launcher_version");
-
-    expect(result.isError).toBeUndefined();
-    expect(body.ok).toBe(true);
-    expect(body.version).toEqual(expect.any(String));
-    expect(body.command).toMatchObject({
-      exitCode: 0,
-      timedOut: false,
-    });
-  });
-
-  it("validates resolved paths and the harmless CLI call", async () => {
-    const { result, body } = await callLiveTool(
-      profile,
-      "pharo_launcher_validate_installation",
-    );
-
-    expect(result.isError).toBeUndefined();
-    expect(body.ok).toBe(true);
-    expect(body.harmlessCliCall).toMatchObject({
-      ok: true,
-      args: ["--version"],
-    });
-  });
-
   it("reports resolved configuration for the isolated launcher profile", async () => {
     const { result, body } = await callLiveTool(profile, "pharo_launcher_config");
 
@@ -81,7 +46,7 @@ describe("PharoLauncher live integration", () => {
     expect(body).toHaveProperty("launcherScript");
   });
 
-  it("lists template categories and inspects a template", async () => {
+  it("lists template categories and templates", async () => {
     const update = await callLiveTool(
       profile,
       "pharo_launcher_template_update",
@@ -116,27 +81,6 @@ describe("PharoLauncher live integration", () => {
         format: "ston",
       },
     });
-
-    const template = firstNamedModel(templates.body, "template");
-    const info = await callLiveTool(
-      profile,
-      "pharo_launcher_template_info",
-      {
-        templateName: stringField(template.name, "template.name"),
-        ...(typeof template.category === "string"
-          ? { templateCategory: template.category }
-          : {}),
-      },
-    );
-
-    expect(info.result.isError).toBeUndefined();
-    expect(info.body).toMatchObject({
-      ok: true,
-      command: {
-        exitCode: 0,
-        timedOut: false,
-      },
-    });
   });
 
   it("updates template metadata through the typed tool", async () => {
@@ -153,42 +97,6 @@ describe("PharoLauncher live integration", () => {
       },
       command: {
         args: ["template", "update"],
-        exitCode: 0,
-        timedOut: false,
-      },
-    });
-  });
-
-  it("lists and inspects available VMs", async () => {
-    const vms = await callLiveTool(
-      profile,
-      "pharo_launcher_vm_list",
-      { format: "ston" },
-    );
-    expect(vms.result.isError).toBeUndefined();
-    expect(vms.body).toMatchObject({
-      ok: true,
-      parser: {
-        status: "parsed",
-        format: "ston",
-      },
-    });
-
-    const vm = dataArray(vms.body).find((item) => typeof item.id === "string");
-    if (!vm) {
-      throw new Error("No VM with an id was returned");
-    }
-
-    const info = await callLiveTool(
-      profile,
-      "pharo_launcher_vm_info",
-      { vmId: stringField(vm.id, "vm.id") },
-    );
-
-    expect(info.result.isError).toBeUndefined();
-    expect(info.body).toMatchObject({
-      ok: true,
-      command: {
         exitCode: 0,
         timedOut: false,
       },
@@ -232,26 +140,6 @@ describe("PharoLauncher live integration", () => {
       },
       command: {
         args: ["process", "list"],
-        exitCode: 0,
-        timedOut: false,
-      },
-    });
-  });
-
-  it("keeps raw command access as the escape hatch", async () => {
-    const { result, body } = await callLiveTool(
-      profile,
-      "pharo_launcher_raw_command",
-      {
-        args: ["--version"],
-      },
-    );
-
-    expect(result.isError).toBeUndefined();
-    expect(body).toMatchObject({
-      ok: true,
-      command: {
-        args: ["--version"],
         exitCode: 0,
         timedOut: false,
       },

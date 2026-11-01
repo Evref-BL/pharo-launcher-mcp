@@ -120,3 +120,24 @@ export function stringField(value: unknown, fieldName: string): string {
 
   return value;
 }
+
+/**
+ * The Pharo versions this host already has a VM for.
+ *
+ * `pharo_launcher_vm_list` used to answer this, and a test picking a template
+ * it can create without a download is the only thing that ever asked. The VMs
+ * are directories named `<version>-<architecture>` under the profile's VM
+ * directory, so the answer is a directory listing, not a tool.
+ */
+export function localPharoVersions(profile: IntegrationProfile): string[] {
+  const vmsDir = profile.config.profile?.vmsDir;
+  if (!vmsDir || !fs.existsSync(vmsDir)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(vmsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => /^(\d+)-/.exec(entry.name)?.[1])
+    .filter((version): version is string => Boolean(version));
+}

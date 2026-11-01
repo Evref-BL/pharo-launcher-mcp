@@ -333,6 +333,19 @@ export function launcherArgsForDetachedImageLaunch(
   return args.filter((arg) => arg !== "--detached");
 }
 
+/**
+ * Whether the caller said which display mode it wanted.
+ *
+ * `imageLaunchArgsAndDisplayMode` answers `headless` when nothing was asked
+ * for, so the mode it returns cannot tell a default from a request. Off the
+ * profile path the difference matters: the flag is stripped before the
+ * command is built, so a request that is not refused is a request silently
+ * dropped, and the image opens a window the caller asked it not to.
+ */
+function asksForDisplayMode(args: readonly string[]): boolean {
+  return args.includes("--displayMode");
+}
+
 function imageLaunchArgsAndDisplayMode(
   args: readonly string[],
   startTime: number,
@@ -357,26 +370,6 @@ function imageLaunchArgsAndDisplayMode(
     ),
     displayMode,
   };
-}
-
-function isImageCreateFromBuild(args: readonly string[]): boolean {
-  return args[0] === "image" && args[1] === "create" && args[2] === "fromBuild";
-}
-
-function profileScopedFromBuildDiagnostic(
-  args: readonly string[],
-  config: PharoLauncherConfig,
-): string | undefined {
-  if (!config.profile || !isImageCreateFromBuild(args)) {
-    return undefined;
-  }
-
-  return [
-    "Refusing profile-scoped image create fromBuild before invoking Pharo Launcher.",
-    "Pharo Launcher currently applies the CLI profile imagesDirectory during creation, but fromBuild automatically launches the image without initializing PhLVirtualMachineManager from the CLI configuration.",
-    `That launch can download or run VMs outside PHARO_LAUNCHER_MCP_VMS_DIR (${config.profile.vmsDir}).`,
-    "Use a non-fromBuild creation path with explicit launch control, or fix Pharo Launcher to initialize the VM manager from the CLI configuration before fromBuild launch.",
-  ].join("\n");
 }
 
 export function buildLauncherCliInvocation(
@@ -1091,19 +1084,17 @@ export function runLauncherCli(
   }
   const launcherArgs = imageLaunchOptions.args;
   const config = options.config ?? loadPharoLauncherConfig();
-  const scopedFromBuildDiagnostic = profileScopedFromBuildDiagnostic(
-    launcherArgs,
-    config,
-  );
-  if (scopedFromBuildDiagnostic) {
-    return Promise.resolve({
-      exitCode: 1,
-      stdout: "",
-      stderr: scopedFromBuildDiagnostic,
-      durationMs: Date.now() - startTime,
-      timedOut: false,
-    });
+  if (!config.profile && isImageLaunch(launcherArgs) && asksForDisplayMode(args)) {
+    return Promise.resolve(
+      failedResult(
+        "displayMode needs a scoped launcher profile. PharoLauncher's own " +
+          "image launch has no display mode, so the mode can only be applied " +
+          "where this server launches the VM itself.",
+        startTime,
+      ),
+    );
   }
+
   if (config.profile && isImageLaunch(launcherArgs)) {
     return runProfileScopedImageLaunch(
       launcherArgs,

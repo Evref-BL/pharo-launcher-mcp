@@ -1,35 +1,21 @@
 # Tool Reference
 
 pharo-launcher-mcp exposes MCP tools over stdio. Most tools call Pharo Launcher
-and return a normalized launcher result envelope. Health and configuration tools
-only inspect local paths.
+and return a normalized launcher result envelope.
 
-## Health And Configuration
+Every tool here has a caller. PharoLauncher's CLI covers the rest of its own
+surface, and this server does not wrap a subcommand until something asks it to.
+
+Checking the installation is not a tool, because a caller doing it is not yet
+speaking MCP. The executable answers `--health`, `--version-check`,
+`--validate-installation` and `--probe-images` and exits, which is what a
+preflight needs.
+
+## Configuration
 
 | Tool | Live Launcher invocation | Purpose |
 | --- | --- | --- |
-| `pharo_launcher_health` | No | Reports service version, resolved paths, wrapper source, and existence checks. |
 | `pharo_launcher_config` | No | Reports resolved installation, profile, wrapper, and configuration paths. |
-| `pharo_launcher_version` | Yes | Runs `--version`. |
-| `pharo_launcher_validate_installation` | Yes | Checks resolved paths and runs `--version`. |
-| `pharo_launcher_inventory` | Yes | Reports profile roots, templates, image identities, probes, and diagnostics. |
-
-`pharo_launcher_inventory` reports what the host has. It holds no caller state
-and takes no declaration of what should exist; a caller that tracks its own
-images matches them against `images.existing` itself.
-
-`pharo_launcher_inventory` accepts an optional `templateCreateRequest` and
-answers whether that image could be created offline, without downloading or
-mutating anything:
-
-```json
-{
-  "templateCreateRequest": {
-    "templateName": "Pharo 13.0 - 64bit",
-    "templateCategory": "Official distributions"
-  }
-}
-```
 
 ## Image Tools
 
@@ -41,14 +27,7 @@ mutating anything:
 | `pharo_launcher_image_copy` | `imageName`, `newImageName` |
 | `pharo_launcher_image_copy_between_profiles` | `sourceProfile`, `destinationProfile`, `sourceImageName`, `destinationImageName` |
 | `pharo_launcher_image_start` | `imageName`, `script`, `detached`, `displayMode` |
-| `pharo_launcher_image_package` | `imageName`, `location`, `zip`, `vm` |
-| `pharo_launcher_image_bisect` | `pharoVersion` |
-| `pharo_launcher_image_create_from_build` | `buildNumber`, `pharoVersion`, `newImageName` |
-| `pharo_launcher_image_create_from_pull_request` | `pullRequest`, `newImageName`, `templateName`, `templateCategory` |
-| `pharo_launcher_image_create_from_repo` | `repository`, `newImageName`, `templateName`, `templateCategory`, `subfolder`, `baseline`, `group` |
-| `pharo_launcher_image_create_from_sha` | `sha`, `pharoVersion`, `newImageName` |
 | `pharo_launcher_image_delete` | `imageName`, `force` |
-| `pharo_launcher_image_recreate` | `imageName` |
 
 `pharo_launcher_image_create` and `pharo_launcher_image_copy` verify the target
 image after Launcher returns. A successful Launcher exit is not enough: the MCP
@@ -56,7 +35,9 @@ result is successful only when the target image can be listed and inspected.
 
 `pharo_launcher_image_start` supports:
 
-- `displayMode: "headless"` or `"interactive"`
+- `displayMode: "headless"` or `"interactive"`, in profile mode only.
+  PharoLauncher's own `image launch` has no display mode, so outside profile
+  mode the launch is refused rather than started with the mode dropped.
 - `detached: true` for detached launches with log paths in the result
 - `script` for a launch script passed to Launcher, or evaluated by the profile
   VM launch path
@@ -70,7 +51,6 @@ profile roots instead of using Launcher defaults.
 | --- | --- |
 | `pharo_launcher_template_category_list` | table options |
 | `pharo_launcher_template_list` | `templateCategory`, table options |
-| `pharo_launcher_template_info` | `templateName`, `templateCategory` |
 | `pharo_launcher_template_update` | none |
 
 Table options are:
@@ -90,18 +70,6 @@ table output.
 In profile mode, `pharo_launcher_template_update` also verifies that the active
 profile source list is usable and probes `template list`.
 
-## VM Tools
-
-| Tool | Arguments |
-| --- | --- |
-| `pharo_launcher_vm_list` | `vmId`, table options |
-| `pharo_launcher_vm_info` | `vmId` |
-| `pharo_launcher_vm_update` | `vmId` |
-| `pharo_launcher_vm_delete` | `vmId` |
-
-VM update can download or install VM files. Use profile mode when automation
-needs VM state isolated from a user's normal Launcher installation.
-
 ## Process Tools
 
 | Tool | Arguments |
@@ -120,17 +88,6 @@ once has more than one process, so an image-name kill can still stop several.
 
 Prefer the PID returned by a prior detached launch when cleaning up a launch
 you own.
-
-## Raw Command
-
-`pharo_launcher_raw_command` is the escape hatch for Launcher CLI arguments not
-covered by a dedicated MCP tool:
-
-```json
-{
-  "args": ["image", "list", "--ston"]
-}
-```
 
 ## Result Envelope
 
@@ -173,7 +130,7 @@ the image, VM, profile, or process was caller-owned, and that is the thing
 worth knowing.
 
 Deciding what is caller-owned is the caller's job. What this server offers
-towards it: `pharo_launcher_inventory` and `pharo_launcher_image_list` for what
-exists, `pharo_launcher_process_list` for what runs, profile scoping for
-keeping a caller's images and VMs out of the user's own Launcher state, and
-targets that mean one thing — a PID stops one process.
+towards it: `pharo_launcher_image_list` for what exists,
+`pharo_launcher_process_list` for what runs, profile scoping for keeping a
+caller's images and VMs out of the user's own Launcher state, and targets that
+mean one thing — a PID stops one process.

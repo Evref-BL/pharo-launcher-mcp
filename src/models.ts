@@ -43,15 +43,6 @@ export interface LauncherTemplate {
   url?: string;
 }
 
-export interface LauncherVm {
-  id?: string;
-  name?: string;
-  architecture?: string;
-  executablePath?: string;
-  status?: string;
-  blessing?: string;
-}
-
 export interface LauncherProcess {
   pid: number;
   commandLine: string;
