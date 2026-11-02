@@ -39,6 +39,28 @@ import { repairCopiedImageMetadata } from "./imageMetadata.js";
 import { normalizeLauncherResult } from "./resultNormalizer.js";
 import type { LauncherCliResult } from "./launcherCli.js";
 import { copyImageBetweenProfiles } from "./crossProfileCopy.js";
+
+/**
+ * The shapes these functions answer with.
+ *
+ * They are defined in the modules that produce them, and those modules are not
+ * subpaths, so until now a caller could invoke every function here and name
+ * none of its results. PLexus copied the template row into a type of its own
+ * and `pharo-agent` wrote it inline, and the two disagreed about whether a
+ * listed template carries `category` or `templateCategory` — a question no
+ * type could settle because none was reachable.
+ *
+ * `packageExports.test.ts` names them, so dropping one fails the typecheck.
+ */
+export type {
+  LauncherCommandResult,
+  LauncherImage,
+  LauncherOutputFormat,
+  LauncherProcess,
+  LauncherTemplate,
+} from "./models.js";
+export type { PharoLauncherConfigReport } from "./discovery.js";
+export type { CrossProfileImageCopyResult } from "./crossProfileCopy.js";
 import type {
   LauncherCommandResult,
   LauncherImage,
