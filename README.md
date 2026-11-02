@@ -52,6 +52,18 @@ Each call answers the normalized launcher result directly, with its `ok`,
 `data`, `diagnostic` and `command` fields typed, rather than JSON inside an MCP
 text block that the caller parses back.
 
+A TypeScript caller gets those shapes with them, so a result does not have to
+be described a second time on the way out:
+
+```ts
+import type {
+  LauncherCommandResult,
+  LauncherImage,
+  LauncherProcess,
+  LauncherTemplate,
+} from "@evref-bl/pharo-launcher-mcp/launcher";
+```
+
 Scope is a config, not a process. A caller that works inside a profile passes
 the environment that describes it, instead of spawning a process to hold those
 variables:
