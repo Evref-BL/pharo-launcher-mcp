@@ -2,6 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import type {
+  CrossProfileImageCopyResult,
+  LauncherCommandResult,
+  LauncherImage,
+  LauncherOutputFormat,
+  LauncherProcess,
+  LauncherTemplate,
+  PharoLauncherConfigReport,
+} from "./launcher.js";
 
 interface PackageManifest {
   bin: Record<string, string>;
@@ -25,6 +34,24 @@ function sourceFor(distPath: string): string {
     distPath.replace(/^\.\/dist\//, "src/").replace(/\.js$/, ".ts"),
   );
 }
+
+/**
+ * What `./launcher` promises a caller can name.
+ *
+ * A function is only half usable when its answer has no name: the caller
+ * copies the shape into its own type and the two drift. These are type-only,
+ * so nothing at runtime can check them — this list is the check, and the
+ * typecheck fails if `launcher.ts` stops re-exporting one.
+ */
+type LauncherResultTypes = [
+  LauncherCommandResult,
+  LauncherImage,
+  LauncherOutputFormat,
+  LauncherProcess,
+  LauncherTemplate,
+  PharoLauncherConfigReport,
+  CrossProfileImageCopyResult,
+];
 
 describe("package exports", () => {
   it("exports a subpath for every file a consumer may import", () => {
