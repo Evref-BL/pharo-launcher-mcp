@@ -101,6 +101,26 @@ Check:
 For copied images, the result also reports metadata repair and inspected image
 metadata when available.
 
+## Image Start Is Refused Because The VM Directory Is Too Deep
+
+Starting an image checks first that the VM's module paths fit what the VM can
+open. Pharo's FFI loads a module by absolute path through a fixed 256-byte
+buffer, so a module path of 256 characters or more is never opened.
+
+The refusal names the VM directory, the longest module path, and how many
+characters have to go. Shorten whatever the profile root is built from: the
+state root, the profile name, or the directory the caller points at.
+
+It is checked before the image starts because loading such a module does not
+report a missing file. It reports a missing symbol in a file that is present,
+complete, and exports that symbol, which sends the reader after the wrong
+thing entirely.
+
+The budget is the VM's, not Launcher's or this server's, so a profile that
+fails under one Pharo version can pass under another: the plugin file names
+differ in length, and `libgit2-1.9.1.9.0.dylib` spends ten characters more
+than `libgit2.dylib`.
+
 ## Process List Or Kill Does Not See A Process
 
 Process tools use native host process queries:
