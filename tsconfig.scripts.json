@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Nothing is emitted, so the src rootDir the build needs does not apply.
+    "rootDir": ".",
+    "allowJs": true,
+    "checkJs": true,
+    // The helper carries no annotations and catches node APIs that throw
+    // Error. Demanding either would be a rewrite for no gain: what this
+    // catches is the script's own use of node and of its own helpers.
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false
+  },
+  "include": ["scripts/**/*.mjs"],
+  "exclude": ["dist", "node_modules"]
+}

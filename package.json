@@ -44,7 +44,7 @@
     "check": "npm run typecheck && npm run build && npm test",
     "build": "tsc -p tsconfig.json",
     "prepack": "npm run build",
-    "typecheck": "tsc -p tsconfig.check.json",
+    "typecheck": "tsc -p tsconfig.check.json && tsc -p tsconfig.scripts.json",
     "test": "npm run test:unit",
     "test:unit": "vitest run --exclude **/*.integration.test.ts",
     "coverage": "vitest run --exclude **/*.integration.test.ts --coverage --coverage.reporter=text --coverage.reporter=lcov",
