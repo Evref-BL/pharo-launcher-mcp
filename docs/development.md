@@ -16,7 +16,7 @@ focused on installation and first use; user-facing detail lives under `docs/`.
 - `src/resultNormalizer.ts`: normalized MCP result envelopes.
 - `bin/pharo-launcher.cmd`: Windows wrapper.
 - `bin/pharo-launcher.sh`: POSIX wrapper.
-- `scripts/*.ps1`: Windows helper scripts for local live checks.
+- `scripts/live-smoke.mjs`: local live checks against a real launcher.
 
 ## Local setup
 
@@ -143,35 +143,36 @@ External-source image creation variants such as build, pull request,
 repository, SHA, and VM mutation commands should use explicit fixtures because
 they require network inputs or can alter VM installations.
 
-## Windows live helpers
+## Live checks
 
-The helper scripts under `scripts/*.ps1` are Windows PowerShell conveniences for
-a local Windows development environment:
+`scripts/live-smoke.mjs` runs this package's live checks against a real Pharo
+Launcher, in a profile of its own so nothing touches the launcher you use:
 
-```powershell
-.\scripts\verify-environment.ps1
-npm run live:profile
+```sh
 npm run live:smoke
 ```
 
-The live smoke test uses a dedicated profile root and copies the Pharo Launcher
-control image there before making live calls. It runs harmless checks by
-default: health, `--version`, and installation validation.
+It copies the launcher control image into that profile, then runs `--health`,
+`--version-check`, `--validate-installation` and `--probe-images`. All four are
+read-only.
 
-When `-StateRoot` is not supplied, the helper uses:
+Where the image comes from is not guessed: the script asks `describeConfig()`,
+the same discovery that answers for the server, so a macOS `.app` bundle, a
+Windows install and a Linux directory each resolve the way they do in use.
+`--source-image`, `PHARO_LAUNCHER_IMAGE` or `PHARO_LAUNCHER_DIR` override it.
+
+Without `--state-root` the profile lives in:
 
 ```text
-<repo-parent>\.pharo-launcher-mcp\profiles\live-test
+<repo-parent>/.pharo-launcher-mcp/profiles/live-test
 ```
 
-Refresh the copied launcher control image:
+and the profile's environment is written beside it as `profile.env`, a plain
+`KEY=value` file (`set -a; . profile.env` in a shell). `--force` refreshes the
+copied control image; `--skip-build` uses `dist` as it is.
 
-```powershell
-.\scripts\live-smoke.ps1 -ForceProfileRefresh
-```
-
-These helpers are not a substitute for cross-platform verification on macOS and
-Linux.
+`npm run verify:env` is the short version: it builds and prints `--health`,
+which reports what was discovered and whether it is usable.
 
 ## Cleanup hook boundary
 

@@ -50,9 +50,8 @@
     "coverage": "vitest run --exclude **/*.integration.test.ts --coverage --coverage.reporter=text --coverage.reporter=lcov",
     "test:integration": "vitest run src/integration/live.integration.test.ts src/integration/lifecycle.integration.test.ts src/integration/copy.integration.test.ts --testTimeout=900000",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "verify:env": "powershell -ExecutionPolicy Bypass -File ./scripts/verify-environment.ps1",
-    "live:profile": "powershell -ExecutionPolicy Bypass -File ./scripts/prepare-live-profile.ps1",
-    "live:smoke": "powershell -ExecutionPolicy Bypass -File ./scripts/live-smoke.ps1"
+    "verify:env": "npm run build && node dist/index.js --health",
+    "live:smoke": "node scripts/live-smoke.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"
