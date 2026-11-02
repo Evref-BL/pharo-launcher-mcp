@@ -14,6 +14,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  launcherModulePathBudget,
+  launcherModulePathBudgetMessage,
+} from "./platform.js";
+import {
   buildLauncherCommandArgs,
   ToolInputError,
 } from "./commandCatalog.js";
@@ -736,6 +740,51 @@ export interface OpenPharoLauncherOptions extends PharoLauncherOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+/** The longest path anything under this directory already has. */
+function longestDescendantLength(directory: string): number | undefined {
+  if (!fs.existsSync(directory)) {
+    return undefined;
+  }
+
+  let longest = 0;
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else {
+        longest = Math.max(longest, full.length);
+      }
+    }
+  };
+
+  walk(directory);
+  return longest === 0 ? undefined : longest;
+}
+
+/**
+ * Refuse to start an image the VM could not load its own modules for.
+ *
+ * Starting it anyway reports a missing symbol in a file that is present and
+ * correct, which is a long way from the profile root being too deep.
+ */
+function assertLauncherModulePathsFit(
+  config: PharoLauncherConfig | undefined,
+): void {
+  // Resolved the way runCommand resolves it: a launcher opened with no
+  // arguments has no config until a call loads one, and the profile this
+  // check is about lives in it.
+  const vmsDirectory = (config ?? loadPharoLauncherConfig())?.profile?.vmsDir;
+  if (vmsDirectory === undefined) {
+    return;
+  }
+
+  const budget = launcherModulePathBudget(vmsDirectory, longestDescendantLength);
+  if (!budget.ok) {
+    throw new ToolInputError(launcherModulePathBudgetMessage(budget));
+  }
+}
+
 export function openPharoLauncher(
   options: OpenPharoLauncherOptions = {},
 ): PharoLauncher {
@@ -770,7 +819,10 @@ export function openPharoLauncher(
     imageInfo: (input) => command("pharo_launcher_image_info", input),
     createImage: (input) => command("pharo_launcher_image_create", input),
     copyImage: (input) => command("pharo_launcher_image_copy", input),
-    startImage: (input) => command("pharo_launcher_image_start", input),
+    startImage: (input) => {
+      assertLauncherModulePathsFit(resolved.config);
+      return command("pharo_launcher_image_start", input);
+    },
     deleteImage: (input) => command("pharo_launcher_image_delete", input),
     listProcesses: (input) => command("pharo_launcher_process_list", input),
     killProcess: (input) => command("pharo_launcher_process_kill", input),

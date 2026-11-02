@@ -168,3 +168,77 @@ export function shouldRunScriptThroughBash(
 ): boolean {
   return platform !== "win32" && isShellScript(scriptPath);
 }
+
+/**
+ * How long a module path the VM can load.
+ *
+ * Pharo's FFI asks the VM to load a module by absolute path, and the VM copies
+ * that path through a 256-byte buffer. A module at 256 characters or more is
+ * never opened, and the failure surfaces as a missing *symbol* rather than a
+ * missing file:
+ *
+ *     SymbolNotFoundError: Could not find symbol named: #git_libgit2_init
+ *       searching in module: '…/Plugins/libgit2-1.9.1.9.0.dylib'
+ *
+ * Measured rather than assumed: the same profile, the same VM bytes and the
+ * same script pass at 255 characters and fail at 256.
+ */
+export const launcherModulePathLimit = 255;
+
+/**
+ * The longest path under a VM directory, which is what has to fit.
+ *
+ * `/140-x64/Pharo.app/Contents/MacOS/Plugins/libgit2-1.9.1.9.0.dylib` is the
+ * longest tail seen so far, and libgit2 is the module that fails first because
+ * Iceberg initialises it during startup. A directory that does not exist yet
+ * is measured against that tail, since it is what a download will put there.
+ */
+export const longestKnownVmModuleTail =
+  "/140-x64/Pharo.app/Contents/MacOS/Plugins/libgit2-1.9.1.9.0.dylib".length;
+
+export interface LauncherModulePathBudget {
+  ok: boolean;
+  vmsDirectory: string;
+  /** The longest module path this directory holds, or would hold. */
+  longestModulePath: number;
+  limit: number;
+  /** Characters to cut from the directory before a VM fits. */
+  over: number;
+  measured: boolean;
+}
+
+export function launcherModulePathBudget(
+  vmsDirectory: string,
+  readLongestDescendant?: (directory: string) => number | undefined,
+): LauncherModulePathBudget {
+  // Both, because neither alone is the worst case: a VM that is not downloaded
+  // yet measures nothing, and one that is may hold a longer name than the
+  // tail below.
+  const measuredLongest = readLongestDescendant?.(vmsDirectory);
+  const longestModulePath = Math.max(
+    vmsDirectory.length + longestKnownVmModuleTail,
+    measuredLongest ?? 0,
+  );
+
+  return {
+    ok: longestModulePath <= launcherModulePathLimit,
+    vmsDirectory,
+    longestModulePath,
+    limit: launcherModulePathLimit,
+    over: Math.max(0, longestModulePath - launcherModulePathLimit),
+    measured: measuredLongest !== undefined,
+  };
+}
+
+export function launcherModulePathBudgetMessage(
+  budget: LauncherModulePathBudget,
+): string {
+  return [
+    `The VM directory is too deep for Pharo to load its modules: ${budget.vmsDirectory}`,
+    `A module path may be at most ${budget.limit} characters and ${
+      budget.measured ? "one there is" : "a downloaded VM would reach"
+    } ${budget.longestModulePath}.`,
+    `Shorten the profile root by at least ${budget.over} characters.`,
+    "Loading one anyway fails as a missing symbol, not a missing file, which is why this is checked here.",
+  ].join("\n");
+}

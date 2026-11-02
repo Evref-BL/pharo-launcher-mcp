@@ -3,6 +3,9 @@ import {
   bundledLauncherScriptName,
   defaultLauncherDir,
   defaultLauncherVm,
+  launcherModulePathBudget,
+  launcherModulePathBudgetMessage,
+  launcherModulePathLimit,
   launcherPlatformDefaults,
   shouldRunScriptThroughBash,
   shouldRunScriptThroughCommandShell,
@@ -81,5 +84,51 @@ describe("launcher platform defaults", () => {
     expect(shouldRunScriptThroughBash("/opt/pl/pharo-launcher", "linux")).toBe(
       false,
     );
+  });
+});
+
+describe("launcher module path budget", () => {
+  // Measured, not assumed: the same profile with the same VM bytes and the
+  // same script passes at 255 characters and fails at 256. The VM copies a
+  // module path through a 256-byte buffer, and a module it cannot open is
+  // reported as a missing symbol in a file that is present and correct.
+  const tail = "/140-x64/Pharo.app/Contents/MacOS/Plugins/libgit2-1.9.1.9.0.dylib";
+
+  it("fits a directory whose longest module path is the limit", () => {
+    const vmsDirectory = "v".repeat(launcherModulePathLimit - tail.length);
+    const budget = launcherModulePathBudget(vmsDirectory);
+
+    expect(budget.longestModulePath).toBe(launcherModulePathLimit);
+    expect(budget.ok).toBe(true);
+    expect(budget.over).toBe(0);
+  });
+
+  it("refuses one character more", () => {
+    const vmsDirectory = "v".repeat(launcherModulePathLimit - tail.length + 1);
+    const budget = launcherModulePathBudget(vmsDirectory);
+
+    expect(budget.longestModulePath).toBe(launcherModulePathLimit + 1);
+    expect(budget.ok).toBe(false);
+    expect(budget.over).toBe(1);
+    expect(launcherModulePathBudgetMessage(budget)).toContain(
+      "Shorten the profile root by at least 1 characters",
+    );
+  });
+
+  it("takes the worse of what is there and what a download would add", () => {
+    const vmsDirectory = "/short/vms";
+    const measured = launcherModulePathLimit + 40;
+
+    expect(launcherModulePathBudget(vmsDirectory, () => measured)).toMatchObject({
+      ok: false,
+      measured: true,
+      longestModulePath: measured,
+    });
+    // A VM that is not downloaded yet measures nothing, so the tail decides.
+    expect(launcherModulePathBudget(vmsDirectory, () => undefined)).toMatchObject({
+      ok: true,
+      measured: false,
+      longestModulePath: vmsDirectory.length + tail.length,
+    });
   });
 });
