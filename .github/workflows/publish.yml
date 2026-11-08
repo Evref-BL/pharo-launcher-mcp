@@ -73,6 +73,32 @@ jobs:
         if: steps.version.outputs.published != 'true'
         run: npm publish --access public --tag latest
 
+      # The automation's token makes the release the bot's, and tells PLexus
+      # about it below. Without the credentials the package is still out, so
+      # the release is still cut, as github-actions[bot].
+      - name: Look for the automation credentials
+        id: automation
+        if: steps.version.outputs.published != 'true'
+        env:
+          APP_ID: ${{ secrets.DEVNEXUS_AUTOMATION_APP_ID }}
+        run: |
+          if [ -n "$APP_ID" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::DEVNEXUS_AUTOMATION_APP_ID and DEVNEXUS_AUTOMATION_PRIVATE_KEY are not set, so the release is github-actions[bot]'s and PLexus was not told about it. Move its @evref-bl/pharo-launcher-mcp pin by hand."
+          fi
+
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        if: steps.automation.outputs.available == 'true'
+        with:
+          app-id: ${{ secrets.DEVNEXUS_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.DEVNEXUS_AUTOMATION_PRIVATE_KEY }}
+          owner: Evref-BL
+          repositories: |
+            pharo-launcher-mcp
+            PLexus
+
       # Every other repository in this stack leaves a tagged GitHub release
       # behind for each published version; this one published quietly. The tag
       # is cut here rather than by hand, so it always names the commit that was
@@ -80,7 +106,7 @@ jobs:
       - name: Create the GitHub release
         if: steps.version.outputs.published != 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           TAG: v${{ steps.package.outputs.version }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -96,27 +122,6 @@ jobs:
       # PLexus pins this package exactly, so a release reaches nobody until
       # that pin moves. Tell it, the way MCP and PLexus tell their own
       # consumers, instead of leaving one pin in the stack to be hand-edited.
-      - name: Look for the automation credentials
-        id: automation
-        if: steps.version.outputs.published != 'true'
-        env:
-          APP_ID: ${{ secrets.DEVNEXUS_AUTOMATION_APP_ID }}
-        run: |
-          if [ -n "$APP_ID" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::DEVNEXUS_AUTOMATION_APP_ID and DEVNEXUS_AUTOMATION_PRIVATE_KEY are not set, so PLexus was not told about this release. Move its @evref-bl/pharo-launcher-mcp pin by hand."
-          fi
-
-      - uses: actions/create-github-app-token@v2
-        id: app-token
-        if: steps.automation.outputs.available == 'true'
-        with:
-          app-id: ${{ secrets.DEVNEXUS_AUTOMATION_APP_ID }}
-          private-key: ${{ secrets.DEVNEXUS_AUTOMATION_PRIVATE_KEY }}
-          owner: Evref-BL
-          repositories: PLexus
-
       - name: Notify released consumers
         if: steps.automation.outputs.available == 'true'
         env:
