@@ -27,7 +27,7 @@ preflight needs.
 | `pharo_launcher_image_copy` | `imageName`, `newImageName` |
 | `pharo_launcher_image_copy_between_profiles` | `sourceProfile`, `destinationProfile`, `sourceImageName`, `destinationImageName` |
 | `pharo_launcher_image_start` | `imageName`, `script`, `detached`, `displayMode` |
-| `pharo_launcher_image_delete` | `imageName`, `force` |
+| `pharo_launcher_image_delete` | `imageName` |
 
 `pharo_launcher_image_create` and `pharo_launcher_image_copy` verify the target
 image after Launcher returns. A successful Launcher exit is not enough: the MCP
@@ -40,10 +40,15 @@ result is successful only when the target image can be listed and inspected.
   mode the launch is refused rather than started with the mode dropped.
 - `detached: true` for detached launches with log paths in the result
 - `script` for a launch script passed to Launcher, or evaluated by the profile
-  VM launch path
+  VM launch path. A relative path is read from the server's working directory,
+  not from the image's or Launcher's.
 
 In profile mode, image launch resolves the image and VM inside the active
 profile roots instead of using Launcher defaults.
+
+`pharo_launcher_image_delete` deletes without asking: calling it is the
+confirmation. Launcher's own `image delete` asks on standard input, where a
+call has nobody to answer.
 
 ## Template Tools
 

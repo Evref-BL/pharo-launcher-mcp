@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { buildLauncherCommandArgs } from "./commandCatalog.js";
 import type { PharoLauncherConfig } from "./config.js";
 import {
   buildLauncherCliInvocation,
@@ -11,6 +12,7 @@ import {
   profileLauncherConfigurationContent,
   runLauncherCli,
 } from "./launcherCli.js";
+import { bundledLauncherScriptPath } from "./launcherScript.js";
 
 function launcherConfig(
   config: Omit<PharoLauncherConfig, "installationLauncherImage"> &
@@ -616,6 +618,106 @@ describe("buildLauncherCliInvocation", () => {
     }
   });
 
+  // An agent names a script in its project, where the server runs, and the
+  // profile's VM runs in the image's directory.
+  it("gives the profile VM a relative launch script it can read", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const stateRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-launch-"),
+    );
+    const callerDir = path.join(stateRoot, "project");
+    const launcherScriptPath = path.join(stateRoot, "launcher.sh");
+    const installationLauncherImage = path.join(
+      stateRoot,
+      "installation",
+      "PharoLauncher.image",
+    );
+    const imageName = "Task";
+    const profile = {
+      name: "isolated",
+      stateRoot,
+      launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+      imagesDir: path.join(stateRoot, "images"),
+      vmsDir: path.join(stateRoot, "vms"),
+      templateSourcesDir: path.join(stateRoot, "templates"),
+      initScriptsDir: path.join(stateRoot, "init-scripts"),
+      logsDir: path.join(stateRoot, "logs"),
+    };
+    const imagePath = path.join(profile.imagesDir, imageName, `${imageName}.image`);
+    const vmPath = path.join(
+      profile.vmsDir,
+      "130-x64",
+      "Pharo.app",
+      "Contents",
+      "MacOS",
+      "Pharo",
+    );
+    const checkScriptPath = path.join(callerDir, "check.st");
+
+    fs.mkdirSync(callerDir, { recursive: true });
+    fs.mkdirSync(path.dirname(imagePath), { recursive: true });
+    fs.mkdirSync(path.dirname(vmPath), { recursive: true });
+    fs.mkdirSync(path.dirname(installationLauncherImage), { recursive: true });
+    fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
+    fs.writeFileSync(imagePath, "", "utf8");
+    fs.writeFileSync(checkScriptPath, "Smalltalk snapshot: false andQuit: true.", "utf8");
+    writeExecutableScript(
+      launcherScriptPath,
+      [
+        "#!/usr/bin/env sh",
+        `case "$*" in`,
+        `  *"image info --ston ${imageName}"*) printf '%s\\n' ${shellQuote(launcherTemplateOnlyImageInfoSton(imageName))} ;;`,
+        `  *) echo "unexpected launcher command: $*" >&2; exit 64 ;;`,
+        "esac",
+        "",
+      ].join("\n"),
+    );
+    // Reads the script the way the VM does: from where it runs.
+    writeExecutableScript(
+      vmPath,
+      [
+        "#!/usr/bin/env sh",
+        `if [ -f "$4" ]; then echo "script read"; else echo "no script $4 in $(pwd)"; fi`,
+        "",
+      ].join("\n"),
+    );
+
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(callerDir);
+    try {
+      const result = await runLauncherCli(
+        buildLauncherCommandArgs("pharo_launcher_image_start", {
+          imageName,
+          script: "check.st",
+        })!,
+        {
+          config: launcherConfig({
+            launcherDir: stateRoot,
+            launcherVm: "unused",
+            installationLauncherImage,
+            launcherImage: profile.launcherImage,
+            launcherScript: launcherScriptPath,
+            launcherConfiguration: path.join(
+              stateRoot,
+              "launcher",
+              "pharo-launcher-cli-config.ston",
+            ),
+            profile,
+          }),
+          timeoutMs: 2_000,
+        },
+      );
+
+      expect(result.stdout).toContain("script read");
+      expect(result.exitCode).toBe(0);
+    } finally {
+      cwd.mockRestore();
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("launches profile-scoped images interactively when requested", async () => {
     if (process.platform === "win32") {
       return;
@@ -999,6 +1101,48 @@ describe("buildLauncherCliInvocation", () => {
       fs.rmSync(installationRoot, { recursive: true, force: true });
     }
   });
+
+  // The standalone server's timeout is a fixed 30 s, and an image create
+  // still downloading its template outlives it. The timeout stops the shell
+  // running the VM, not the VM, which finishes the create.
+  it("lets a launcher command finish past the call's timeout", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const stateRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pharo-launcher-mcp-timeout-"),
+    );
+    const vmPath = path.join(stateRoot, "pharo");
+    const createdPath = path.join(stateRoot, "created");
+    writeExecutableScript(
+      vmPath,
+      [
+        "#!/usr/bin/env sh",
+        "echo downloading",
+        "sleep 2",
+        `echo created > ${shellQuote(createdPath)}`,
+        "",
+      ].join("\n"),
+    );
+
+    try {
+      const result = await runLauncherCli(["image", "create", "Task"], {
+        config: launcherConfig({
+          launcherDir: stateRoot,
+          launcherVm: vmPath,
+          launcherImage: path.join(stateRoot, "PharoLauncher.image"),
+          launcherScript: bundledLauncherScriptPath(),
+        }),
+        timeoutMs: 500,
+      });
+
+      expect(result.timedOut).toBe(true);
+      expect(fs.existsSync(createdPath)).toBe(true);
+    } finally {
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   it("captures timeout reason", async () => {
     const result = await runLauncherCli(["-e", "setTimeout(() => {}, 500);"], {
