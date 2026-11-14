@@ -1,19 +1,4 @@
-import path from "node:path";
-import type {
-  LauncherImage,
-  LauncherOutputFormat,
-  LauncherProcess,
-  LauncherTemplate,
-} from "./models.js";
-import {
-  hasCaseInsensitiveSuffix,
-  isAsciiDigit,
-  isWhitespace,
-  leadingDigits,
-  quotedValues,
-  stripLeadingNumber,
-  whitespaceTokens,
-} from "./textTokens.js";
+import type { LauncherOutputFormat, LauncherTemplate } from "./models.js";
 
 export interface ParseResult<T = unknown> {
   status: "parsed" | "unsupported" | "failed";
@@ -59,123 +44,8 @@ function field(block: string, name: string): string | undefined {
   return block.match(new RegExp(`#${name}:'([^']*)'`))?.[1];
 }
 
-function numberField(block: string, name: string): number | undefined {
-  const value = block.match(new RegExp(`#${name}:(\\d+)`))?.[1];
-  return value ? Number(value) : undefined;
-}
-
 function urlField(block: string): string | undefined {
   return block.match(/#url:URL\['([^']*)'\]/)?.[1];
-}
-
-function relativePath(block: string): string | undefined {
-  const match = block.match(/RelativePath\[((?:'[^']*'(?:,\s*)?)+)\]/);
-  if (!match?.[1]) {
-    return undefined;
-  }
-
-  const parts = [...match[1].matchAll(/'([^']*)'/g)].map((part) => part[1]);
-  return parts.join("/");
-}
-
-function splitFixedColumns(value: string): string[] {
-  const columns: string[] = [];
-  let columnStart = 0;
-  let index = 0;
-
-  while (index < value.length) {
-    if (!isWhitespace(value[index])) {
-      index += 1;
-      continue;
-    }
-
-    const whitespaceStart = index;
-    while (isWhitespace(value[index])) {
-      index += 1;
-    }
-
-    if (index - whitespaceStart >= 2) {
-      columns.push(value.slice(columnStart, whitespaceStart).trim());
-      columnStart = index;
-    }
-  }
-
-  columns.push(value.slice(columnStart).trim());
-  return columns.filter((column) => column.length > 0);
-}
-
-function withoutBoundaryQuotes(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  return value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value;
-}
-
-function basenameWithoutImageExtension(imagePath: string): string {
-  const basename = imagePath.split(/[\\/]/).at(-1) ?? imagePath;
-  return basename.replace(/\.image$/i, "");
-}
-
-// PharoLauncher keeps an image at <Name>/<Name>.image, so the directory the
-// image file sits in is the image's name — the same rule the metadata repair
-// reads. Metadata that stores only the file name has no directory to read, so
-// take the name off the file instead.
-function imageNameFromRelativePath(imagePath: string): string {
-  const parts = imagePath.split(/[\\/]/);
-  const parent = parts.at(-2);
-
-  return parent ?? basenameWithoutImageExtension(imagePath);
-}
-
-export function parseLauncherImagesFromSton(source: string): LauncherImage[] {
-  return stonBlocks(source, "PhLImage").map((block) => {
-    const imagePath = relativePath(block);
-
-    return {
-      ...(imagePath ? { name: imageNameFromRelativePath(imagePath), imagePath } : {}),
-      ...(field(block, "architecture")
-        ? { architecture: field(block, "architecture") }
-        : {}),
-      ...(field(block, "pharoVersion")
-        ? { pharoVersion: field(block, "pharoVersion") }
-        : {}),
-      ...(numberField(block, "formatNumber")
-        ? { formatNumber: numberField(block, "formatNumber") }
-        : {}),
-      originTemplate: {
-        ...(field(block, "name") ? { name: field(block, "name") } : {}),
-        ...(urlField(block) ? { url: urlField(block) } : {}),
-      },
-      ...(field(block, "id") ? { vmId: field(block, "id") } : {}),
-    };
-  });
-}
-
-export function parseLauncherImagesFromText(source: string): LauncherImage[] {
-  return source
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line) => {
-      const digits = leadingDigits(line);
-      return Boolean(digits && isWhitespace(line[digits.length]));
-    })
-    .map((line) => {
-      const columns = splitFixedColumns(line);
-      const dataColumns =
-        columns[0] !== undefined && leadingDigits(columns[0]) === columns[0]
-          ? columns.slice(1)
-          : columns;
-      if (dataColumns.length < 3) {
-        return { name: stripLeadingNumber(line).trim() };
-      }
-
-      return {
-        name: stripLeadingNumber(dataColumns[0]).trim(),
-        architecture: dataColumns[1],
-        pharoVersion: whitespaceTokens(dataColumns[2])[0] ?? dataColumns[2],
-      };
-    });
 }
 
 export function parseLauncherTemplatesFromSton(source: string): LauncherTemplate[] {
@@ -213,46 +83,6 @@ export function parseTemplateCategoriesFromText(source: string): string[] {
     .map((line) => line.replace(/^\d+\s+/, ""));
 }
 
-export function parseLauncherProcessesFromText(source: string): LauncherProcess[] {
-  return source
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const pidText = leadingDigits(line);
-      if (!pidText) {
-        return undefined;
-      }
-
-      const values = quotedValues(line);
-      const commandText = stripLeadingNumber(line);
-      const imagePath =
-        values.find((value) => hasCaseInsensitiveSuffix(value, ".image")) ??
-        whitespaceTokens(commandText).find((value) =>
-          hasCaseInsensitiveSuffix(value, ".image"),
-        );
-      const executablePath =
-        values.find(
-          (value) =>
-            hasCaseInsensitiveSuffix(value, ".exe") ||
-            hasCaseInsensitiveSuffix(value, ".app"),
-        ) ?? withoutBoundaryQuotes(whitespaceTokens(commandText)[0]);
-
-      return {
-        pid: Number(pidText),
-        commandLine: line,
-        ...(executablePath ? { executablePath } : {}),
-        ...(imagePath
-          ? {
-              imagePath,
-              imageName: basenameWithoutImageExtension(path.basename(imagePath)),
-            }
-          : {}),
-      };
-    })
-    .filter((process): process is LauncherProcess => Boolean(process));
-}
-
 function parseWithStatus<T>(
   format: LauncherOutputFormat,
   parser: () => T,
@@ -272,32 +102,12 @@ function parseWithStatus<T>(
   }
 }
 
-function singleOrArray<T>(items: T[]): T | T[] {
-  return items.length === 1 ? items[0] : items;
-}
-
 export function parseLauncherOutput(
   toolName: string,
   format: LauncherOutputFormat,
   stdout: string,
 ): ParseResult {
   switch (toolName) {
-    case "pharo_launcher_image_list":
-      return parseWithStatus(format, () =>
-        format === "ston"
-          ? parseLauncherImagesFromSton(stdout)
-          : parseLauncherImagesFromText(stdout),
-      );
-
-    case "pharo_launcher_image_info":
-      return parseWithStatus(format, () =>
-        singleOrArray(
-          format === "ston"
-            ? parseLauncherImagesFromSton(stdout)
-            : parseLauncherImagesFromText(stdout),
-        ),
-      );
-
     case "pharo_launcher_template_category_list":
       return parseWithStatus(format, () =>
         format === "ston"
@@ -311,9 +121,6 @@ export function parseLauncherOutput(
           ? parseLauncherTemplatesFromSton(stdout)
           : parseLauncherTemplatesFromText(stdout),
       );
-
-    case "pharo_launcher_process_list":
-      return parseWithStatus("text", () => parseLauncherProcessesFromText(stdout));
 
     default:
       return {

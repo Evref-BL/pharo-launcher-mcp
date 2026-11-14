@@ -4,7 +4,8 @@ export interface LauncherCommandTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
-  buildArgs: (input: unknown) => string[];
+  /** The Launcher command it runs; none for a tool that reads the disk. */
+  buildArgs?: (input: unknown) => string[];
 }
 
 export class ToolInputError extends Error {
@@ -53,7 +54,7 @@ const tableProperties = {
   delimiter: stringSchema,
 } as const;
 
-function inputObject(input: unknown): Record<string, unknown> {
+export function inputObject(input: unknown): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return {};
   }
@@ -61,7 +62,10 @@ function inputObject(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
-function optionalString(input: Record<string, unknown>, key: string): string | undefined {
+export function optionalString(
+  input: Record<string, unknown>,
+  key: string,
+): string | undefined {
   const value = input[key];
   if (value === undefined) {
     return undefined;
@@ -74,7 +78,10 @@ function optionalString(input: Record<string, unknown>, key: string): string | u
   return value;
 }
 
-function requiredString(input: Record<string, unknown>, key: string): string {
+export function requiredString(
+  input: Record<string, unknown>,
+  key: string,
+): string {
   const value = optionalString(input, key);
   if (!value) {
     throw new ToolInputError(`${key} is required`);
@@ -164,27 +171,14 @@ function addTableOptions(args: string[], input: Record<string, unknown>): void {
   }
 }
 
-function imageList(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = ["image", "list"];
-  addOption(args, "--nameFilter", optionalString(object, "nameFilter"));
-  addTableOptions(args, object);
-  return args;
-}
-
-function imageInfo(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = ["image", "info"];
-  addTableOptions(args, object);
-  args.push(requiredString(object, "imageName"));
-  return args;
-}
-
+// Without --no-launch PharoLauncher starts the new image and waits for it to
+// quit, so the call would last as long as the image runs. Starting an image is
+// image_start's; noLaunch is read by nothing.
 function imageCreate(input: unknown): string[] {
   const object = inputObject(input);
   const args = ["image", "create"];
   addFlag(args, "--dev", optionalBoolean(object, "dev"));
-  addFlag(args, "--no-launch", optionalBoolean(object, "noLaunch"));
+  args.push("--no-launch");
   addOption(args, "--templateName", requiredString(object, "templateName"));
   addOption(args, "--templateCategory", optionalString(object, "templateCategory"));
   args.push(requiredString(object, "newImageName"));
@@ -275,7 +269,6 @@ export const launcherCommandTools: LauncherCommandTool[] = [
       {
         newImageName: stringSchema,
         dev: booleanSchema,
-        noLaunch: booleanSchema,
         templateName: stringSchema,
         templateCategory: stringSchema,
       },
@@ -300,7 +293,6 @@ export const launcherCommandTools: LauncherCommandTool[] = [
       },
       ["imageName"],
     ),
-    buildArgs: imageInfo,
   },
   {
     name: "pharo_launcher_image_list",
@@ -309,7 +301,6 @@ export const launcherCommandTools: LauncherCommandTool[] = [
       nameFilter: stringSchema,
       ...tableProperties,
     }),
-    buildArgs: imageList,
   },
   {
     name: "pharo_launcher_image_start",
@@ -375,5 +366,5 @@ export const launcherCommandToolByName = new Map(
 );
 
 export function buildLauncherCommandArgs(name: string, input: unknown): string[] | undefined {
-  return launcherCommandToolByName.get(name)?.buildArgs(input);
+  return launcherCommandToolByName.get(name)?.buildArgs?.(input);
 }

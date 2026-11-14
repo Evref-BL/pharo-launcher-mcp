@@ -6,10 +6,14 @@ import type {
   CrossProfileImageCopyResult,
   LauncherCommandResult,
   LauncherImage,
+  LauncherImageInfo,
+  LauncherImageList,
   LauncherOutputFormat,
   LauncherProcess,
   LauncherTemplate,
+  NotAnImage,
   PharoLauncherConfigReport,
+  RunNativeProcessToolOptions,
 } from "./launcher.js";
 
 interface PackageManifest {
@@ -46,11 +50,15 @@ function sourceFor(distPath: string): string {
 type LauncherResultTypes = [
   LauncherCommandResult,
   LauncherImage,
+  LauncherImageInfo,
+  LauncherImageList,
+  NotAnImage,
   LauncherOutputFormat,
   LauncherProcess,
   LauncherTemplate,
   PharoLauncherConfigReport,
   CrossProfileImageCopyResult,
+  RunNativeProcessToolOptions,
 ];
 
 describe("package exports", () => {

@@ -6,6 +6,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";
 import type { LauncherCliRunner } from "./discovery.js";
 import { callTool, createServer } from "./server.js";
+import { cliMetaInf, psRunner, writeImage } from "./testing/images.js";
 
 function parseJsonResult(result: Awaited<ReturnType<typeof callTool>>) {
   return JSON.parse(result.content[0]?.text ?? "{}") as Record<string, unknown>;
@@ -81,9 +82,19 @@ function writeProfileImage(stateRoot: string, imageName: string): void {
   );
 }
 
+function removeConfig(config: ReturnType<typeof tempProfileConfig>): void {
+  fs.rmSync(config.profile.stateRoot, { recursive: true, force: true });
+  fs.rmSync(config.launcherDir, { recursive: true, force: true });
+}
+
+function writeCreatedImage(imagesDir: string, imageName: string): void {
+  writeImage(imagesDir, imageName, {
+    metaInf: cliMetaInf("Pharo 13", "https://example.test/130/latest.zip"),
+    pharoVersion: "130",
+  });
+}
+
 describe("callTool", () => {
-  const taskImageSton =
-    "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13',#url:URL['https://example.test/latest.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['Task','Task.image']}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'130-x64'}}]}]";
 
   it("announces the version the package was published with", async () => {
     const packaged = JSON.parse(
@@ -113,118 +124,64 @@ describe("callTool", () => {
     expect(body).toHaveProperty("launcherScript");
   });
 
-  it("verifies copied images with list and info before reporting success", async () => {
-    const calls: readonly string[][] = [];
+  it("verifies copied images with the images directory and image info", async () => {
+    const config = tempProfileConfig();
+    const calls: string[][] = [];
     const runner: LauncherCliRunner = async (args) => {
-      (calls as string[][]).push([...args]);
+      calls.push([...args]);
+      if (args[1] === "copy") {
+        writeCreatedImage(config.profile.imagesDir, "Task");
+      }
 
-      return {
-        exitCode: 0,
-        stdout:
-          args[0] === "image" && args[1] === "copy"
-            ? "Copied"
-            : taskImageSton,
-        stderr: "",
-        durationMs: 4,
-        timedOut: false,
-      };
+      return { exitCode: 0, stdout: "Copied", stderr: "", durationMs: 4, timedOut: false };
     };
 
-    const result = await callTool(
-      "pharo_launcher_image_copy",
-      {
-        imageName: "Base",
-        newImageName: "Task",
-      },
-      { runner },
-    );
+    try {
+      const result = await callTool(
+        "pharo_launcher_image_copy",
+        { imageName: "Base", newImageName: "Task" },
+        { runner, config },
+      );
 
-    expect(result.isError).toBeUndefined();
-    const body = parseJsonResult(result);
-    expect(body).toMatchObject({
-      ok: true,
-      parser: {
-        status: "unsupported",
-        format: "text",
-      },
-      command: {
-        args: ["image", "copy", "Base", "Task"],
-        durationMs: 4,
-        exitCode: 0,
-      },
-      data: {
-        message: "Copied",
-        targetImageName: "Task",
-        listedImage: {
-          name: "Task",
-        },
-        inspectedImage: {
-          name: "Task",
-        },
-      },
-      copyVerification: {
+      expect(result.isError).toBeUndefined();
+      expect(parseJsonResult(result)).toMatchObject({
         ok: true,
-        targetImageName: "Task",
-        attempts: 1,
-      },
-    });
-    expect(calls).toEqual([
-      ["image", "copy", "Base", "Task"],
-      ["image", "list", "--nameFilter", "Task", "--ston"],
-      ["image", "info", "--ston", "Task"],
-    ]);
+        command: { args: ["image", "copy", "Base", "Task"], exitCode: 0 },
+        data: { image: { name: "Task", pharoVersion: "130" } },
+      });
+      expect(calls).toEqual([
+        ["image", "copy", "Base", "Task"],
+        ["image", "info", "Task"],
+      ]);
+    } finally {
+      removeConfig(config);
+    }
   });
 
-  it("fails copied images that are not discoverable", async () => {
-    const calls: readonly string[][] = [];
+  it("fails copied images that are not in the images directory", async () => {
+    const config = tempProfileConfig();
+    const calls: string[][] = [];
     const runner: LauncherCliRunner = async (args) => {
-      (calls as string[][]).push([...args]);
-
-      return {
-        exitCode: 0,
-        stdout:
-          args[0] === "image" && args[1] === "copy"
-            ? "Copied"
-            : "OrderedCollection[]",
-        stderr: "",
-        durationMs: 4,
-        timedOut: false,
-      };
+      calls.push([...args]);
+      return { exitCode: 0, stdout: "Copied", stderr: "", durationMs: 4, timedOut: false };
     };
 
-    const result = await callTool(
-      "pharo_launcher_image_copy",
-      {
-        imageName: "Base",
-        newImageName: "Task",
-      },
-      {
-        runner,
-        imageCopyVerificationTimeoutMs: 0,
-        imageCopyVerificationPollMs: 0,
-      },
-    );
-    const body = parseJsonResult(result);
+    try {
+      const result = await callTool(
+        "pharo_launcher_image_copy",
+        { imageName: "Base", newImageName: "Task" },
+        { runner, config, imageCopyVerificationTimeoutMs: 0, imageCopyVerificationPollMs: 0 },
+      );
 
-    expect(result.isError).toBe(true);
-    expect(body).toMatchObject({
-      ok: false,
-      diagnostic:
-        "Image copy command exited successfully, but target image Task was not listable and inspectable: Copied image did not appear in image list.",
-      copyVerification: {
+      expect(result.isError).toBe(true);
+      expect(parseJsonResult(result)).toMatchObject({
         ok: false,
-        targetImageName: "Task",
-        attempts: 1,
-        list: {
-          ok: true,
-          data: [],
-        },
-      },
-    });
-    expect(calls).toEqual([
-      ["image", "copy", "Base", "Task"],
-      ["image", "list", "--nameFilter", "Task", "--ston"],
-    ]);
+        diagnostic: `Pharo Launcher said it copied Base to Task, but ${path.join(config.profile.imagesDir, "Task")} does not exist after 0 s.`,
+      });
+      expect(calls).toEqual([["image", "copy", "Base", "Task"]]);
+    } finally {
+      removeConfig(config);
+    }
   });
 
   it("copies images between explicit profiles without using the active profile", async () => {
@@ -320,87 +277,48 @@ describe("callTool", () => {
     }
   });
 
-  it("verifies created template images with list and info before reporting success", async () => {
-    const calls: readonly string[][] = [];
+  it("verifies created template images with the images directory and image info", async () => {
+    const config = tempProfileConfig();
+    const calls: string[][] = [];
     const runner: LauncherCliRunner = async (args) => {
-      (calls as string[][]).push([...args]);
+      calls.push([...args]);
+      if (args[1] === "create") {
+        writeCreatedImage(config.profile.imagesDir, "Task");
+      }
 
-      return {
-        exitCode: 0,
-        stdout:
-          args[0] === "image" && args[1] === "create"
-            ? "Created"
-            : taskImageSton,
-        stderr: "",
-        durationMs: 4,
-        timedOut: false,
-      };
+      return { exitCode: 0, stdout: "Created", stderr: "", durationMs: 4, timedOut: false };
     };
 
-    const result = await callTool(
-      "pharo_launcher_image_create",
-      {
-        templateName: "Pharo 13",
-        newImageName: "Task",
-        noLaunch: true,
-      },
-      { runner },
-    );
+    try {
+      const result = await callTool(
+        "pharo_launcher_image_create",
+        { templateName: "Pharo 13", newImageName: "Task", noLaunch: false },
+        { runner, config },
+      );
 
-    expect(result.isError).toBeUndefined();
-    const body = parseJsonResult(result);
-    expect(body).toMatchObject({
-      ok: true,
-      parser: {
-        status: "unsupported",
-        format: "text",
-      },
-      command: {
-        args: [
-          "image",
-          "create",
-          "--no-launch",
-          "--templateName",
-          "Pharo 13",
-          "Task",
-        ],
-        durationMs: 4,
-        exitCode: 0,
-      },
-      data: {
-        message: "Created",
-        targetImageName: "Task",
-        listedImage: {
-          name: "Task",
-          pharoVersion: "130",
-        },
-        inspectedImage: {
-          name: "Task",
-          pharoVersion: "130",
-        },
-        createdImage: {
-          name: "Task",
-          pharoVersion: "130",
-        },
-      },
-      createVerification: {
+      expect(result.isError).toBeUndefined();
+      expect(parseJsonResult(result)).toMatchObject({
         ok: true,
-        targetImageName: "Task",
-        attempts: 1,
-      },
-    });
-    expect(calls).toEqual([
-      [
-        "image",
-        "create",
-        "--no-launch",
-        "--templateName",
-        "Pharo 13",
-        "Task",
-      ],
-      ["image", "list", "--nameFilter", "Task", "--ston"],
-      ["image", "info", "--ston", "Task"],
-    ]);
+        command: {
+          args: ["image", "create", "--no-launch", "--templateName", "Pharo 13", "Task"],
+          exitCode: 0,
+        },
+        data: {
+          image: {
+            name: "Task",
+            pharoVersion: "130",
+            architecture: "64",
+            template: { name: "Pharo 13" },
+          },
+        },
+      });
+      expect(calls).toEqual([
+        ["image", "create", "--no-launch", "--templateName", "Pharo 13", "Task"],
+        ["image", "info", "Task"],
+      ]);
+    } finally {
+      removeConfig(config);
+    }
   });
 
   it("returns a structured tool error when image create runner setup throws", async () => {
@@ -451,141 +369,106 @@ describe("callTool", () => {
     }
   });
 
-  it("fails created template images that are not discoverable", async () => {
-    const calls: readonly string[][] = [];
+  it("fails created template images that are not in the images directory", async () => {
+    const config = tempProfileConfig();
+    const calls: string[][] = [];
     const runner: LauncherCliRunner = async (args) => {
-      (calls as string[][]).push([...args]);
-
-      return {
-        exitCode: 0,
-        stdout:
-          args[0] === "image" && args[1] === "create"
-            ? "Created"
-            : "OrderedCollection[]",
-        stderr: "",
-        durationMs: 4,
-        timedOut: false,
-      };
+      calls.push([...args]);
+      return { exitCode: 0, stdout: "Created", stderr: "", durationMs: 4, timedOut: false };
     };
 
-    const result = await callTool(
-      "pharo_launcher_image_create",
-      {
-        templateName: "Pharo 13",
-        newImageName: "Task",
-        noLaunch: true,
-      },
-      {
-        runner,
-        imageCopyVerificationTimeoutMs: 0,
-        imageCopyVerificationPollMs: 0,
-      },
-    );
-    const body = parseJsonResult(result);
+    try {
+      const result = await callTool(
+        "pharo_launcher_image_create",
+        { templateName: "Pharo 13", newImageName: "Task" },
+        { runner, config, imageCopyVerificationTimeoutMs: 0, imageCopyVerificationPollMs: 0 },
+      );
 
-    expect(result.isError).toBe(true);
-    expect(body).toMatchObject({
-      ok: false,
-      diagnostic:
-        "Image create command exited successfully, but target image Task was not listable and inspectable: Created image did not appear in image list.",
-      createVerification: {
+      expect(result.isError).toBe(true);
+      expect(parseJsonResult(result)).toMatchObject({
         ok: false,
-        targetImageName: "Task",
-        attempts: 1,
-        list: {
-          ok: true,
-          data: [],
-        },
-      },
-    });
-    expect(calls).toEqual([
-      [
-        "image",
-        "create",
-        "--no-launch",
-        "--templateName",
-        "Pharo 13",
-        "Task",
-      ],
-      ["image", "list", "--nameFilter", "Task", "--ston"],
-    ]);
+        diagnostic: `Pharo Launcher said it created Task, but ${path.join(config.profile.imagesDir, "Task")} does not exist after 0 s.`,
+      });
+      expect(calls).toEqual([
+        ["image", "create", "--no-launch", "--templateName", "Pharo 13", "Task"],
+      ]);
+    } finally {
+      removeConfig(config);
+    }
   });
 
-  it("runs typed launcher read tools through the runner", async () => {
-    const calls: readonly string[][] = [];
-    const runner: LauncherCliRunner = async (args) => {
-      (calls as string[][]).push([...args]);
+  it("reads image_list from the images directory, not the Launcher", async () => {
+    const config = tempProfileConfig();
+    const runner: LauncherCliRunner = async () => {
+      throw new Error("runner should not be called");
+    };
+    const imagePath = path.join(config.profile.imagesDir, "Task", "Task.image");
+    writeCreatedImage(config.profile.imagesDir, "Task");
 
-      return {
-        exitCode: 0,
-        stdout: "[]",
-        stderr: "",
-        durationMs: 4,
-        timedOut: false,
-      };
+    try {
+      const result = await callTool(
+        "pharo_launcher_image_list",
+        { format: "ston", includeRaw: true },
+        {
+          runner,
+          config,
+          nativeProcess: {
+            platform: "linux",
+            runCommand: psRunner([`71513 /vms/130-x64/pharo --headless ${imagePath}`]),
+          },
+        },
+      );
+
+      expect(result.isError).toBeUndefined();
+      expect(parseJsonResult(result)).toEqual({
+        imagesDir: config.profile.imagesDir,
+        images: [
+          {
+            name: "Task",
+            imagePath,
+            pharoVersion: "130",
+            architecture: "64",
+            template: { name: "Pharo 13", url: "https://example.test/130/latest.zip" },
+            modified: expect.any(String),
+            pids: [71513],
+          },
+        ],
+        notImages: [],
+      });
+    } finally {
+      removeConfig(config);
+    }
+  });
+
+  it("reads image_info from the images directory, an error when it is not there", async () => {
+    const config = tempProfileConfig();
+    const runner: LauncherCliRunner = async () => {
+      throw new Error("runner should not be called");
+    };
+    writeCreatedImage(config.profile.imagesDir, "Task");
+    const options = {
+      runner,
+      config,
+      nativeProcess: { platform: "linux" as const, runCommand: psRunner([]) },
     };
 
-    const result = await callTool(
-      "pharo_launcher_image_list",
-      { format: "ston", includeRaw: true },
-      { runner },
-    );
+    try {
+      const found = await callTool("pharo_launcher_image_info", { imageName: "task" }, options);
+      const missing = await callTool("pharo_launcher_image_info", { imageName: "Base" }, options);
 
-    expect(result.isError).toBeUndefined();
-    const body = parseJsonResult(result);
-    expect(body).toMatchObject({
-      ok: true,
-      parser: {
-        status: "parsed",
-        format: "ston",
-      },
-      raw: {
-        stdout: "[]",
-        stderr: "",
-        format: "ston",
-      },
-      command: {
-        args: ["image", "list", "--ston"],
-        durationMs: 4,
-        exitCode: 0,
-      },
-    });
-    expect(calls).toEqual([["image", "list", "--ston"]]);
-  });
-
-  it("returns normalized data for read tools", async () => {
-    const runner: LauncherCliRunner = async () => ({
-      exitCode: 0,
-      stdout:
-        "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13',#url:URL['https://example.test/latest.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['Task','Task.image']}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'130-x64'}}]}]",
-      stderr: "",
-      durationMs: 4,
-      timedOut: false,
-    });
-
-    const result = await callTool(
-      "pharo_launcher_image_list",
-      { format: "ston" },
-      { runner },
-    );
-    const body = parseJsonResult(result);
-
-    expect(body).toMatchObject({
-      ok: true,
-      data: [
-        {
-          name: "Task",
-          architecture: "64",
-          pharoVersion: "130",
-          imagePath: "Task/Task.image",
-          vmId: "130-x64",
-        },
-      ],
-      parser: {
-        status: "parsed",
-        format: "ston",
-      },
-    });
+      expect(found.isError).toBeUndefined();
+      expect(parseJsonResult(found)).toMatchObject({
+        found: true,
+        image: { name: "Task", pids: [] },
+      });
+      expect(missing.isError).toBe(true);
+      expect(parseJsonResult(missing)).toEqual({
+        found: false,
+        imagesDir: config.profile.imagesDir,
+      });
+    } finally {
+      removeConfig(config);
+    }
   });
 
   it("returns tool errors for invalid typed launcher input", async () => {

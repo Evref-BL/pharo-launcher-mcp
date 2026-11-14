@@ -13,6 +13,7 @@ import {
   runLauncherCli,
 } from "./launcherCli.js";
 import { bundledLauncherScriptPath } from "./launcherScript.js";
+import { cliMetaInf, guiMetaInf, writeImage } from "./testing/images.js";
 
 function launcherConfig(
   config: Omit<PharoLauncherConfig, "installationLauncherImage"> &
@@ -33,12 +34,14 @@ function writeExecutableScript(filePath: string, source: string): void {
   fs.chmodSync(filePath, 0o755);
 }
 
-function launcherImageInfoSton(imageName: string, vmId = "130-x64"): string {
-  return `OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13'},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['${imageName}','${imageName}.image'],#origin:#launcherImagesLocation}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'${vmId}',#blessing:'stable'}}]}]`;
-}
-
-function launcherTemplateOnlyImageInfoSton(imageName: string): string {
-  return `[PhLImage{#originTemplate:PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']},#launchConfigurations:OrderedCollection[],#shouldRunInitializationScript:true}]`;
+/** An image as `image create` leaves it, its template naming Pharo 13. */
+function writeCreatedImage(imagesDir: string, imageName: string): void {
+  writeImage(imagesDir, imageName, {
+    metaInf: cliMetaInf(
+      "Pharo 13.0 - 64bit (stable)",
+      "https://files.pharo.org/image/130/latest-64.zip",
+    ),
+  });
 }
 
 async function waitForFile(filePath: string): Promise<void> {
@@ -543,17 +546,15 @@ describe("buildLauncherCliInvocation", () => {
     fs.mkdirSync(path.dirname(vmPath), { recursive: true });
     fs.mkdirSync(path.dirname(installationLauncherImage), { recursive: true });
     fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
-    fs.writeFileSync(imagePath, "", "utf8");
+    writeCreatedImage(profile.imagesDir, imageName);
     fs.writeFileSync(startupScriptPath, "Smalltalk snapshot: false andQuit: true.", "utf8");
     writeExecutableScript(
       launcherScriptPath,
       [
         "#!/usr/bin/env sh",
         `printf '%s\\n' "$*" >> ${shellQuote(launcherCallsPath)}`,
-        `case "$*" in`,
-        `  *"image info --ston ${imageName}"*) printf '%s\\n' ${shellQuote(launcherTemplateOnlyImageInfoSton(imageName))} ;;`,
-        `  *) echo "unexpected launcher command: $*" >&2; exit 64 ;;`,
-        "esac",
+        `echo "unexpected launcher command: $*" >&2`,
+        "exit 64",
         "",
       ].join("\n"),
     );
@@ -604,12 +605,8 @@ describe("buildLauncherCliInvocation", () => {
       expect(result.stdout).toContain("vmUpdated: false");
       expect(result.stderr).toBe("");
       expect(result.timedOut).toBe(false);
-      expect(fs.readFileSync(launcherCallsPath, "utf8")).toContain(
-        `image info --ston ${imageName}`,
-      );
-      expect(fs.readFileSync(launcherCallsPath, "utf8")).not.toContain(
-        "image launch",
-      );
+      // The image is read from the images directory: no Launcher boot.
+      expect(fs.existsSync(launcherCallsPath)).toBe(false);
       expect(fs.readFileSync(vmArgsPath, "utf8")).toBe(
         ["--headless", imagePath, "eval", startupScriptPath, ""].join("\n"),
       );
@@ -662,16 +659,14 @@ describe("buildLauncherCliInvocation", () => {
     fs.mkdirSync(path.dirname(vmPath), { recursive: true });
     fs.mkdirSync(path.dirname(installationLauncherImage), { recursive: true });
     fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
-    fs.writeFileSync(imagePath, "", "utf8");
+    writeCreatedImage(profile.imagesDir, imageName);
     fs.writeFileSync(checkScriptPath, "Smalltalk snapshot: false andQuit: true.", "utf8");
     writeExecutableScript(
       launcherScriptPath,
       [
         "#!/usr/bin/env sh",
-        `case "$*" in`,
-        `  *"image info --ston ${imageName}"*) printf '%s\\n' ${shellQuote(launcherTemplateOnlyImageInfoSton(imageName))} ;;`,
-        `  *) echo "unexpected launcher command: $*" >&2; exit 64 ;;`,
-        "esac",
+        `echo "unexpected launcher command: $*" >&2`,
+        "exit 64",
         "",
       ].join("\n"),
     );
@@ -760,16 +755,14 @@ describe("buildLauncherCliInvocation", () => {
     fs.mkdirSync(path.dirname(vmPath), { recursive: true });
     fs.mkdirSync(path.dirname(installationLauncherImage), { recursive: true });
     fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
-    fs.writeFileSync(imagePath, "", "utf8");
+    writeCreatedImage(profile.imagesDir, imageName);
     writeExecutableScript(
       launcherScriptPath,
       [
         "#!/usr/bin/env sh",
         `printf '%s\\n' "$*" >> ${shellQuote(launcherCallsPath)}`,
-        `case "$*" in`,
-        `  *"image info --ston ${imageName}"*) printf '%s\\n' ${shellQuote(launcherTemplateOnlyImageInfoSton(imageName))} ;;`,
-        `  *) echo "unexpected launcher command: $*" >&2; exit 64 ;;`,
-        "esac",
+        `echo "unexpected launcher command: $*" >&2`,
+        "exit 64",
         "",
       ].join("\n"),
     );
@@ -816,12 +809,8 @@ describe("buildLauncherCliInvocation", () => {
       expect(result.stdout).toContain("Detached profile-scoped Pharo image pid");
       expect(result.stdout).toContain("displayMode: interactive");
       expect(result.stderr).toBe("");
-      expect(fs.readFileSync(launcherCallsPath, "utf8")).toContain(
-        `image info --ston ${imageName}`,
-      );
-      expect(fs.readFileSync(launcherCallsPath, "utf8")).not.toContain(
-        "image launch",
-      );
+      // The image is read from the images directory: no Launcher boot.
+      expect(fs.existsSync(launcherCallsPath)).toBe(false);
       expect(fs.readFileSync(vmArgsPath, "utf8")).toBe([imagePath, ""].join("\n"));
     } finally {
       fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -869,7 +858,16 @@ describe("buildLauncherCliInvocation", () => {
     fs.mkdirSync(path.dirname(imagePath), { recursive: true });
     fs.mkdirSync(path.dirname(installationLauncherImage), { recursive: true });
     fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
-    fs.writeFileSync(imagePath, "", "utf8");
+    writeImage(profile.imagesDir, imageName, {
+      metaInf: guiMetaInf({
+        imageName,
+        pharoVersion: "130",
+        architecture: "64",
+        templateName: "Pharo 13.0 - 64bit (stable)",
+        url: "https://files.pharo.org/image/130/latest-64.zip",
+        vmId,
+      }),
+    });
     fs.writeFileSync(startupScriptPath, "Smalltalk snapshot: false andQuit: true.", "utf8");
     writeExecutableScript(
       launcherScriptPath,
@@ -877,7 +875,6 @@ describe("buildLauncherCliInvocation", () => {
         "#!/usr/bin/env sh",
         `printf '%s\\n' "$*" >> ${shellQuote(launcherCallsPath)}`,
         `case "$*" in`,
-        `  *"image info --ston ${imageName}"*) printf '%s\\n' ${shellQuote(launcherImageInfoSton(imageName, vmId))} ;;`,
         `  *"vm update ${vmId}"*)`,
         `    mkdir -p ${shellQuote(path.dirname(vmPath))}`,
         `    cat > ${shellQuote(vmPath)} <<'VM'`,
@@ -919,10 +916,146 @@ describe("buildLauncherCliInvocation", () => {
       expect(result.stdout).toContain(startupScriptPath);
       expect(result.stderr).toBe("");
       expect(result.timedOut).toBe(false);
-      expect(fs.readFileSync(launcherCallsPath, "utf8")).toContain(
-        `vm update ${vmId}`,
-      );
+      expect(fs.readFileSync(launcherCallsPath, "utf8").trim().split("\n")).toEqual([
+        expect.stringContaining(`vm update ${vmId}`),
+      ]);
       expect(fs.existsSync(vmPath)).toBe(true);
+    } finally {
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  describe("a profile launch picks the VM", () => {
+    const pharo14 = "Pharo 14.0 - 64bit (next stable)";
+    const vmIds = ["140-x64", "120-x64", "130-x64", "90-x86"];
+
+    it.each([
+      [
+        "of pharo.version and the header, for an image as image create leaves it",
+        { metaInf: cliMetaInf(pharo14, "https://files.pharo.org/image/140/latest-64.zip"), pharoVersion: "140" },
+        "140-x64",
+      ],
+      [
+        "its last launch used, from meta-inf.ston",
+        {
+          metaInf: guiMetaInf({
+            imageName: "Task",
+            pharoVersion: "130",
+            architecture: "64",
+            templateName: "Pharo 13.0 - 64bit (stable)",
+            url: "https://files.pharo.org/image/130/latest-64.zip",
+            vmId: "120-x64",
+          }),
+        },
+        "120-x64",
+      ],
+      [
+        "its template's URL names, with no pharo.version",
+        { metaInf: cliMetaInf("Pharo 13.0 - 64bit (stable)", "https://files.pharo.org/image/130/latest-64.zip") },
+        "130-x64",
+      ],
+      ["of a 32-bit header", { pharoVersion: "90", format: 6521 }, "90-x86"],
+    ])("%s", async (_label, fixture, vmId) => {
+      if (process.platform === "win32") {
+        return;
+      }
+
+      const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pharo-launcher-mcp-vm-"));
+      const launcherCallsPath = path.join(stateRoot, "launcher-calls.txt");
+      const launcherScriptPath = path.join(stateRoot, "launcher.sh");
+      const installationLauncherImage = path.join(stateRoot, "installation", "PharoLauncher.image");
+      const profile = {
+        name: "isolated",
+        stateRoot,
+        launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+        imagesDir: path.join(stateRoot, "images"),
+        vmsDir: path.join(stateRoot, "vms"),
+        templateSourcesDir: path.join(stateRoot, "templates"),
+        initScriptsDir: path.join(stateRoot, "init-scripts"),
+        logsDir: path.join(stateRoot, "logs"),
+      };
+      fs.mkdirSync(path.dirname(installationLauncherImage), { recursive: true });
+      fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
+      writeImage(profile.imagesDir, "Task", fixture);
+      for (const id of vmIds) {
+        const vmPath = path.join(profile.vmsDir, id, "Pharo.app", "Contents", "MacOS", "Pharo");
+        fs.mkdirSync(path.dirname(vmPath), { recursive: true });
+        writeExecutableScript(vmPath, ["#!/usr/bin/env sh", `echo "ran by ${id}"`, ""].join("\n"));
+      }
+      writeExecutableScript(
+        launcherScriptPath,
+        [
+          "#!/usr/bin/env sh",
+          `printf '%s\\n' "$*" >> ${shellQuote(launcherCallsPath)}`,
+          "exit 64",
+          "",
+        ].join("\n"),
+      );
+
+      try {
+        const result = await runLauncherCli(["image", "launch", "Task"], {
+          config: launcherConfig({
+            launcherDir: stateRoot,
+            launcherVm: "unused",
+            installationLauncherImage,
+            launcherImage: profile.launcherImage,
+            launcherScript: launcherScriptPath,
+            launcherConfiguration: path.join(stateRoot, "launcher", "pharo-launcher-cli-config.ston"),
+            profile,
+          }),
+          timeoutMs: 2_000,
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain(`vmId: ${vmId}`);
+        expect(result.stdout).toContain(`ran by ${vmId}`);
+        expect(fs.existsSync(launcherCallsPath)).toBe(false);
+      } finally {
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("says there is no image when the images directory holds none of that name", async () => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pharo-launcher-mcp-launch-"));
+    const installationLauncherImage = path.join(stateRoot, "installation", "PharoLauncher.image");
+    const profile = {
+      name: "isolated",
+      stateRoot,
+      launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+      imagesDir: path.join(stateRoot, "images"),
+      vmsDir: path.join(stateRoot, "vms"),
+      templateSourcesDir: path.join(stateRoot, "templates"),
+      initScriptsDir: path.join(stateRoot, "init-scripts"),
+      logsDir: path.join(stateRoot, "logs"),
+    };
+    fs.mkdirSync(path.dirname(installationLauncherImage), { recursive: true });
+    fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
+    // A hand copy: its files keep the name they were copied from.
+    writeImage(profile.imagesDir, "release-check");
+    fs.renameSync(
+      path.join(profile.imagesDir, "release-check"),
+      path.join(profile.imagesDir, "releasecheck"),
+    );
+
+    try {
+      const result = await runLauncherCli(["image", "launch", "releasecheck"], {
+        config: launcherConfig({
+          launcherDir: stateRoot,
+          launcherVm: "unused",
+          installationLauncherImage,
+          launcherImage: profile.launcherImage,
+          launcherScript: path.join(stateRoot, "never-run.sh"),
+          launcherConfiguration: path.join(stateRoot, "launcher", "pharo-launcher-cli-config.ston"),
+          profile,
+        }),
+        timeoutMs: 2_000,
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe(
+        `There is no image releasecheck in ${path.resolve(profile.imagesDir)}.`,
+      );
     } finally {
       fs.rmSync(stateRoot, { recursive: true, force: true });
     }

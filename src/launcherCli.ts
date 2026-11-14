@@ -6,10 +6,14 @@ import {
   type PharoLauncherProfileConfig,
   type PharoLauncherConfig,
 } from "./config.js";
+import {
+  findByName,
+  readLauncherImage,
+  scanImages,
+} from "./imageStore.js";
 import { resolveLauncherScript } from "./launcherScript.js";
-import type { LauncherImage } from "./models.js";
+import type { LauncherImage, LauncherProcess } from "./models.js";
 import { compactTokenText } from "./textTokens.js";
-import { parseLauncherOutput } from "./parser.js";
 import {
   shouldRunScriptThroughBash,
   shouldRunScriptThroughCommandShell,
@@ -30,6 +34,8 @@ export interface LauncherCliResult {
   durationMs: number;
   timedOut: boolean;
   timeoutReason?: string;
+  /** The processes a native process list saw, or a kill aimed at. */
+  processes?: LauncherProcess[];
 }
 
 export interface RunLauncherCliOptions {
@@ -62,7 +68,7 @@ interface ProfileImageLaunchTarget {
 }
 
 interface ProfileImageInspection {
-  image?: LauncherImage;
+  image: LauncherImage;
   imagePath: string;
 }
 
@@ -567,30 +573,6 @@ function runInvocation(
   });
 }
 
-function parsedImagesFromInfo(stdout: string): LauncherImage[] | undefined {
-  const parsed = parseLauncherOutput(
-    "pharo_launcher_image_info",
-    "ston",
-    stdout,
-  );
-  if (parsed.status !== "parsed") {
-    return undefined;
-  }
-
-  if (Array.isArray(parsed.data)) {
-    return parsed.data.filter(
-      (item): item is LauncherImage =>
-        typeof item === "object" && item !== null,
-    );
-  }
-
-  if (typeof parsed.data === "object" && parsed.data !== null) {
-    return [parsed.data as LauncherImage];
-  }
-
-  return undefined;
-}
-
 function imageNameFromLaunchArgs(args: readonly string[]): string | undefined {
   const candidate = args.at(-1);
   return candidate && !candidate.startsWith("--") ? candidate : undefined;
@@ -614,7 +596,7 @@ function normalizePharoVersion(value: string): string {
 }
 
 function pharoVersionFromTemplate(image: LauncherImage): string | undefined {
-  const template = image.originTemplate;
+  const template = image.template;
   const urlVersion = template?.url?.match(
     /(?:^|[/-])(\d{2,3})(?:[./-]|$)/,
   )?.[1];
@@ -629,7 +611,14 @@ function pharoVersionFromTemplate(image: LauncherImage): string | undefined {
 }
 
 function vmArchitectureSegment(image: LauncherImage): string {
-  const source = `${image.architecture ?? ""} ${image.originTemplate?.name ?? ""} ${image.originTemplate?.url ?? ""}`;
+  if (image.architecture === "64") {
+    return "x64";
+  }
+  if (image.architecture === "32") {
+    return "x86";
+  }
+
+  const source = `${image.template?.name ?? ""} ${image.template?.url ?? ""}`;
   const lower = source.toLowerCase();
   const compact = compactTokenText(source);
   if (lower.includes("aarch64") || lower.includes("arm64")) {
@@ -642,31 +631,20 @@ function vmArchitectureSegment(image: LauncherImage): string {
   return "x64";
 }
 
-function imageVmId(image: LauncherImage | undefined): string | undefined {
-  if (image?.vmId) {
+/**
+ * The VM an image needs: the one its last launch used, else its Pharo version
+ * with the architecture its header says (`PhLVirtualMachineManager>>vmId`),
+ * else what its template's URL or name says.
+ */
+function imageVmId(image: LauncherImage): string | undefined {
+  if (image.vmId) {
     return image.vmId;
-  }
-
-  if (!image) {
-    return undefined;
   }
 
   const pharoVersion = image.pharoVersion ?? pharoVersionFromTemplate(image);
   return pharoVersion
     ? `${pharoVersion}-${vmArchitectureSegment(image)}`
     : undefined;
-}
-
-function profileImagePath(
-  profile: PharoLauncherProfileConfig,
-  imageName: string,
-  image: LauncherImage | undefined,
-): string {
-  const imagePath =
-    image?.imagePath ?? path.join(imageName, `${imageName}.image`);
-  return path.isAbsolute(imagePath)
-    ? path.resolve(imagePath)
-    : path.resolve(profile.imagesDir, imagePath);
 }
 
 function profileVmDirectory(
@@ -777,60 +755,29 @@ function profileImageLaunchTarget(
   return { profile, imageName };
 }
 
-async function inspectProfileImageForLaunch(
+/**
+ * The image to launch, read through the images directory, as every other tool
+ * reads it: no Launcher boot, and every path the reader builds is inside it.
+ */
+function inspectProfileImageForLaunch(
   target: ProfileImageLaunchTarget,
-  config: PharoLauncherConfig,
-  timeoutMs: number,
   startTime: number,
-): Promise<ProfileImageInspection | LauncherCliResult> {
-  const infoArgs = ["image", "info", "--ston", target.imageName];
-  const infoResult = await launcherCliSubcommand(infoArgs, config, timeoutMs);
-  if (infoResult.exitCode !== 0 || infoResult.timedOut) {
+): ProfileImageInspection | LauncherCliResult {
+  const imagesDir = path.resolve(target.profile.imagesDir);
+  const entry = findByName(scanImages(imagesDir).images, target.imageName);
+  if (!entry) {
     return failedResult(
-      [
-        `Profile-scoped image launch could not inspect image ${target.imageName}.`,
-        commandFailureDiagnostic("pharo_launcher_image_info", infoResult),
-      ].join("\n"),
-      startTime,
-      {
-        timedOut: infoResult.timedOut,
-        ...(infoResult.timeoutReason
-          ? { timeoutReason: infoResult.timeoutReason }
-          : {}),
-      },
-    );
-  }
-
-  const images = parsedImagesFromInfo(infoResult.stdout);
-  const image =
-    images?.find((candidate) => candidate.name === target.imageName) ??
-    images?.[0];
-  const imagePath = profileImagePath(target.profile, target.imageName, image);
-  if (!isPathInside(target.profile.imagesDir, imagePath)) {
-    return failedResult(
-      [
-        `Profile-scoped image launch refused image path outside PHARO_LAUNCHER_MCP_IMAGES_DIR (${target.profile.imagesDir}).`,
-        `image: ${imagePath}`,
-      ].join("\n"),
-      startTime,
-    );
-  }
-  if (!fs.existsSync(imagePath)) {
-    return failedResult(
-      [
-        `Profile-scoped image launch could not find image file for ${target.imageName}.`,
-        `expected: ${imagePath}`,
-      ].join("\n"),
+      `There is no image ${target.imageName} in ${imagesDir}.`,
       startTime,
     );
   }
 
-  return { image, imagePath };
+  return { image: readLauncherImage(entry), imagePath: entry.imagePath };
 }
 
 async function resolveProfileVmForLaunch(
   target: ProfileImageLaunchTarget,
-  image: LauncherImage | undefined,
+  image: LauncherImage,
   config: PharoLauncherConfig,
   timeoutMs: number,
   startTime: number,
@@ -895,12 +842,7 @@ async function profileScopedImageLaunchPlan(
     return target;
   }
 
-  const inspection = await inspectProfileImageForLaunch(
-    target,
-    config,
-    timeoutMs,
-    startTime,
-  );
+  const inspection = inspectProfileImageForLaunch(target, startTime);
   if (isLauncherCliResult(inspection)) {
     return inspection;
   }

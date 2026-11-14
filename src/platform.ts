@@ -119,6 +119,25 @@ export function defaultLauncherImage(
   return paths.join(launcherDir, "PharoLauncher.image");
 }
 
+/**
+ * Where Pharo Launcher keeps the user's files: its settings, and by default its
+ * images. `PlatformResolver>>launcherUserFilesLocation` answers the documents
+ * folder's `Pharo` on macOS and Windows, and `UnixResolver`'s answers `~/Pharo`.
+ */
+export function launcherUserFilesLocation(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  const home = homeDir(env);
+  if (!home) {
+    return undefined;
+  }
+
+  return platform === "darwin" || platform === "win32"
+    ? pathApi(platform).join(home, "Documents", "Pharo")
+    : pathApi(platform).join(home, "Pharo");
+}
+
 export function bundledLauncherScriptName(
   platform: NodeJS.Platform = process.platform,
 ): LauncherScriptName {

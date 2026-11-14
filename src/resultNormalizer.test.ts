@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  parseLauncherImagesFromSton,
-  parseLauncherProcessesFromText,
   parseLauncherTemplatesFromSton,
-  parseLauncherImagesFromText,
   parseLauncherOutput,
 } from "./parser.js";
 import { normalizeLauncherResult } from "./resultNormalizer.js";
@@ -160,120 +157,6 @@ describe("result normalizer", () => {
     expect(result.raw).toBeUndefined();
   });
 
-  it("names an image after the directory the image file sits in", () => {
-    const nested = parseLauncherImagesFromSton(
-      "PhLImage{#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['images','MCP13','MCP13.image']}}}",
-    );
-    const flat = parseLauncherImagesFromSton(
-      "PhLImage{#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['MCP13.image']}}}",
-    );
-
-    expect(nested[0]?.name).toBe("MCP13");
-    // Nothing but the file to read it from, so read it off the file rather
-    // than calling the image MCP13.image.
-    expect(flat[0]?.name).toBe("MCP13");
-  });
-
-  it("extracts LauncherImage models from STON output", () => {
-    const images = parseLauncherImagesFromSton(
-      "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['MCP13','MCP13.image'],#origin:#launcherImagesLocation}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'130-x64',#blessing:'stable'}}]}]",
-    );
-
-    expect(images).toEqual([
-      {
-        name: "MCP13",
-        imagePath: "MCP13/MCP13.image",
-        architecture: "64",
-        pharoVersion: "130",
-        formatNumber: 68021,
-        originTemplate: {
-          name: "Pharo 13.0 - 64bit (stable)",
-          url: "https://files.pharo.org/image/130/latest-64.zip",
-        },
-        vmId: "130-x64",
-      },
-    ]);
-  });
-
-  it("extracts LauncherImage models from text table output", () => {
-    const images = parseLauncherImagesFromText(`
-#  Name                                             Architecture Pharo version Last modified
--- ------------------------------------------------ ------------ ------------- -------------------
-1  Pharo 13.0 - 64bit (stable)                     64           130           2026-04-25 10:00:00
-`);
-
-    expect(images).toEqual([
-      {
-        name: "Pharo 13.0 - 64bit (stable)",
-        architecture: "64",
-        pharoVersion: "130",
-      },
-    ]);
-  });
-
-  it("returns a single model for info parser output with one item", () => {
-    const result = parseLauncherOutput(
-      "pharo_launcher_image_info",
-      "ston",
-      "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['MCP13','MCP13.image'],#origin:#launcherImagesLocation}}}]",
-    );
-
-    expect(result).toMatchObject({
-      status: "parsed",
-      format: "ston",
-      data: {
-        name: "MCP13",
-        imagePath: "MCP13/MCP13.image",
-      },
-    });
-  });
-
-  it("uses the list name filter when PharoLauncher omits image file metadata", () => {
-    const result = normalizeLauncherResult(
-      "pharo_launcher_image_list",
-      ["image", "list", "--nameFilter", "MCP13Copy", "--ston"],
-      {
-        ...cliResult,
-        stdout:
-          "OrderedCollection[PhLImage{#originTemplate:PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']},#launchConfigurations:OrderedCollection[],#shouldRunInitializationScript:true}]",
-      },
-    );
-
-    expect(result).toMatchObject({
-      ok: true,
-      data: [
-        {
-          name: "MCP13Copy",
-          originTemplate: {
-            name: "Pharo 13.0 - 64bit (stable)",
-          },
-        },
-      ],
-    });
-  });
-
-  it("uses the image info argument when PharoLauncher omits image file metadata", () => {
-    const result = normalizeLauncherResult(
-      "pharo_launcher_image_info",
-      ["image", "info", "--ston", "MCP13Copy"],
-      {
-        ...cliResult,
-        stdout:
-          "OrderedCollection[PhLImage{#originTemplate:PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']},#launchConfigurations:OrderedCollection[],#shouldRunInitializationScript:true}]",
-      },
-    );
-
-    expect(result).toMatchObject({
-      ok: true,
-      data: {
-        name: "MCP13Copy",
-        originTemplate: {
-          name: "Pharo 13.0 - 64bit (stable)",
-        },
-      },
-    });
-  });
-
   it("extracts LauncherTemplate models", () => {
     const templates = parseLauncherTemplatesFromSton(
       "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']}]",
@@ -287,38 +170,29 @@ describe("result normalizer", () => {
     ]);
   });
 
-  it("extracts LauncherProcess models from text output", () => {
-    const processes = parseLauncherProcessesFromText(
-      "3093 C:/Pharo/vms/130-x64/Pharo.exe C:/Pharo/images/MCP13/MCP13.image",
-    );
-
-    expect(processes).toEqual([
+  // The native list hands over its records, so nothing prints them and parses
+  // the print back.
+  it("takes a process list's records as its data", () => {
+    const processes = [
       {
         pid: 3093,
-        commandLine:
-          "3093 C:/Pharo/vms/130-x64/Pharo.exe C:/Pharo/images/MCP13/MCP13.image",
-        executablePath: "C:/Pharo/vms/130-x64/Pharo.exe",
-        imagePath: "C:/Pharo/images/MCP13/MCP13.image",
-        imageName: "MCP13",
+        commandLine: "/vms/Pharo /images/MCP debug/MCP debug.image",
+        imagePath: "/images/MCP debug/MCP debug.image",
+        imageName: "MCP debug",
       },
-    ]);
-  });
+    ];
 
-  it("extracts LauncherProcess models from quoted Windows text output", () => {
-    const processes = parseLauncherProcessesFromText(
-      '3093 "C:\\Program Files\\Pharo\\Pharo.exe" "C:\\Users\\Ada\\Images\\MCP13\\MCP13.image" "C:\\Program Files\\Pharo\\Pharo.exe C:\\Users\\Ada\\Images\\MCP13\\MCP13.image"',
+    const result = normalizeLauncherResult(
+      "pharo_launcher_process_list",
+      ["process", "list"],
+      { ...cliResult, stdout: "printed for raw only", processes },
     );
 
-    expect(processes).toEqual([
-      {
-        pid: 3093,
-        commandLine:
-          '3093 "C:\\Program Files\\Pharo\\Pharo.exe" "C:\\Users\\Ada\\Images\\MCP13\\MCP13.image" "C:\\Program Files\\Pharo\\Pharo.exe C:\\Users\\Ada\\Images\\MCP13\\MCP13.image"',
-        executablePath: "C:\\Program Files\\Pharo\\Pharo.exe",
-        imagePath: "C:\\Users\\Ada\\Images\\MCP13\\MCP13.image",
-        imageName: "MCP13",
-      },
-    ]);
+    expect(result).toMatchObject({
+      ok: true,
+      data: processes,
+      parser: { status: "parsed" },
+    });
   });
 
   it("returns unsupported parser status when no parser exists", () => {

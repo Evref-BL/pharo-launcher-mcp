@@ -13,6 +13,8 @@ import {
 import { copyImageBetweenProfiles } from "./crossProfileCopy.js";
 import {
   commandResultOptions,
+  imageInfoResult,
+  listImagesResult,
   runCommand,
   type PharoLauncherOptions,
 } from "./launcher.js";
@@ -152,6 +154,18 @@ export async function callTool(
 
     case "pharo_launcher_image_copy_between_profiles":
       return profileImageCopyResult(argumentsValue);
+
+    // Read from the images directory, with no Launcher command.
+    case "pharo_launcher_image_list":
+      return withToolInputErrorResult(async () =>
+        jsonResult(await listImagesResult(argumentsValue, options)),
+      );
+
+    case "pharo_launcher_image_info":
+      return withToolInputErrorResult(async () => {
+        const info = await imageInfoResult(argumentsValue, options);
+        return jsonResult(info, !info.found);
+      });
 
     default:
       return commandCatalogToolResult(name, argumentsValue, options);

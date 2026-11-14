@@ -5,6 +5,7 @@ import {
   defaultLauncherVm,
   joinPlatformPath,
   launcherPlatformDefaults,
+  launcherUserFilesLocation,
 } from "./platform.js";
 
 export type PharoLauncherInstallationSource =
@@ -44,6 +45,11 @@ export interface PharoLauncherConfig {
   launcherImage: string;
   launcherScript?: string;
   launcherConfiguration?: string;
+  /**
+   * Where Pharo Launcher keeps the user's settings and, by default, images:
+   * read outside a profile, where the images directory comes from there.
+   */
+  launcherUserFilesDir?: string;
   profile?: PharoLauncherProfileConfig;
   discovery?: PharoLauncherInstallationDiscovery;
 }
@@ -264,6 +270,7 @@ export function loadPharoLauncherConfig(
     profile,
     platform,
   );
+  const launcherUserFilesDir = launcherUserFilesLocation(env, platform);
 
   return {
     launcherDir,
@@ -274,6 +281,7 @@ export function loadPharoLauncherConfig(
       ? { launcherScript: env.PHARO_LAUNCHER_SCRIPT }
       : {}),
     ...(launcherConfiguration ? { launcherConfiguration } : {}),
+    ...(launcherUserFilesDir ? { launcherUserFilesDir } : {}),
     ...(profile ? { profile } : {}),
     discovery,
   };
