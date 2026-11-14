@@ -124,7 +124,7 @@ async function deleteImageIfPresent(
   await callLiveTool(
     profile,
     "pharo_launcher_image_delete",
-    { imageName, force: true },
+    { imageName },
     { timeoutMs: copyTimeoutMs },
   ).catch(() => undefined);
 }

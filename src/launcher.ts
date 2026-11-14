@@ -683,6 +683,7 @@ export interface ImageCreateInput extends LauncherTableOptions {
 
 export interface ImageStartInput extends LauncherTableOptions {
   imageName: string;
+  /** Relative to the calling process's working directory. */
   script?: string;
   detached?: boolean;
   /** Profile mode only: PharoLauncher's own image launch has no display mode. */
@@ -710,7 +711,7 @@ export interface PharoLauncher {
   ): Promise<LauncherCommandResult>;
   startImage(input: ImageStartInput): Promise<LauncherCommandResult>;
   deleteImage(
-    input: { imageName: string; force?: boolean } & LauncherTableOptions,
+    input: { imageName: string } & LauncherTableOptions,
   ): Promise<LauncherCommandResult>;
   listProcesses(
     input?: LauncherTableOptions,

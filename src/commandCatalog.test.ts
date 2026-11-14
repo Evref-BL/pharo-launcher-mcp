@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildLauncherCommandArgs,
@@ -82,7 +83,14 @@ describe("launcher command catalog", () => {
     [
       "pharo_launcher_image_start",
       { imageName: "Task", script: "bootstrap.st", detached: true },
-      ["image", "launch", "--script", "bootstrap.st", "--detached", "Task"],
+      [
+        "image",
+        "launch",
+        "--script",
+        path.resolve("bootstrap.st"),
+        "--detached",
+        "Task",
+      ],
     ],
     [
       "pharo_launcher_image_start",
@@ -174,7 +182,6 @@ describe("launcher command catalog", () => {
     expect(
       buildLauncherCommandArgs("pharo_launcher_image_delete", {
         imageName: "Task",
-        force: true,
       }),
     ).toEqual(["image", "delete", "--force", "Task"]);
 
@@ -191,13 +198,54 @@ describe("launcher command catalog", () => {
 
   // Callers built against the confirmation gate keep working: the server
   // validates no schema, so a key nothing reads is a key nothing trips over.
-  it("ignores a confirm argument left over from an older caller", () => {
+  it.each([{ confirm: true }, { force: true }, { force: false }])(
+    "ignores %o left over from an older caller",
+    (leftover) => {
+      expect(
+        buildLauncherCommandArgs("pharo_launcher_image_delete", {
+          imageName: "Task",
+          ...leftover,
+        }),
+      ).toEqual(["image", "delete", "--force", "Task"]);
+    },
+  );
+
+  // PharoLauncher asks on standard input before a delete without --force,
+  // and a call has nobody there to answer it.
+  it("advertises no way to ask for a confirmation", () => {
+    const deleteTool = launcherCommandTools.find(
+      (tool) => tool.name === "pharo_launcher_image_delete",
+    );
+
     expect(
-      buildLauncherCommandArgs("pharo_launcher_image_delete", {
+      Object.keys((deleteTool?.inputSchema.properties ?? {}) as object),
+    ).toEqual(["imageName", "includeRaw"]);
+  });
+
+  // The caller means its own directory. Passed on as it is, the path would be
+  // read from the image's directory by the profile's VM, or from
+  // PharoLauncher's by PharoLauncher.
+  it("reads a relative launch script from the caller's directory", () => {
+    const absolute = path.resolve("elsewhere", "check.st");
+
+    expect(
+      buildLauncherCommandArgs("pharo_launcher_image_start", {
         imageName: "Task",
-        confirm: true,
+        script: "check.st",
       }),
-    ).toEqual(["image", "delete", "Task"]);
+    ).toEqual([
+      "image",
+      "launch",
+      "--script",
+      path.join(process.cwd(), "check.st"),
+      "Task",
+    ]);
+    expect(
+      buildLauncherCommandArgs("pharo_launcher_image_start", {
+        imageName: "Task",
+        script: absolute,
+      }),
+    ).toEqual(["image", "launch", "--script", absolute, "Task"]);
   });
 
   it.each([

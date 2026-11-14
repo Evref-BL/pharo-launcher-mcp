@@ -1,3 +1,5 @@
+import path from "node:path";
+
 export interface LauncherCommandTool {
   name: string;
   description: string;
@@ -79,6 +81,12 @@ function requiredString(input: Record<string, unknown>, key: string): string {
   }
 
   return value;
+}
+
+/** A path the caller named, read from the caller's working directory. */
+function optionalPath(input: Record<string, unknown>, key: string): string | undefined {
+  const value = optionalString(input, key);
+  return value === undefined ? undefined : path.resolve(value);
 }
 
 function optionalStringOrNumber(
@@ -183,19 +191,18 @@ function imageCreate(input: unknown): string[] {
   return args;
 }
 
+// Without --force PharoLauncher asks on standard input, and keeps asking: a
+// call has nobody there to answer. Calling the tool is the confirmation.
 function imageDelete(input: unknown): string[] {
   const object = inputObject(input);
-  const args = ["image", "delete"];
-  addFlag(args, "--force", optionalBoolean(object, "force"));
-  args.push(requiredString(object, "imageName"));
-  return args;
+  return ["image", "delete", "--force", requiredString(object, "imageName")];
 }
 
 function imageStart(input: unknown): string[] {
   const object = inputObject(input);
   // PharoLauncher's subcommand is still `launch`; only the tool name moved.
   const args = ["image", "launch"];
-  addOption(args, "--script", optionalString(object, "script"));
+  addOption(args, "--script", optionalPath(object, "script"));
   addOption(args, "--displayMode", optionalDisplayMode(object));
   addFlag(args, "--detached", optionalBoolean(object, "detached"));
   args.push(requiredString(object, "imageName"));
@@ -278,14 +285,9 @@ export const launcherCommandTools: LauncherCommandTool[] = [
   },
   {
     name: "pharo_launcher_image_delete",
-    description: "Delete a local image.",
-    inputSchema: objectSchema(
-      {
-        imageName: stringSchema,
-        force: booleanSchema,
-      },
-      ["imageName"],
-    ),
+    description:
+      "Delete a local image and its directory. Nothing asks for a confirmation.",
+    inputSchema: objectSchema({ imageName: stringSchema }, ["imageName"]),
     buildArgs: imageDelete,
   },
   {
@@ -315,7 +317,12 @@ export const launcherCommandTools: LauncherCommandTool[] = [
     inputSchema: objectSchema(
       {
         imageName: stringSchema,
-        script: stringSchema,
+        script: {
+          ...stringSchema,
+          description:
+            "A script for the image to run. A relative path is read from this " +
+            "server's working directory.",
+        },
         detached: booleanSchema,
         displayMode: displayModeSchema,
       },
