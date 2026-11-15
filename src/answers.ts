@@ -347,34 +347,14 @@ const answerImageList: Answer = async (context, input) => {
   const dir = list.imagesDir;
   const total = scan.images.length;
   const shown = list.images.length;
-  const running = list.images.filter((image) => (image.pids?.length ?? 0) > 0).length;
-  const knowsWhichRun = list.processListFailure === undefined;
-  const runningPart = !knowsWhichRun
-    ? ""
-    : shown === 1
-      ? running === 1
-        ? ", running"
-        : ", not running"
-      : running === 0
-        ? ", none running"
-        : `, ${running} running`;
   const filter = nameFilter === undefined ? undefined : inlineValue(nameFilter);
-
-  let summary: string;
-  if (!scan.exists) {
-    summary = `No images in ${dir}, which does not exist.`;
-  } else if (total === 0) {
-    summary = `No images in ${dir}.`;
-  } else if (filter !== undefined && shown === 0) {
-    summary = `No image in ${dir} has ${filter} in its name, out of ${total}.`;
-  } else if (filter !== undefined) {
-    summary =
-      shown === 1
-        ? `1 of ${total} ${plural(total, "image")} in ${dir} has ${filter} in its name${runningPart}.`
-        : `${shown} of ${total} images in ${dir} have ${filter} in their name${runningPart}.`;
-  } else {
-    summary = `${shown} ${plural(shown, "image")} in ${dir}${runningPart}.`;
-  }
+  const summary = !scan.exists
+    ? `No images in ${dir}, which does not exist.`
+    : total === 0
+      ? `No images in ${dir}.`
+      : filter === undefined
+        ? `${total} ${plural(total, "image")} in ${dir}.`
+        : `${shown} of ${total} ${plural(total, "image")} in ${dir} match ${filter}.`;
 
   return textResult([
     summary,
@@ -407,24 +387,7 @@ const answerImageInfo: Answer = async (context, input) => {
   const imageName = requiredString(input, "imageName");
   const info = await context.launcher.imageInfo({ imageName });
   if (!info.found) {
-    if (context.config.profile) {
-      return failure(noImageText(imageName, info.imagesDir, info.notAnImage));
-    }
-
-    // The settings this server read may name another directory than the
-    // Launcher's: the Launcher's answer is the answer.
-    const asked = await runCommand(
-      "pharo_launcher_image_info",
-      ["image", "info", imageName],
-      { ...context.options, config: context.config, includeRaw: true },
-    );
-    return asked.ok
-      ? textResult([
-          `Pharo Launcher knows an image ${inlineValue(imageName)}, but ${info.imagesDir}, ` +
-            "where this server reads images, does not hold it. " +
-            "pharo_launcher_config says where that directory comes from.",
-        ])
-      : failure(launcherFailureText(`read image ${inlineValue(imageName)}`, asked, context));
+    return failure(noImageText(imageName, info.imagesDir, info.notAnImage));
   }
 
   const image = info.image;
@@ -556,6 +519,23 @@ const answerImageDelete: Answer = async (context, input) => {
     : failure(launcherFailureText(`delete image ${name}`, result, context));
 };
 
+/** How a start the call waited for ended: past the call's time, by a signal, or with an exit code. */
+function endedText(name: string, command: LauncherCommandResult["command"], seconds: number): string {
+  if (command.timedOut) {
+    return (
+      `${name} did not quit within ${seconds} s and was stopped: a start that is not ` +
+      "detached lasts as long as the call. Pass detached: true to leave it running."
+    );
+  }
+  return command.signal
+    ? `${name} was killed by signal ${command.signal}.`
+    : `${name} quit with exit code ${command.exitCode}.`;
+}
+
+function endedWell(command: LauncherCommandResult["command"]): boolean {
+  return !command.timedOut && !command.signal && command.exitCode === 0;
+}
+
 const answerImageStart: Answer = async (context, input) => {
   buildLauncherCommandArgs("pharo_launcher_image_start", input);
   const imageName = requiredString(input, "imageName");
@@ -573,98 +553,56 @@ const answerImageStart: Answer = async (context, input) => {
   const name = inlineValue(entry?.name ?? imageName);
   // What ran, once something ran: none for a launch refused before it.
   const launch = result.launch;
-  const seconds = callSeconds(context.options);
+  const logs = launch?.logs && `logs: ${launch.logs.stdout} and ${launch.logs.stderr}`;
 
   if (launch?.by === "vm") {
     const mode = launch.displayMode === "interactive" ? "with its window" : "headless";
     const downloaded = launch.vmUpdated ? `Downloaded VM ${launch.vmId} for it first.` : undefined;
-    const noScript = launch.displayMode === "headless" && !hasScript;
     // Pharo 13 prints its usage and exits 0; Pharo 14 prints it and exits 1.
     const nothingToRun =
-      noScript &&
+      launch.displayMode === "headless" &&
+      !hasScript &&
       "A headless image with no script has nothing to run and quits: " +
         "pass a script, or displayMode: interactive.";
     if (detached) {
-      return textResult([
-        `Started ${name} ${mode}, detached, as pid ${launch.pid}.`,
-        downloaded,
-        noScript &&
-          "Warning: a headless image given no script usually quits at once; " +
-            "pharo_launcher_process_list says whether it still runs. " +
-            "Pass a script, or displayMode: interactive.",
-        launch.logs && `logs: ${launch.logs.stdout} and ${launch.logs.stderr}`,
-      ]);
+      return textResult([`Started ${name} ${mode}, detached, as pid ${launch.pid}.`, downloaded, nothingToRun, logs]);
     }
-    if (result.command.timedOut) {
-      return failure(
-        `${name} did not quit within ${seconds} s and was stopped: a start that is not ` +
-          "detached lasts as long as the call. Pass detached: true to leave it running.",
-        downloaded,
-        ...outputTails(launch.output),
-      );
-    }
-    // A crash, or a kill from another call.
-    if (result.command.signal) {
-      return failure(
-        `${name} was killed by signal ${result.command.signal}.`,
-        downloaded,
-        ...outputTails(launch.output),
-      );
-    }
-    if (result.command.exitCode !== 0) {
-      return failure(
-        `${name} quit with exit code ${result.command.exitCode}.`,
+    return textResult(
+      [
+        endedText(name, result.command, callSeconds(context.options)),
         downloaded,
         nothingToRun,
         ...outputTails(launch.output),
-      );
-    }
-
-    return textResult([
-      `${name} ran ${mode} and quit with exit code 0.`,
-      downloaded,
-      nothingToRun,
-      ...outputTails(launch.output),
-    ]);
+      ],
+      !endedWell(result.command),
+    );
   }
 
   if (launch?.by === "launcher" && detached && result.ok) {
     return textResult([
       `Pharo Launcher is starting ${name} (its own pid ${launch.pid}); ` +
         "pharo_launcher_process_list shows the image's VM once it runs.",
-      launch.logs && `logs: ${launch.logs.stdout} and ${launch.logs.stderr}`,
+      logs,
     ]);
   }
 
-  if (launch?.by === "launcher" && !detached) {
-    if (result.command.timedOut) {
-      return failure(launcherFailureText(`start image ${name}`, result, context));
-    }
-    // What a signal ended is the Launcher, not the image's VM, which may run on.
-    if (result.command.signal) {
-      return failure(
-        `Pharo Launcher was killed by signal ${result.command.signal} while starting ${name}. ` +
-          `pharo_launcher_process_list says whether ${name} runs.`,
-        ...outputTails(result.raw),
-      );
-    }
-    if (result.command.exitCode === 0) {
-      return textResult([`${name} ran and quit with exit code 0.`, ...outputTails(result.raw)]);
-    }
-    // An image the reader knows ran and quit; one it does not was refused.
-    return entry
-      ? failure(`${name} quit with exit code ${result.command.exitCode}.`, ...outputTails(result.raw))
-      : failure(launcherFailureText(`start image ${name}`, result, context));
+  // Outside a profile the Launcher's exit code is the image's only when the
+  // reader knows the image; a timeout or a signal ended the Launcher.
+  if (launch?.by === "launcher" && !detached && entry && !result.command.timedOut && !result.command.signal) {
+    return textResult(
+      [`${name} quit with exit code ${result.command.exitCode}.`, ...outputTails(result.raw)],
+      result.command.exitCode !== 0,
+    );
   }
 
   if (result.ok) {
-    return textResult([`${name} ran and quit with exit code 0.`, ...outputTails(result.raw)]);
+    return textResult([`${name} quit with exit code 0.`, ...outputTails(result.raw)]);
   }
-
-  // Nothing ran: the library's own message, a launch that could not start or
-  // a display mode it cannot apply, says why.
+  // A launch the library refused says why itself; the Launcher's refusal is quoted.
   return failure(
-    result.diagnostic ?? launcherFailureText(`start image ${name}`, result, context),
+    launch === undefined && result.diagnostic
+      ? result.diagnostic
+      : launcherFailureText(`start image ${name}`, result, context),
   );
 };
 
@@ -693,15 +631,11 @@ const answerCopyBetweenProfiles: Answer = async (context, input) => {
   const sourceDirectory = result.sourceImage.directory;
   switch (result.failure) {
     case "source-missing":
-      return failure(`Cannot copy image ${source}: ${sourceDirectory} does not exist.`);
     case "source-image-missing":
-      return failure(
-        `Cannot copy image ${source}: ${sourceDirectory} holds no ${result.sourceImageName}.image.`,
-      );
     case "source-metadata-missing":
       return failure(
-        `Cannot copy image ${source}: ${sourceDirectory} holds no meta-inf.ston, ` +
-          "Pharo Launcher's record of the image.",
+        `Cannot copy image ${source}: ${sourceDirectory} is not a Launcher image ` +
+          `(${clause(result.diagnostic ?? "")}).`,
       );
     case "destination-exists":
       return failure(
@@ -877,11 +811,7 @@ const answerProcessKill: Answer = async (context, input) => {
   const killedClause =
     stopped.length === 0
       ? undefined
-      : pid !== undefined
-        ? `Killed pid ${pid}, which ran ${name}`
-        : stopped.length === 1
-          ? `Killed ${name} (pid ${stopped[0]})`
-          : `Killed ${stopped.length} processes of ${name} (pids ${stopped.join(", ")})`;
+      : `Killed ${name} (${plural(stopped.length, "pid")} ${stopped.join(", ")})`;
   const clauses = [killedClause, ...failures].filter((each): each is string => Boolean(each));
   const text = `${capitalized(clauses.join("; "))}.`;
   return failures.length === 0 ? textResult([text]) : failure(text);

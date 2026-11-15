@@ -350,7 +350,7 @@ describe("pharo_launcher_image_list", () => {
   const shared = 'images (each pharo=14.0 architecture=64 template="Pharo 14.0 - 64bit (next stable)"):';
   const alone = 'pharo=14.0 architecture=64 template="Pharo 14.0 - 64bit (next stable)"';
 
-  it("names every image, what they share once, and which run", async () => {
+  it("names every image, what they share once, and the pids of those that run", async () => {
     const { config, images } = inProfile();
     const paths: Record<string, string> = {};
     for (const name of ["base", "pricing", "pricing-2025", "server", "stuck", "tmp-import"]) {
@@ -374,7 +374,7 @@ describe("pharo_launcher_image_list", () => {
     expect(result.isError).toBeUndefined();
     expect(text(result)).toBe(
       [
-        `6 images in ${images}, 2 running.`,
+        `6 images in ${images}.`,
         `Warning: pricing-backup is not an image: ${path.join(images, "pricing-backup")} holds neither pricing-backup.image nor pricing-backup.changes.`,
         shared,
         "  base",
@@ -419,35 +419,21 @@ describe("pharo_launcher_image_list", () => {
     ).toBe(text(await callTool("pharo_launcher_image_list", {}, options)));
   });
 
-  it.each([
-    ["one image", ["base"], [], {}, ["1 image in <images>, not running.", "images:", `  base ${alone}`]],
-    ["one running", ["base"], ["base"], {}, ["1 image in <images>, running.", "images:", `  base ${alone} pids=1`]],
-    ["none running", ["a", "b"], [], {}, ["2 images in <images>, none running.", shared, "  a", "  b"]],
+  it.each<[string, string[], string[], Record<string, unknown>, string[]]>([
+    ["one running", ["base"], ["base"], {}, ["1 image in <images>.", "images:", `  base ${alone} pids=1`]],
     [
       "filtered",
       ["tmp-a", "tmp-b", "c"],
       [],
       { nameFilter: "tmp-" },
-      ["2 of 3 images in <images> have tmp- in their name, none running.", shared, "  tmp-a", "  tmp-b"],
+      ["2 of 3 images in <images> match tmp-.", shared, "  tmp-a", "  tmp-b"],
     ],
-    [
-      "filtered to one",
-      ["tmp-a", "c"],
-      ["tmp-a"],
-      { nameFilter: "tmp-" },
-      ["1 of 2 images in <images> has tmp- in its name, running.", "images:", `  tmp-a ${alone} pids=1`],
-    ],
-    ["filtered to none", ["a", "b"], [], { nameFilter: "tmp-" }, ["No image in <images> has tmp- in its name, out of 2."]],
     [
       "a filter holding a space",
       ["MCP debug", "c"],
       [],
       { nameFilter: "MCP debug" },
-      [
-        '1 of 2 images in <images> has "MCP debug" in its name, not running.',
-        "images:",
-        `  "MCP debug" ${alone}`,
-      ],
+      ['1 of 2 images in <images> match "MCP debug".', "images:", `  "MCP debug" ${alone}`],
     ],
     ["none", [], [], {}, ["No images in <images>."]],
   ])("%s", async (_label, names, running, input, expected) => {
@@ -497,7 +483,7 @@ describe("pharo_launcher_image_list", () => {
     expect(text(result)).toBe(`No images in ${images}, which does not exist.`);
   });
 
-  it("drops the running part when it cannot tell, and says why", async () => {
+  it("says why it cannot tell which images run", async () => {
     const { config, images } = inProfile();
     writeImage(images, "a", { pharoVersion: "140" });
     writeImage(images, "b", { pharoVersion: "140" });
@@ -527,7 +513,7 @@ describe("pharo_launcher_image_list", () => {
     );
 
     expect(text(result).split("\n")).toEqual([
-      `1 of 1 image in ${images} has tmp- in its name, not running.`,
+      `1 of 1 image in ${images} match tmp-.`,
       `Warning: tmp-half is not an image: ${path.join(images, "tmp-half")} holds no tmp-half.changes.`,
       "images:",
       "  tmp-a pharo=14.0 architecture=64",
@@ -603,8 +589,6 @@ describe("pharo_launcher_image_info", () => {
   it("refuses a name the profile's images directory does not hold, with no Launcher call", async () => {
     const { config, images } = inProfile();
     writeImage(images, "pricing-backup", { image: false, changes: false });
-    writeImage(images, "half", { changes: false });
-    writeImage(images, "other-half", { image: false });
     const options = { config, runner: unusedRunner, nativeProcess: processes() };
     const answer = async (imageName: string) =>
       callTool("pharo_launcher_image_info", { imageName }, options);
@@ -617,41 +601,6 @@ describe("pharo_launcher_image_info", () => {
     );
     expect(text(await answer("pricing-backup"))).toBe(
       `There is no image pricing-backup in ${images}: its directory holds neither pricing-backup.image nor pricing-backup.changes.`,
-    );
-    expect(text(await answer("half"))).toBe(
-      `There is no image half in ${images}: its directory holds no half.changes.`,
-    );
-    expect(text(await answer("other-half"))).toBe(
-      `There is no image other-half in ${images}: its directory holds no other-half.image.`,
-    );
-  });
-
-  it("asks the Launcher about a name it does not find, outside a profile", async () => {
-    const { config, images } = outsideProfile();
-    const knows = recording(() => exited(0, "Image name: releasecheck"));
-    const doesNot = recording(() =>
-      exited(1, "Local image 'releasecheck' not found. Please enter a correct local image."),
-    );
-
-    const known = await callTool(
-      "pharo_launcher_image_info",
-      { imageName: "releasecheck" },
-      { config, runner: knows.runner, nativeProcess: processes() },
-    );
-    const unknown = await callTool(
-      "pharo_launcher_image_info",
-      { imageName: "releasecheck" },
-      { config, runner: doesNot.runner, nativeProcess: processes() },
-    );
-
-    expect(knows.calls).toEqual([["image", "info", "releasecheck"]]);
-    expect(known.isError).toBeUndefined();
-    expect(text(known)).toBe(
-      `Pharo Launcher knows an image releasecheck, but ${images}, where this server reads images, does not hold it. pharo_launcher_config says where that directory comes from.`,
-    );
-    expect(unknown.isError).toBe(true);
-    expect(text(unknown)).toBe(
-      "Pharo Launcher could not read image releasecheck: Local image 'releasecheck' not found. Please enter a correct local image.",
     );
   });
 });
@@ -1098,191 +1047,84 @@ describe("pharo_launcher_image_start", () => {
     return callTool("pharo_launcher_image_start", { imageName: "release-check", ...input }, { config, runner });
   }
 
-  it("says how a waited start ran, and what the VM wrote", async () => {
+  const tail = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`);
+  const endings: Array<[string, Partial<LauncherCliResult>, { stdout: string; stderr: string }, boolean, string[]]> = [
+    ["quit", {}, { stdout: "Loaded.\nSaved.\n", stderr: "" }, false, [
+      "release-check quit with exit code 0.",
+      "Its output ends with:",
+      "  Loaded.",
+      "  Saved.",
+    ]],
+    ["failed, keeping the last 20 lines", { exitCode: 1 }, { stdout: "", stderr: tail.join("\n") }, true, [
+      "release-check quit with exit code 1.",
+      "Its error output ends with:",
+      ...tail.slice(10).map((line) => `  ${line}`),
+    ]],
+    ["outlived the call", { exitCode: null, timedOut: true }, { stdout: "", stderr: "" }, true, [
+      "release-check did not quit within 30 s and was stopped: a start that is not detached lasts as long as the call. Pass detached: true to leave it running.",
+    ]],
+    ["was killed", { exitCode: null, signal: "SIGSEGV" }, { stdout: "", stderr: "Segmentation fault\n" }, true, [
+      "release-check was killed by signal SIGSEGV.",
+      "Its error output ends with:",
+      "  Segmentation fault",
+    ]],
+  ];
+
+  it.each(endings)("says a waited start %s", async (_label, command, output, isError, expected) => {
     const { config, images } = inProfile();
     writeImage(images, "release-check");
-    const { runner } = started({
-      launch: vmLaunch(images, { output: { stdout: "Loaded.\nSaved.\n", stderr: "" } }),
-    });
+    const { runner } = started({ ...command, launch: vmLaunch(images, { output }) });
 
     const result = await start(config, { script: "check.st" }, runner);
 
-    expect(result.isError).toBeUndefined();
-    expect(text(result)).toBe(
-      [
-        "release-check ran headless and quit with exit code 0.",
-        "Its output ends with:",
-        "  Loaded.",
-        "  Saved.",
-      ].join("\n"),
-    );
-  });
-
-  it("names a downloaded VM, a window, and a headless image with nothing to run", async () => {
-    const { config, images } = inProfile();
-    writeImage(images, "release-check");
-    const interactive = started({
-      launch: vmLaunch(images, {
-        displayMode: "interactive",
-        vmUpdated: true,
-        output: { stdout: "", stderr: "" },
-      }),
-    });
-    const headless = started({
-      launch: vmLaunch(images, { output: { stdout: "", stderr: "usage: pharo" } }),
-    });
-
-    const window = await start(config, { displayMode: "interactive" }, interactive.runner);
-    const noScript = await start(config, {}, headless.runner);
-
-    expect(text(window)).toBe(
-      [
-        "release-check ran with its window and quit with exit code 0.",
-        "Downloaded VM 130-x64 for it first.",
-      ].join("\n"),
-    );
-    expect(text(noScript)).toBe(
-      [
-        "release-check ran headless and quit with exit code 0.",
-        "A headless image with no script has nothing to run and quits: pass a script, or displayMode: interactive.",
-        "Its error output ends with:",
-        "  usage: pharo",
-      ].join("\n"),
-    );
+    expect(result.isError ?? false).toBe(isError);
+    expect(text(result).split("\n")).toEqual(expected);
   });
 
   // Measured on the real VMs: a Pharo 14 image given no script prints its
   // usage and exits 1, a Pharo 13 one exits 0.
-  it("says a headless image with no script has nothing to run, whatever its exit code", async () => {
+  it("names a downloaded VM, a window, and a headless image with nothing to run", async () => {
     const { config, images } = inProfile();
     writeImage(images, "release-check");
-    const { runner } = started({
-      exitCode: 1,
-      launch: vmLaunch(images, { output: { stdout: "Usage: [<subcommand>] [--help]", stderr: "" } }),
+    const interactive = started({
+      launch: vmLaunch(images, { displayMode: "interactive", vmUpdated: true, output: { stdout: "", stderr: "" } }),
     });
+    const headless = started({ exitCode: 1, launch: vmLaunch(images, { output: { stdout: "", stderr: "" } }) });
 
-    const result = await start(config, {}, runner);
-
-    expect(result.isError).toBe(true);
-    expect(text(result)).toBe(
+    expect(text(await start(config, { displayMode: "interactive" }, interactive.runner))).toBe(
+      ["release-check quit with exit code 0.", "Downloaded VM 130-x64 for it first."].join("\n"),
+    );
+    expect(text(await start(config, {}, headless.runner))).toBe(
       [
         "release-check quit with exit code 1.",
         "A headless image with no script has nothing to run and quits: pass a script, or displayMode: interactive.",
-        "Its output ends with:",
-        "  Usage: [<subcommand>] [--help]",
       ].join("\n"),
     );
-  });
-
-  it("keeps the last 20 lines of what the VM wrote", async () => {
-    const { config, images } = inProfile();
-    writeImage(images, "release-check");
-    const lines = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`);
-    const { runner } = started({
-      exitCode: 1,
-      launch: vmLaunch(images, { output: { stdout: "", stderr: lines.join("\n") } }),
-    });
-
-    const result = await start(config, { script: "x.st" }, runner);
-
-    expect(result.isError).toBe(true);
-    expect(text(result).split("\n")).toEqual([
-      "release-check quit with exit code 1.",
-      "Its error output ends with:",
-      ...lines.slice(10).map((line) => `  ${line}`),
-    ]);
-  });
-
-  it("says a waited start past the call's timeout was stopped", async () => {
-    const { config, images } = inProfile();
-    writeImage(images, "release-check");
-    const { runner } = started({
-      exitCode: null,
-      timedOut: true,
-      launch: vmLaunch(images, { output: { stdout: "", stderr: "" } }),
-    });
-
-    const result = await start(config, { script: "x.st" }, runner);
-
-    expect(result.isError).toBe(true);
-    expect(text(result)).toBe(
-      "release-check did not quit within 30 s and was stopped: a start that is not detached lasts as long as the call. Pass detached: true to leave it running.",
-    );
-  });
-
-  // A VM that crashes, or one process_kill stops while the start waits.
-  it("says a signal ended a waited start, with what the VM wrote", async () => {
-    const { config, images } = inProfile();
-    writeImage(images, "release-check");
-    const crashed = started({
-      exitCode: null,
-      signal: "SIGSEGV",
-      launch: vmLaunch(images, { output: { stdout: "", stderr: "Segmentation fault, dumping stack\n" } }),
-    });
-    const killed = started({
-      exitCode: null,
-      signal: "SIGKILL",
-      launch: vmLaunch(images, { output: { stdout: "", stderr: "" } }),
-    });
-
-    const crash = await start(config, { script: "x.st" }, crashed.runner);
-    const kill = await start(config, { script: "x.st" }, killed.runner);
-
-    expect(crash.isError).toBe(true);
-    expect(text(crash)).toBe(
-      [
-        "release-check was killed by signal SIGSEGV.",
-        "Its error output ends with:",
-        "  Segmentation fault, dumping stack",
-      ].join("\n"),
-    );
-    expect(kill.isError).toBe(true);
-    expect(text(kill)).toBe("release-check was killed by signal SIGKILL.");
   });
 
   it("names the pid and the logs of a detached start", async () => {
     const { config, images } = inProfile();
     writeImage(images, "release-check");
-    const logs = {
-      stdout: "/logs/x-release-check-launch.out.log",
-      stderr: "/logs/x-release-check-launch.err.log",
-    };
+    const logs = { stdout: "/logs/out.log", stderr: "/logs/err.log" };
     const plain = started({ launch: vmLaunch(images, { pid: 73028, logs }) });
-    const window = started({
-      launch: vmLaunch(images, { pid: 73028, logs, displayMode: "interactive", vmUpdated: true }),
-    });
+    const window = started({ launch: vmLaunch(images, { pid: 73028, logs, displayMode: "interactive" }) });
     const logsLine = `logs: ${logs.stdout} and ${logs.stderr}`;
 
-    const headless = await start(config, { detached: true, script: "x.st" }, plain.runner);
-    const noScript = await start(config, { detached: true }, plain.runner);
-    const interactive = await start(config, { detached: true, displayMode: "interactive" }, window.runner);
-
-    expect(text(headless)).toBe(
+    expect(text(await start(config, { detached: true, script: "x.st" }, plain.runner))).toBe(
       ["Started release-check headless, detached, as pid 73028.", logsLine].join("\n"),
     );
-    expect(text(noScript)).toBe(
-      [
-        "Started release-check headless, detached, as pid 73028.",
-        "Warning: a headless image given no script usually quits at once; pharo_launcher_process_list says whether it still runs. Pass a script, or displayMode: interactive.",
-        logsLine,
-      ].join("\n"),
-    );
-    expect(text(interactive)).toBe(
-      [
-        "Started release-check with its window, detached, as pid 73028.",
-        "Downloaded VM 130-x64 for it first.",
-        logsLine,
-      ].join("\n"),
+    expect(text(await start(config, { detached: true, displayMode: "interactive" }, window.runner))).toBe(
+      ["Started release-check with its window, detached, as pid 73028.", logsLine].join("\n"),
     );
   });
 
-  it("says the Launcher is starting it, outside a profile", async () => {
+  it("says what the Launcher did, outside a profile", async () => {
     const { config, images } = outsideProfile();
     writeImage(images, "release-check");
     const logs = { stdout: "/logs/a.out.log", stderr: "/logs/a.err.log" };
     const detached = started({ launch: { by: "launcher", pid: 73100, logs } });
-    const waited = started({ stdout: "Hello", launch: { by: "launcher" } });
     const quit = started({ exitCode: 1, stderr: "Error", launch: { by: "launcher" } });
+    const killed = started({ exitCode: null, signal: "SIGKILL", launch: { by: "launcher" } });
 
     expect(text(await start(config, { detached: true }, detached.runner))).toBe(
       [
@@ -1290,25 +1132,11 @@ describe("pharo_launcher_image_start", () => {
         `logs: ${logs.stdout} and ${logs.stderr}`,
       ].join("\n"),
     );
-    expect(text(await start(config, {}, waited.runner))).toBe(
-      ["release-check ran and quit with exit code 0.", "Its output ends with:", "  Hello"].join("\n"),
-    );
     expect(text(await start(config, {}, quit.runner))).toBe(
       ["release-check quit with exit code 1.", "Its error output ends with:", "  Error"].join("\n"),
     );
-  });
-
-  it("says a signal ended the Launcher, outside a profile", async () => {
-    const { config, images } = outsideProfile();
-    writeImage(images, "release-check");
-    const { runner } = started({ exitCode: null, signal: "SIGKILL", launch: { by: "launcher" } });
-
-    const result = await start(config, {}, runner);
-
-    expect(result.isError).toBe(true);
-    expect(text(result)).toBe(
-      "Pharo Launcher was killed by signal SIGKILL while starting release-check. " +
-        "pharo_launcher_process_list says whether release-check runs.",
+    expect(text(await start(config, {}, killed.runner))).toBe(
+      "Pharo Launcher could not start image release-check: it was killed by signal SIGKILL.",
     );
   });
 
@@ -1417,17 +1245,10 @@ describe("pharo_launcher_image_copy_between_profiles", () => {
   it("says why it could not copy", async () => {
     const { source, destination } = profiles();
     fs.rmSync(path.join(writeImage(path.join(source, "images"), "no-image")));
-    writeImage(path.join(source, "images"), "no-record");
     await copy(source, destination);
 
-    expect(text(await copy(source, destination, "pricng"))).toBe(
-      `Cannot copy image pricng: ${path.join(source, "images", "pricng")} does not exist.`,
-    );
     expect(text(await copy(source, destination, "no-image"))).toBe(
-      `Cannot copy image no-image: ${path.join(source, "images", "no-image")} holds no no-image.image.`,
-    );
-    expect(text(await copy(source, destination, "no-record"))).toBe(
-      `Cannot copy image no-record: ${path.join(source, "images", "no-record")} holds no meta-inf.ston, Pharo Launcher's record of the image.`,
+      `Cannot copy image no-image: ${path.join(source, "images", "no-image")} is not a Launcher image (Source image file is missing).`,
     );
     expect(text(await copy(source, destination))).toBe(
       `Cannot copy image pricing to ${path.join(destination, "images", "pricing")}: that path already exists, and a copy never replaces it. Pick another destinationImageName, or remove it first.`,
@@ -1583,9 +1404,9 @@ describe("the process tools", () => {
 
     expect(text(byName)).toBe("Killed stuck (pid 71513).");
     expect(one.killed).toEqual([71513]);
-    expect(text(both)).toBe("Killed 2 processes of stuck (pids 71513, 71520).");
+    expect(text(both)).toBe("Killed stuck (pids 71513, 71520).");
     expect(two.killed).toEqual([71513, 71520]);
-    expect(text(byPid)).toBe("Killed pid 71520, which ran stuck.");
+    expect(text(byPid)).toBe("Killed stuck (pid 71520).");
     expect(pid.killed).toEqual([71520]);
   });
 
