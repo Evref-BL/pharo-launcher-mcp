@@ -438,6 +438,7 @@ describe("cross-profile image copy", () => {
 
       expect(result).toMatchObject({
         ok: false,
+        failure: "source-missing",
         diagnostic: "Source image directory is missing.",
       });
       expect(fs.existsSync(imageDirectory(destinationRoot, "Task"))).toBe(false);
@@ -472,9 +473,13 @@ describe("cross-profile image copy", () => {
           copiedDirectories: [],
         },
       });
-      // One line says it all, for a caller that reports nothing else.
-      expect(result.message).toContain("Cannot copy image 'Base'");
-      expect(result.message).toContain("to 'Task'");
+      expect(result.failure).toBe("destination-exists");
+      // One line says it all, for a caller that reports nothing else, and
+      // names each profile by its state root, not by an "explicit" no one gave.
+      expect(result.message).toContain(
+        `Cannot copy image Base from ${sourceRoot} to ${destinationRoot} as Task:`,
+      );
+      expect(result.message).not.toContain("explicit");
       expect(result.message).toContain(
         path.join(destinationRoot, "images", "Task"),
       );
@@ -503,6 +508,7 @@ describe("cross-profile image copy", () => {
 
       expect(result).toMatchObject({
         ok: false,
+        failure: "preflight",
         diagnostic: expect.stringContaining(
           "Copied image verification failed",
         ),
@@ -518,6 +524,65 @@ describe("cross-profile image copy", () => {
       expect(result.touchedPaths.removedTemporaryPaths).toHaveLength(1);
       expect(fs.existsSync(result.touchedPaths.removedTemporaryPaths[0] ?? "")).toBe(
         false,
+      );
+    } finally {
+      removeProfileRoot(sourceRoot);
+      removeProfileRoot(destinationRoot);
+    }
+  });
+
+  it.each([
+    ["source-image-missing", "Base.image"],
+    ["source-metadata-missing", "meta-inf.ston"],
+  ])("says %s when the source lacks %s", (failure, missing) => {
+    const sourceRoot = tempProfileRoot("source");
+    const destinationRoot = tempProfileRoot("destination");
+    try {
+      fs.rmSync(path.join(writeImage(sourceRoot, "Base"), missing));
+
+      const result = copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot },
+        destinationProfile: { stateRoot: destinationRoot },
+        sourceImageName: "Base",
+        destinationImageName: "Base",
+      });
+
+      expect(result).toMatchObject({ ok: false, failure });
+      expect(result.message).toContain(
+        `Cannot copy image Base from ${sourceRoot} to ${destinationRoot}:`,
+      );
+    } finally {
+      removeProfileRoot(sourceRoot);
+      removeProfileRoot(destinationRoot);
+    }
+  });
+
+  it("says a copy that threw is an exception, and names an images directory alone", () => {
+    const sourceRoot = tempProfileRoot("source");
+    const destinationRoot = tempProfileRoot("destination");
+    const destinationImages = path.join(destinationRoot, "not-a-directory");
+    try {
+      writeImage(sourceRoot, "Base");
+      fs.writeFileSync(destinationImages, "");
+
+      const result = copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot },
+        destinationProfile: {
+          launcherConfiguration: path.join(destinationRoot, "launcher.ston"),
+          imagesDir: destinationImages,
+          vmsDir: path.join(destinationRoot, "vms"),
+          templateSourcesDir: path.join(destinationRoot, "templates"),
+          initScriptsDir: path.join(destinationRoot, "init-scripts"),
+          logsDir: path.join(destinationRoot, "logs"),
+        },
+        sourceImageName: "Base",
+        destinationImageName: "Task",
+      });
+
+      expect(result).toMatchObject({ ok: false, failure: "exception" });
+      expect(result.error).toBeDefined();
+      expect(result.message).toContain(
+        `Cannot copy image Base from ${sourceRoot} to ${destinationImages} as Task:`,
       );
     } finally {
       removeProfileRoot(sourceRoot);

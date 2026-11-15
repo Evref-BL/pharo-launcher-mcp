@@ -6,10 +6,19 @@ import {
   type PharoLauncherProfileConfig,
   type PharoLauncherConfig,
 } from "./config.js";
+import {
+  findByName,
+  readLauncherImage,
+  scanImages,
+} from "./imageStore.js";
 import { resolveLauncherScript } from "./launcherScript.js";
-import type { LauncherImage } from "./models.js";
+import type {
+  LauncherImage,
+  LauncherLaunchReport,
+  LauncherProcess,
+} from "./models.js";
+import { launcherMessage, sentenceWithMessage } from "./resultNormalizer.js";
 import { compactTokenText } from "./textTokens.js";
-import { parseLauncherOutput } from "./parser.js";
 import {
   shouldRunScriptThroughBash,
   shouldRunScriptThroughCommandShell,
@@ -25,11 +34,17 @@ export interface LauncherCliInvocation {
 
 export interface LauncherCliResult {
   exitCode: number | null;
+  /** The signal that ended the command, which then has no exit code. */
+  signal?: NodeJS.Signals;
   stdout: string;
   stderr: string;
   durationMs: number;
   timedOut: boolean;
   timeoutReason?: string;
+  /** The processes a native process list saw, or a kill aimed at. */
+  processes?: LauncherProcess[];
+  /** What an image start ran, once it ran something. */
+  launch?: LauncherLaunchReport;
 }
 
 export interface RunLauncherCliOptions {
@@ -62,7 +77,7 @@ interface ProfileImageLaunchTarget {
 }
 
 interface ProfileImageInspection {
-  image?: LauncherImage;
+  image: LauncherImage;
   imagePath: string;
 }
 
@@ -298,6 +313,17 @@ function diagnosticProfileLines(env: NodeJS.ProcessEnv): string[] {
   });
 }
 
+const invocationFailurePrefix = "Failed to start PharoLauncher CLI command:";
+
+/**
+ * Whether a command's error output says it never started: the lines
+ * `launcherInvocationFailureDiagnostic` writes, which help with a broken
+ * installation as they are.
+ */
+export function isLauncherInvocationFailure(text: string | undefined): boolean {
+  return text?.startsWith(invocationFailurePrefix) ?? false;
+}
+
 export function launcherInvocationFailureDiagnostic(
   invocation: LauncherCliInvocation,
   error: Error | NodeJS.ErrnoException,
@@ -305,7 +331,7 @@ export function launcherInvocationFailureDiagnostic(
   const pathValue = invocation.env.PATH ?? process.env.PATH ?? "";
 
   return [
-    `Failed to start PharoLauncher CLI command: ${error.message}`,
+    `${invocationFailurePrefix} ${error.message}`,
     `source: ${invocation.source}`,
     `command: ${invocation.command}`,
     `args: ${invocation.args.join(" ")}`,
@@ -457,29 +483,6 @@ function validateInvocationSetup(
   }
 }
 
-function trimForDiagnostic(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function commandFailureDiagnostic(
-  label: string,
-  result: LauncherCliResult,
-): string {
-  return [
-    `${label} failed.`,
-    `exitCode: ${result.exitCode ?? "unknown"}`,
-    `timedOut: ${result.timedOut}`,
-    ...(result.timeoutReason ? [`timeoutReason: ${result.timeoutReason}`] : []),
-    ...(trimForDiagnostic(result.stdout)
-      ? [`stdout:\n${trimForDiagnostic(result.stdout)}`]
-      : []),
-    ...(trimForDiagnostic(result.stderr)
-      ? [`stderr:\n${trimForDiagnostic(result.stderr)}`]
-      : []),
-  ].join("\n");
-}
-
 function runInvocation(
   invocation: LauncherCliInvocation,
   timeoutMs: number,
@@ -553,10 +556,11 @@ function runInvocation(
         ...(timeoutReason ? { timeoutReason } : {}),
       });
     });
-    child.on("close", (exitCode) => {
+    child.on("close", (exitCode, signal) => {
       clearTimeout(timeout);
       resolve({
         exitCode,
+        ...(signal ? { signal } : {}),
         stdout,
         stderr,
         durationMs: Date.now() - startTime,
@@ -565,30 +569,6 @@ function runInvocation(
       });
     });
   });
-}
-
-function parsedImagesFromInfo(stdout: string): LauncherImage[] | undefined {
-  const parsed = parseLauncherOutput(
-    "pharo_launcher_image_info",
-    "ston",
-    stdout,
-  );
-  if (parsed.status !== "parsed") {
-    return undefined;
-  }
-
-  if (Array.isArray(parsed.data)) {
-    return parsed.data.filter(
-      (item): item is LauncherImage =>
-        typeof item === "object" && item !== null,
-    );
-  }
-
-  if (typeof parsed.data === "object" && parsed.data !== null) {
-    return [parsed.data as LauncherImage];
-  }
-
-  return undefined;
 }
 
 function imageNameFromLaunchArgs(args: readonly string[]): string | undefined {
@@ -614,7 +594,7 @@ function normalizePharoVersion(value: string): string {
 }
 
 function pharoVersionFromTemplate(image: LauncherImage): string | undefined {
-  const template = image.originTemplate;
+  const template = image.template;
   const urlVersion = template?.url?.match(
     /(?:^|[/-])(\d{2,3})(?:[./-]|$)/,
   )?.[1];
@@ -629,7 +609,14 @@ function pharoVersionFromTemplate(image: LauncherImage): string | undefined {
 }
 
 function vmArchitectureSegment(image: LauncherImage): string {
-  const source = `${image.architecture ?? ""} ${image.originTemplate?.name ?? ""} ${image.originTemplate?.url ?? ""}`;
+  if (image.architecture === "64") {
+    return "x64";
+  }
+  if (image.architecture === "32") {
+    return "x86";
+  }
+
+  const source = `${image.template?.name ?? ""} ${image.template?.url ?? ""}`;
   const lower = source.toLowerCase();
   const compact = compactTokenText(source);
   if (lower.includes("aarch64") || lower.includes("arm64")) {
@@ -642,31 +629,20 @@ function vmArchitectureSegment(image: LauncherImage): string {
   return "x64";
 }
 
-function imageVmId(image: LauncherImage | undefined): string | undefined {
-  if (image?.vmId) {
+/**
+ * The VM an image needs: the one its last launch used, else its Pharo version
+ * with the architecture its header says (`PhLVirtualMachineManager>>vmId`),
+ * else what its template's URL or name says.
+ */
+function imageVmId(image: LauncherImage): string | undefined {
+  if (image.vmId) {
     return image.vmId;
-  }
-
-  if (!image) {
-    return undefined;
   }
 
   const pharoVersion = image.pharoVersion ?? pharoVersionFromTemplate(image);
   return pharoVersion
     ? `${pharoVersion}-${vmArchitectureSegment(image)}`
     : undefined;
-}
-
-function profileImagePath(
-  profile: PharoLauncherProfileConfig,
-  imageName: string,
-  image: LauncherImage | undefined,
-): string {
-  const imagePath =
-    image?.imagePath ?? path.join(imageName, `${imageName}.image`);
-  return path.isAbsolute(imagePath)
-    ? path.resolve(imagePath)
-    : path.resolve(profile.imagesDir, imagePath);
 }
 
 function profileVmDirectory(
@@ -777,60 +753,29 @@ function profileImageLaunchTarget(
   return { profile, imageName };
 }
 
-async function inspectProfileImageForLaunch(
+/**
+ * The image to launch, read through the images directory, as every other tool
+ * reads it: no Launcher boot, and every path the reader builds is inside it.
+ */
+function inspectProfileImageForLaunch(
   target: ProfileImageLaunchTarget,
-  config: PharoLauncherConfig,
-  timeoutMs: number,
   startTime: number,
-): Promise<ProfileImageInspection | LauncherCliResult> {
-  const infoArgs = ["image", "info", "--ston", target.imageName];
-  const infoResult = await launcherCliSubcommand(infoArgs, config, timeoutMs);
-  if (infoResult.exitCode !== 0 || infoResult.timedOut) {
+): ProfileImageInspection | LauncherCliResult {
+  const imagesDir = path.resolve(target.profile.imagesDir);
+  const entry = findByName(scanImages(imagesDir).images, target.imageName);
+  if (!entry) {
     return failedResult(
-      [
-        `Profile-scoped image launch could not inspect image ${target.imageName}.`,
-        commandFailureDiagnostic("pharo_launcher_image_info", infoResult),
-      ].join("\n"),
-      startTime,
-      {
-        timedOut: infoResult.timedOut,
-        ...(infoResult.timeoutReason
-          ? { timeoutReason: infoResult.timeoutReason }
-          : {}),
-      },
-    );
-  }
-
-  const images = parsedImagesFromInfo(infoResult.stdout);
-  const image =
-    images?.find((candidate) => candidate.name === target.imageName) ??
-    images?.[0];
-  const imagePath = profileImagePath(target.profile, target.imageName, image);
-  if (!isPathInside(target.profile.imagesDir, imagePath)) {
-    return failedResult(
-      [
-        `Profile-scoped image launch refused image path outside PHARO_LAUNCHER_MCP_IMAGES_DIR (${target.profile.imagesDir}).`,
-        `image: ${imagePath}`,
-      ].join("\n"),
-      startTime,
-    );
-  }
-  if (!fs.existsSync(imagePath)) {
-    return failedResult(
-      [
-        `Profile-scoped image launch could not find image file for ${target.imageName}.`,
-        `expected: ${imagePath}`,
-      ].join("\n"),
+      `There is no image ${target.imageName} in ${imagesDir}.`,
       startTime,
     );
   }
 
-  return { image, imagePath };
+  return { image: readLauncherImage(entry), imagePath: entry.imagePath };
 }
 
 async function resolveProfileVmForLaunch(
   target: ProfileImageLaunchTarget,
-  image: LauncherImage | undefined,
+  image: LauncherImage,
   config: PharoLauncherConfig,
   timeoutMs: number,
   startTime: number,
@@ -838,10 +783,12 @@ async function resolveProfileVmForLaunch(
   const vmId = imageVmId(image);
   if (!vmId) {
     return failedResult(
-      `Profile-scoped image launch could not determine a VM id for image ${target.imageName}.`,
+      `Cannot tell which VM ${image.name} needs: neither its meta-inf.ston, ` +
+        "its pharo.version nor its template gives a Pharo version.",
       startTime,
     );
   }
+  const vmsDir = path.resolve(target.profile.vmsDir);
 
   let vmPath = resolveProfileVmExecutable(target.profile, vmId);
   let vmUpdated = false;
@@ -854,10 +801,10 @@ async function resolveProfileVmForLaunch(
     vmUpdated = updateResult.exitCode === 0 && !updateResult.timedOut;
     if (!vmUpdated) {
       return failedResult(
-        [
-          `Profile-scoped image launch could not install VM ${vmId} inside PHARO_LAUNCHER_MCP_VMS_DIR (${target.profile.vmsDir}).`,
-          commandFailureDiagnostic("pharo_launcher_vm_update", updateResult),
-        ].join("\n"),
+        sentenceWithMessage(
+          `Could not download VM ${vmId} into ${vmsDir}`,
+          launcherMessage(updateResult),
+        ),
         startTime,
         {
           timedOut: updateResult.timedOut,
@@ -872,10 +819,8 @@ async function resolveProfileVmForLaunch(
 
   if (!vmPath) {
     return failedResult(
-      [
-        `Profile-scoped image launch could not resolve a profile-local VM executable for ${vmId} after VM update.`,
-        `PHARO_LAUNCHER_MCP_VMS_DIR: ${target.profile.vmsDir}`,
-      ].join("\n"),
+      `VM ${vmId} was downloaded into ${path.join(vmsDir, vmId)}, ` +
+        "but no Pharo executable is in it.",
       startTime,
     );
   }
@@ -895,12 +840,7 @@ async function profileScopedImageLaunchPlan(
     return target;
   }
 
-  const inspection = await inspectProfileImageForLaunch(
-    target,
-    config,
-    timeoutMs,
-    startTime,
-  );
+  const inspection = inspectProfileImageForLaunch(target, startTime);
   if (isLauncherCliResult(inspection)) {
     return inspection;
   }
@@ -949,6 +889,10 @@ function spawnDetached(
   logPaths: { stdoutPath: string; stderrPath: string },
   startTime: number,
   describe: (pid: number) => string[],
+  report: (
+    pid: number,
+    logs: { stdout: string; stderr: string },
+  ) => LauncherLaunchReport,
 ): LauncherCliResult {
   fs.mkdirSync(path.dirname(logPaths.stdoutPath), { recursive: true });
   const stdoutFd = fs.openSync(logPaths.stdoutPath, "a");
@@ -989,6 +933,10 @@ function spawnDetached(
       stderr: "",
       durationMs: Date.now() - startTime,
       timedOut: false,
+      launch: report(child.pid, {
+        stdout: logPaths.stdoutPath,
+        stderr: logPaths.stderrPath,
+      }),
     };
   } finally {
     fs.closeSync(stdoutFd);
@@ -1008,6 +956,7 @@ function runDetachedProfileImageLaunch(
     plan.invocation,
     detachedLaunchLogPaths(config, args, startTime),
     startTime,
+    // PLexus reads these lines from raw.stdout, word for word.
     (pid) => [
       `Detached profile-scoped Pharo image pid ${pid}.`,
       `image: ${plan.imagePath}`,
@@ -1016,7 +965,29 @@ function runDetachedProfileImageLaunch(
       `vmId: ${plan.vmId}`,
       `vmUpdated: ${plan.vmUpdated}`,
     ],
+    (pid, logs) => ({ ...vmLaunchReport(plan), pid, logs }),
   );
+}
+
+function vmLaunchReport(
+  plan: ProfileImageLaunchPlan,
+): Extract<LauncherLaunchReport, { by: "vm" }> {
+  return {
+    by: "vm",
+    imagePath: plan.imagePath,
+    displayMode: plan.displayMode,
+    vmPath: plan.vmPath,
+    vmId: plan.vmId,
+    vmUpdated: plan.vmUpdated,
+  };
+}
+
+/**
+ * Whether a command ran at all: one that never started has no exit code, nor
+ * a signal that ended it.
+ */
+function ran(result: LauncherCliResult): boolean {
+  return result.exitCode !== null || result.signal !== undefined || result.timedOut;
 }
 
 async function runProfileScopedImageLaunch(
@@ -1052,6 +1023,15 @@ async function runProfileScopedImageLaunch(
   const result = await runInvocation(plan.invocation, timeoutMs, startTime);
   return {
     ...result,
+    ...(ran(result)
+      ? {
+          launch: {
+            ...vmLaunchReport(plan),
+            output: { stdout: result.stdout, stderr: result.stderr },
+          },
+        }
+      : {}),
+    // PLexus reads these lines from raw.stdout, word for word.
     stdout: [
       `Profile-scoped Pharo image launch.`,
       `image: ${plan.imagePath}`,
@@ -1122,9 +1102,15 @@ export function runLauncherCli(
         detachedLaunchLogPaths(config, args, startTime),
         startTime,
         (pid) => [`Detached PharoLauncher CLI pid ${pid}.`],
+        (pid, logs) => ({ by: "launcher", pid, logs }),
       ),
     );
   }
 
-  return runInvocation(invocation, timeoutMs, startTime);
+  const result = runInvocation(invocation, timeoutMs, startTime);
+  return isImageLaunch(launcherArgs)
+    ? result.then((ended) =>
+        ran(ended) ? { ...ended, launch: { by: "launcher" } } : ended,
+      )
+    : result;
 }

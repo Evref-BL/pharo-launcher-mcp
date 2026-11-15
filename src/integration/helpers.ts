@@ -1,11 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect } from "vitest";
 import {
   loadPharoLauncherConfig,
   type PharoLauncherConfig,
 } from "../config.js";
+import {
+  openPharoLauncher,
+  type PharoLauncher,
+  type PharoLauncherOptions,
+} from "../launcher.js";
+import type { LauncherTemplate } from "../models.js";
 import { callTool, type CallToolOptions } from "../server.js";
 
 export interface IntegrationProfile {
@@ -13,9 +18,10 @@ export interface IntegrationProfile {
   stateRoot: string;
 }
 
-export interface ParsedToolResult {
-  result: Awaited<ReturnType<typeof callTool>>;
-  body: Record<string, unknown>;
+/** What a tool answered: the text a model reads. */
+export interface LiveAnswer {
+  text: string;
+  isError: boolean;
 }
 
 function copyIfExists(source: string, destination: string): void {
@@ -28,7 +34,6 @@ export function prepareIntegrationProfile(
   profileName = "integration",
 ): IntegrationProfile {
   const installationConfig = loadPharoLauncherConfig(process.env);
-  const launcherDir = process.env.PHARO_LAUNCHER_DIR ?? installationConfig.launcherDir;
   const sourceImage =
     process.env.PHARO_LAUNCHER_IMAGE ??
     installationConfig.installationLauncherImage;
@@ -82,43 +87,56 @@ export function removeIntegrationProfile(profile: IntegrationProfile | undefined
   }
 }
 
-export function parseJsonResult(result: Awaited<ReturnType<typeof callTool>>) {
-  return JSON.parse(result.content[0]?.text ?? "{}") as Record<string, unknown>;
+/** The images directory of the profile, as the server resolves it. */
+export function imagesDirOf(profile: IntegrationProfile): string {
+  return path.resolve(profile.stateRoot, "images");
 }
 
+/** The library on the profile, as PLexus opens it: where the data is checked. */
+export function liveLauncher(
+  profile: IntegrationProfile,
+  options: Omit<PharoLauncherOptions, "config"> = {},
+): PharoLauncher {
+  return openPharoLauncher({ ...options, config: profile.config });
+}
+
+/** A tool called on the profile, as a model calls it. */
 export async function callLiveTool(
   profile: IntegrationProfile,
   toolName: string,
   input: Record<string, unknown> = {},
   options: Omit<CallToolOptions, "config"> = {},
-): Promise<ParsedToolResult> {
+): Promise<LiveAnswer> {
   const result = await callTool(toolName, input, {
     ...options,
     config: profile.config,
   });
 
   return {
-    result,
-    body: parseJsonResult(result),
+    text: result.content.map((part) => part.text).join("\n"),
+    isError: result.isError === true,
   };
 }
 
-export function expectOkTool(body: Record<string, unknown>): void {
-  expect(body).toMatchObject({
-    ok: true,
-    command: {
-      exitCode: 0,
-      timedOut: false,
-    },
-  });
-}
-
-export function stringField(value: unknown, fieldName: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`${fieldName} is not a non-empty string`);
+/** A tool's answer that must not be a failure; a failure is thrown as it reads. */
+export function expectAnswered(label: string, answer: LiveAnswer): string {
+  if (answer.isError) {
+    throw new Error(`${label} failed:\n${answer.text}`);
   }
 
-  return value;
+  return answer.text;
+}
+
+/** A library result that must be ok; a failure is thrown with its own diagnostic. */
+export function expectOk<T extends { ok: boolean; diagnostic?: string }>(
+  label: string,
+  result: T,
+): T {
+  if (!result.ok) {
+    throw new Error(`${label} failed: ${result.diagnostic ?? JSON.stringify(result, null, 2)}`);
+  }
+
+  return result;
 }
 
 /**
@@ -140,4 +158,36 @@ export function localPharoVersions(profile: IntegrationProfile): string[] {
     .filter((entry) => entry.isDirectory())
     .map((entry) => /^(\d+)-/.exec(entry.name)?.[1])
     .filter((version): version is string => Boolean(version));
+}
+
+/**
+ * A template of the default category to create from, after refreshing the
+ * list: one this host has a VM for when there is one, else the first.
+ */
+export async function firstTemplate(
+  profile: IntegrationProfile,
+  timeoutMs: number,
+): Promise<LauncherTemplate & { name: string }> {
+  const launcher = liveLauncher(profile, { timeoutMs });
+  const availableVersions = localPharoVersions(profile);
+  expectOk("template update", await launcher.updateTemplates());
+
+  const templates = expectOk("template list", await launcher.listTemplates()).data ?? [];
+  const named = templates.filter(
+    (template): template is LauncherTemplate & { name: string } =>
+      typeof template.name === "string" && template.name.length > 0,
+  );
+  const template =
+    named.find((candidate) =>
+      availableVersions.some(
+        (version) =>
+          candidate.name.includes(`Pharo ${Number(version)}.`) ||
+          (candidate.url ?? "").includes(`/${version}/`),
+      ),
+    ) ?? named[0];
+  if (!template) {
+    throw new Error(`No template with a name was listed: ${JSON.stringify(templates)}`);
+  }
+
+  return template;
 }

@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  parseLauncherImagesFromSton,
-  parseLauncherProcessesFromText,
   parseLauncherTemplatesFromSton,
-  parseLauncherImagesFromText,
   parseLauncherOutput,
+  parseTemplateCategoriesFromBrief,
 } from "./parser.js";
-import { normalizeLauncherResult } from "./resultNormalizer.js";
+import { launcherMessage, normalizeLauncherResult } from "./resultNormalizer.js";
 
 const cliResult = {
   exitCode: 0,
@@ -88,189 +86,58 @@ describe("result normalizer", () => {
     });
   });
 
-  it("normalizes default template category failures as bootstrap diagnostics", () => {
-    const result = normalizeLauncherResult(
+  // A canned text used to replace any of these, and hid why it failed.
+  it.each([
+    [
       "pharo_launcher_template_list",
       ["template", "list", "--ston"],
-      {
-        ...cliResult,
-        exitCode: 1,
-        stdout: "",
-        stderr:
-          "Image template category 'Official distributions' not found. Categories are: OrderedCollection[]",
-      },
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      diagnostic:
-        "Pharo Launcher could not list default templates because the active template source inventory is empty or not bootstrapped.",
-      action: expect.stringContaining(
-        "PHARO_LAUNCHER_MCP_TEMPLATE_SOURCES_DIR",
-      ),
-      parser: {
-        status: "skipped",
-        format: "ston",
-      },
+      "Image template category 'Official distributions' not found. Please enter a correct image tamplate category name.",
+    ],
+    [
+      "pharo_launcher_image_start",
+      ["image", "launch", "Task"],
+      "Cannot tell which VM Task needs: neither its meta-inf.ston, its pharo.version nor its template gives a Pharo version.",
+    ],
+    [
+      "pharo_launcher_image_start",
+      ["image", "launch", "Task"],
+      "Profile-scoped image launch could not find image file for Task.",
+    ],
+  ])("keeps the command's own words as the diagnostic of %s", (toolName, args, stderr) => {
+    const result = normalizeLauncherResult(toolName, args, {
+      ...cliResult,
+      exitCode: 1,
+      stderr,
     });
-    expect(result.raw).toBeUndefined();
-  });
 
-  it("does not normalize explicit template category failures as bootstrap diagnostics", () => {
-    const result = normalizeLauncherResult(
-      "pharo_launcher_template_list",
-      ["template", "list", "--templateCategory", "unknown", "--ston"],
-      {
-        ...cliResult,
-        exitCode: 1,
-        stdout: "",
-        stderr:
-          "Image template category 'unknown' not found. Categories are: OrderedCollection[]",
-      },
-    );
-
-    expect(result.ok).toBe(false);
-    expect(result.diagnostic).toContain("Image template category 'unknown'");
+    expect(result.diagnostic).toBe(stderr);
     expect(result.action).toBeUndefined();
   });
 
-  it("normalizes profile-scoped image launch refusals as VM store diagnostics", () => {
+  it("carries an image start's launch report", () => {
+    const launch = { by: "launcher" as const, pid: 73100 };
+
+    expect(
+      normalizeLauncherResult(
+        "pharo_launcher_image_start",
+        ["image", "launch", "--detached", "Task"],
+        { ...cliResult, launch },
+      ).launch,
+    ).toEqual(launch);
+  });
+
+  it("reads the brief category listing, with its default", () => {
     const result = normalizeLauncherResult(
-      "pharo_launcher_image_start",
-      ["image", "launch", "--script", "bootstrap.st", "ScopedImage"],
-      {
-        ...cliResult,
-        exitCode: 1,
-        stdout: "",
-        stderr:
-          "Refusing profile-scoped image launch before invoking Pharo Launcher.\nThat launch can download, extract, or run VMs outside PHARO_LAUNCHER_MCP_VMS_DIR (/tmp/profile/vms).",
-      },
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      diagnostic:
-        "Profile-scoped image launch was refused because Pharo Launcher can use the default VM store instead of the configured profile VM directory.",
-      action: expect.stringContaining("PhLVirtualMachineManager"),
-      parser: {
-        status: "skipped",
-        format: "text",
-      },
-    });
-    expect(result.raw).toBeUndefined();
-  });
-
-  it("names an image after the directory the image file sits in", () => {
-    const nested = parseLauncherImagesFromSton(
-      "PhLImage{#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['images','MCP13','MCP13.image']}}}",
-    );
-    const flat = parseLauncherImagesFromSton(
-      "PhLImage{#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['MCP13.image']}}}",
-    );
-
-    expect(nested[0]?.name).toBe("MCP13");
-    // Nothing but the file to read it from, so read it off the file rather
-    // than calling the image MCP13.image.
-    expect(flat[0]?.name).toBe("MCP13");
-  });
-
-  it("extracts LauncherImage models from STON output", () => {
-    const images = parseLauncherImagesFromSton(
-      "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#originTemplate:PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']},#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['MCP13','MCP13.image'],#origin:#launcherImagesLocation}},#launchConfigurations:OrderedCollection[PhLLaunchConfiguration{#vm:PhLVirtualMachine{#id:'130-x64',#blessing:'stable'}}]}]",
-    );
-
-    expect(images).toEqual([
-      {
-        name: "MCP13",
-        imagePath: "MCP13/MCP13.image",
-        architecture: "64",
-        pharoVersion: "130",
-        formatNumber: 68021,
-        originTemplate: {
-          name: "Pharo 13.0 - 64bit (stable)",
-          url: "https://files.pharo.org/image/130/latest-64.zip",
-        },
-        vmId: "130-x64",
-      },
-    ]);
-  });
-
-  it("extracts LauncherImage models from text table output", () => {
-    const images = parseLauncherImagesFromText(`
-#  Name                                             Architecture Pharo version Last modified
--- ------------------------------------------------ ------------ ------------- -------------------
-1  Pharo 13.0 - 64bit (stable)                     64           130           2026-04-25 10:00:00
-`);
-
-    expect(images).toEqual([
-      {
-        name: "Pharo 13.0 - 64bit (stable)",
-        architecture: "64",
-        pharoVersion: "130",
-      },
-    ]);
-  });
-
-  it("returns a single model for info parser output with one item", () => {
-    const result = parseLauncherOutput(
-      "pharo_launcher_image_info",
-      "ston",
-      "OrderedCollection[PhLImage{#formatNumber:68021,#architecture:'64',#pharoVersion:'130',#vmManager:PhLVirtualMachineManager{#imageFile:FileLocator{#path:RelativePath['MCP13','MCP13.image'],#origin:#launcherImagesLocation}}}]",
-    );
-
-    expect(result).toMatchObject({
-      status: "parsed",
-      format: "ston",
-      data: {
-        name: "MCP13",
-        imagePath: "MCP13/MCP13.image",
-      },
-    });
-  });
-
-  it("uses the list name filter when PharoLauncher omits image file metadata", () => {
-    const result = normalizeLauncherResult(
-      "pharo_launcher_image_list",
-      ["image", "list", "--nameFilter", "MCP13Copy", "--ston"],
-      {
-        ...cliResult,
-        stdout:
-          "OrderedCollection[PhLImage{#originTemplate:PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']},#launchConfigurations:OrderedCollection[],#shouldRunInitializationScript:true}]",
-      },
+      "pharo_launcher_template_category_list",
+      ["template", "categories", "--brief"],
+      { ...cliResult, stdout: "*1  Official distributions\n 2  Pharo Mooc\n 10 Moose\n" },
     );
 
     expect(result).toMatchObject({
       ok: true,
-      data: [
-        {
-          name: "MCP13Copy",
-          originTemplate: {
-            name: "Pharo 13.0 - 64bit (stable)",
-          },
-        },
-      ],
-    });
-  });
-
-  it("uses the image info argument when PharoLauncher omits image file metadata", () => {
-    const result = normalizeLauncherResult(
-      "pharo_launcher_image_info",
-      ["image", "info", "--ston", "MCP13Copy"],
-      {
-        ...cliResult,
-        stdout:
-          "OrderedCollection[PhLImage{#originTemplate:PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']},#launchConfigurations:OrderedCollection[],#shouldRunInitializationScript:true}]",
-      },
-    );
-
-    expect(result).toMatchObject({
-      ok: true,
-      data: {
-        name: "MCP13Copy",
-        originTemplate: {
-          name: "Pharo 13.0 - 64bit (stable)",
-        },
-      },
+      data: ["Official distributions", "Pharo Mooc", "Moose"],
+      defaultCategory: "Official distributions",
+      parser: { status: "parsed" },
     });
   });
 
@@ -287,38 +154,29 @@ describe("result normalizer", () => {
     ]);
   });
 
-  it("extracts LauncherProcess models from text output", () => {
-    const processes = parseLauncherProcessesFromText(
-      "3093 C:/Pharo/vms/130-x64/Pharo.exe C:/Pharo/images/MCP13/MCP13.image",
-    );
-
-    expect(processes).toEqual([
+  // The native list hands over its records, so nothing prints them and parses
+  // the print back.
+  it("takes a process list's records as its data", () => {
+    const processes = [
       {
         pid: 3093,
-        commandLine:
-          "3093 C:/Pharo/vms/130-x64/Pharo.exe C:/Pharo/images/MCP13/MCP13.image",
-        executablePath: "C:/Pharo/vms/130-x64/Pharo.exe",
-        imagePath: "C:/Pharo/images/MCP13/MCP13.image",
-        imageName: "MCP13",
+        commandLine: "/vms/Pharo /images/MCP debug/MCP debug.image",
+        imagePath: "/images/MCP debug/MCP debug.image",
+        imageName: "MCP debug",
       },
-    ]);
-  });
+    ];
 
-  it("extracts LauncherProcess models from quoted Windows text output", () => {
-    const processes = parseLauncherProcessesFromText(
-      '3093 "C:\\Program Files\\Pharo\\Pharo.exe" "C:\\Users\\Ada\\Images\\MCP13\\MCP13.image" "C:\\Program Files\\Pharo\\Pharo.exe C:\\Users\\Ada\\Images\\MCP13\\MCP13.image"',
+    const result = normalizeLauncherResult(
+      "pharo_launcher_process_list",
+      ["process", "list"],
+      { ...cliResult, stdout: "printed for raw only", processes },
     );
 
-    expect(processes).toEqual([
-      {
-        pid: 3093,
-        commandLine:
-          '3093 "C:\\Program Files\\Pharo\\Pharo.exe" "C:\\Users\\Ada\\Images\\MCP13\\MCP13.image" "C:\\Program Files\\Pharo\\Pharo.exe C:\\Users\\Ada\\Images\\MCP13\\MCP13.image"',
-        executablePath: "C:\\Program Files\\Pharo\\Pharo.exe",
-        imagePath: "C:\\Users\\Ada\\Images\\MCP13\\MCP13.image",
-        imageName: "MCP13",
-      },
-    ]);
+    expect(result).toMatchObject({
+      ok: true,
+      data: processes,
+      parser: { status: "parsed" },
+    });
   });
 
   it("returns unsupported parser status when no parser exists", () => {
@@ -326,6 +184,63 @@ describe("result normalizer", () => {
       status: "unsupported",
       format: "text",
       message: "No parser registered for pharo_launcher_image_copy",
+    });
+  });
+
+  // A PhLLocalTemplate is the user's own; the reader used to look for two
+  // class names only, and missed it.
+  it("lists every kind of template in the Launcher's order, and no group", () => {
+    const templates = parseLauncherTemplatesFromSton(
+      "OrderedCollection[" +
+        "PhLRemoteTemplate{#name:'Pharo 14.0 - 64bit (next stable)',#url:URL['https://files.pharo.org/image/140/latest-64.zip']}," +
+        "PhLLocalTemplate{#name:'My ''own'' template',#zipFile:FileReference{#path:'/x/my.zip'}}," +
+        "PhLTemplateGroup{#name:'Not a template'}," +
+        "PhLRemoteTemplate { #name : 'Pharo 13.0 - 64bit (stable)' }" +
+        "]",
+    );
+
+    expect(templates).toEqual([
+      {
+        name: "Pharo 14.0 - 64bit (next stable)",
+        url: "https://files.pharo.org/image/140/latest-64.zip",
+      },
+      { name: "My 'own' template", local: true },
+      { name: "Pharo 13.0 - 64bit (stable)" },
+    ]);
+  });
+
+  // ConsoleListFormatter>>printAttributeRows: the default mark or a space, the
+  // index padded right to two, one space, the name. No header with --brief.
+  it.each([
+    [
+      "with a default",
+      "*1  Official distributions\n 2  Pharo Mooc\n 10 Moose\n",
+      ["Official distributions", "Pharo Mooc", "Moose"],
+      "Official distributions",
+    ],
+    ["with none", "1  Official distributions\n2  Pharo Mooc\n", ["Official distributions", "Pharo Mooc"], undefined],
+    ["with the default second", " 1 A\r\n*2 B b\r\n", ["A", "B b"], "B b"],
+    ["with no category", "", [], undefined],
+  ])("reads brief categories %s", (_label, source, categories, defaultCategory) => {
+    expect(parseTemplateCategoriesFromBrief(source)).toEqual({
+      categories,
+      ...(defaultCategory ? { defaultCategory } : {}),
+    });
+  });
+
+  it("says a signal ended a command that wrote nothing, and carries the signal", () => {
+    const killed = { ...cliResult, exitCode: null, signal: "SIGKILL" as const };
+
+    expect(launcherMessage(killed)).toBe("it was killed by signal SIGKILL");
+    expect(launcherMessage({ ...killed, stderr: "Killed." })).toBe("Killed.");
+    expect(
+      normalizeLauncherResult("pharo_launcher_image_delete", ["image", "delete", "x"], killed).command,
+    ).toEqual({
+      args: ["image", "delete", "x"],
+      durationMs: 12,
+      exitCode: null,
+      signal: "SIGKILL",
+      timedOut: false,
     });
   });
 });

@@ -4,7 +4,7 @@ import {
   getPharoLauncherVersion,
   validatePharoLauncherInstallation,
 } from "./discovery.js";
-import { runLauncherCli } from "./launcherCli.js";
+import { probeImages } from "./probe.js";
 import { startStdioServer } from "./server.js";
 
 async function main(): Promise<void> {
@@ -38,10 +38,10 @@ async function main(): Promise<void> {
   }
 
   if (process.argv.includes("--probe-images")) {
-    const result = await runLauncherCli(["image", "list", "--ston"]);
-    process.stdout.write(result.stdout);
+    const result = await probeImages();
     process.stderr.write(result.stderr);
-    process.exitCode = result.exitCode ?? 1;
+    process.stdout.write(result.stdout);
+    process.exitCode = result.exitCode;
     return;
   }
 

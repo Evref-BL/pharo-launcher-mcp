@@ -6,14 +6,22 @@ focused on installation and first use; user-facing detail lives under `docs/`.
 ## Source layout
 
 - `src/server.ts`: MCP server surface and tool dispatch.
+- `src/answers.ts`: what each tool answers, as text, and the checks made
+  before a call. Every text naming a `pharo_launcher_*` tool is here.
+- `src/launcher.ts`: the library, `openPharoLauncher`, which the tools are made
+  from and PLexus imports.
 - `src/commandCatalog.ts`: Pharo Launcher command definitions and input checks.
 - `src/config.ts`: Pharo Launcher and profile path resolution.
 - `src/platform.ts`: host-specific defaults and wrapper selection.
 - `src/launcherScript.ts`: bundled wrapper discovery.
 - `src/launcherCli.ts`: command execution boundary.
 - `src/processTools.ts`: native process list and kill backends.
+- `src/imageStore.ts`: the Launcher's images, read from its images directory,
+  and the VMs running them.
+- `src/ston.ts`: reads fields of the STON Pharo Launcher writes.
 - `src/parser.ts`: Pharo Launcher output parsing.
-- `src/resultNormalizer.ts`: normalized MCP result envelopes.
+- `src/resultNormalizer.ts`: the library's launcher results.
+- `src/probe.ts`: `--probe-images`.
 - `bin/pharo-launcher.cmd`: Windows wrapper.
 - `bin/pharo-launcher.sh`: POSIX wrapper.
 - `scripts/live-smoke.mjs`: local live checks against a real launcher.
@@ -70,45 +78,54 @@ variables is present.
 
 ## Process backend
 
-Pharo Launcher process commands can vary by host. pharo-launcher-mcp uses a
-native process backend for `pharo_launcher_process_list` and
-`pharo_launcher_process_kill` when needed:
+pharo-launcher-mcp lists and kills processes itself, never through Pharo
+Launcher's `process` commands, whose table shortens a long path:
 
 - Windows uses a PowerShell/CIM query.
 - macOS and Linux use `ps -axo pid=,args=`.
-- Unsupported host platforms return an explicit unsupported-backend error.
+- On any other platform the process tools fail: listing processes is not
+  supported there.
+
+Of those processes, a VM runs image `D` when its command line names
+`<images>/D/D.image`, bounded by whitespace, a quote or the line's ends. The
+tools keep those in every mode; the library's `listProcesses` does in profile
+mode, and lists every Pharo VM outside one.
 
 ## Parsing boundary
 
-`src/parser.ts` is the only layer that translates Pharo Launcher output into
-pharo-launcher-mcp models.
+What the server knows of the Launcher's state comes from four places, each read
+where it is stable:
 
-- STON output is parsed where Pharo Launcher exposes stable STON for list/info
-  commands.
-- Plain text is parsed only for stable tables and process listings.
-- Unsupported commands still return command metadata and raw output.
-- Failed commands skip parsing so command failure is not confused with parser
-  failure.
+- Images are read from the images directory (`src/imageStore.ts`), never from
+  the Launcher's output: its STON names no image file, and its table shifts
+  columns and shortens names. An image's metadata comes from its
+  `meta-inf.ston`, its `pharo.version` and its image header.
+- Template categories come from `template categories --brief`, one row per
+  category with the default marked.
+- Templates come from `template list --ston`, every `PhL…Template` it holds,
+  in its order.
+- Processes come from the native process list.
 
-Typed launcher results include `parser.status` so result handlers can distinguish
-normalized model data from raw-only output.
+`src/parser.ts` reads the Launcher's output. Unsupported commands still return
+command metadata and raw output, and failed commands skip parsing so command
+failure is not confused with parser failure. Typed launcher results include
+`parser.status` so result handlers can distinguish normalized model data from
+raw-only output.
 
 Stable model names include:
 
 ```text
 LauncherImage
+NotAnImage
+LauncherImageList
+LauncherImageInfo
 LauncherTemplate
-LauncherVm
 LauncherProcess
 LauncherCommandResult
 ```
 
-Inventory output adds normalized identity metadata on top of parsed launcher
-models. Template identities normalize Pharo and Moose template names to the
-underlying Pharo version when possible, infer architecture from template names
-or URLs, and attach source-file digest/mtime for installed `.ston` template
-files. Image identities mirror the launcher metadata returned by image
-list/info commands.
+The MCP tools render these as text in `src/answers.ts`; the library never
+answers text.
 
 ## Integration tests
 
@@ -119,25 +136,19 @@ npm run test:integration
 ```
 
 The integration suite prepares an isolated temporary launcher profile by copying
-the Pharo Launcher control image. It includes live checks for:
+the Pharo Launcher control image. It calls the tools as a model does and checks
+their text, and checks the data through the library, `openPharoLauncher`:
 
-- health
-- version
-- installation validation
 - config
-- template categories, list, info, and update
-- VM list and info
-- image list
-- image create
+- template categories, list, and update
+- image list, and `--probe-images`
+- image create, beside an image whose name holds the new one
 - image copy
 - image info
-- image package
-- image launch
-- image recreate
-- image delete
+- image start, detached
+- image delete, refused while the image runs and accepted right after the kill
 - process list
 - process kill
-- raw command
 
 External-source image creation variants such as build, pull request,
 repository, SHA, and VM mutation commands should use explicit fixtures because
@@ -182,7 +193,9 @@ distinguishes read-only planning checks from host inspection and mutation.
 
 ## Local probes
 
-Probe the local Pharo Launcher image list without starting MCP stdio:
+Probe the local Pharo Launcher image list without starting MCP stdio. It asks
+the Launcher to list its images, exits with that command's status, and prints
+what `pharo_launcher_image_list` answers:
 
 ```powershell
 npm run build

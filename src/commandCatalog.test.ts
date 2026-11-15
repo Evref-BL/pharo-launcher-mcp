@@ -43,15 +43,17 @@ describe("launcher command catalog", () => {
     );
   });
 
-  it("exposes the raw output opt-in on command-backed tools", () => {
-    for (const tool of launcherCommandTools) {
-      expect(tool.inputSchema.properties).toMatchObject({
-        includeRaw: {
-          type: "boolean",
-        },
-      });
-    }
-  });
+  // No task drew them, and a model reads a schema as what matters. The
+  // library still takes includeRaw, which PLexus passes to startImage.
+  it.each(launcherCommandTools.map((tool) => [tool.name, tool] as const))(
+    "advertises no table option and no raw output on %s",
+    (_name, tool) => {
+      const properties = Object.keys(tool.inputSchema.properties as object);
+      for (const option of ["includeRaw", "format", "brief", "rowMode", "delimiter"]) {
+        expect(properties).not.toContain(option);
+      }
+    },
+  );
 
   it.each([
     [
@@ -76,11 +78,6 @@ describe("launcher command catalog", () => {
       ],
     ],
     [
-      "pharo_launcher_image_info",
-      { imageName: "Task", format: "ston" },
-      ["image", "info", "--ston", "Task"],
-    ],
-    [
       "pharo_launcher_image_start",
       { imageName: "Task", script: "bootstrap.st", detached: true },
       [
@@ -98,11 +95,6 @@ describe("launcher command catalog", () => {
       ["image", "launch", "--displayMode", "interactive", "Task"],
     ],
     [
-      "pharo_launcher_image_list",
-      { nameFilter: "Task", format: "text", brief: true },
-      ["image", "list", "--nameFilter", "Task", "--brief"],
-    ],
-    [
       "pharo_launcher_process_list",
       {},
       ["process", "list"],
@@ -110,12 +102,17 @@ describe("launcher command catalog", () => {
     [
       "pharo_launcher_template_category_list",
       { format: "ston" },
-      ["template", "categories", "--ston"],
+      ["template", "categories", "--brief"],
     ],
     [
       "pharo_launcher_template_list",
       { templateCategory: "Official", format: "text", rowMode: true },
-      ["template", "list", "--templateCategory", "Official", "--rowMode"],
+      ["template", "list", "--templateCategory", "Official", "--ston"],
+    ],
+    [
+      "pharo_launcher_template_list",
+      { brief: true, delimiter: ";" },
+      ["template", "list", "--ston"],
     ],
     [
       "pharo_launcher_template_update",
@@ -154,15 +151,50 @@ describe("launcher command catalog", () => {
     ]);
   });
 
+  // Both read the images directory: no Launcher call names an image.
+  it("builds no Launcher command for image_list and image_info", () => {
+    expect(
+      buildLauncherCommandArgs("pharo_launcher_image_list", { nameFilter: "Task" }),
+    ).toBeUndefined();
+    expect(
+      buildLauncherCommandArgs("pharo_launcher_image_info", { imageName: "Task" }),
+    ).toBeUndefined();
+  });
+
+  // Without --no-launch PharoLauncher starts the new image and waits for it to
+  // quit; starting is image_start's.
+  it.each([{}, { noLaunch: false }, { noLaunch: true }])(
+    "never lets image create start the image, given %o",
+    (noLaunch) => {
+      expect(
+        buildLauncherCommandArgs("pharo_launcher_image_create", {
+          templateName: "Pharo 13.0 - 64bit (stable)",
+          newImageName: "Task",
+          ...noLaunch,
+        }),
+      ).toEqual([
+        "image",
+        "create",
+        "--no-launch",
+        "--templateName",
+        "Pharo 13.0 - 64bit (stable)",
+        "Task",
+      ]);
+    },
+  );
+
+  it("advertises no way to launch from image create", () => {
+    const createTool = launcherCommandTools.find(
+      (tool) => tool.name === "pharo_launcher_image_create",
+    );
+
+    expect(createTool?.inputSchema.properties).not.toHaveProperty("noLaunch");
+  });
+
   it("requires caller-supplied image names for image primitives", () => {
     expect(() =>
       buildLauncherCommandArgs("pharo_launcher_image_copy", {
         newImageName: "copy",
-      }),
-    ).toThrow("imageName is required");
-    expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_info", {
-        format: "ston",
       }),
     ).toThrow("imageName is required");
     expect(() =>
@@ -219,7 +251,7 @@ describe("launcher command catalog", () => {
 
     expect(
       Object.keys((deleteTool?.inputSchema.properties ?? {}) as object),
-    ).toEqual(["imageName", "includeRaw"]);
+    ).toEqual(["imageName"]);
   });
 
   // The caller means its own directory. Passed on as it is, the path would be
@@ -261,7 +293,7 @@ describe("launcher command catalog", () => {
     ).toThrow("imageName is required");
     expect(() =>
       buildLauncherCommandArgs("pharo_launcher_process_kill", {}),
-    ).toThrow("requires pid or imageName");
+    ).toThrow("Give the pid or the imageName of the process to kill.");
   });
 
   it("rejects ambiguous process kill targets", () => {
@@ -270,6 +302,6 @@ describe("launcher command catalog", () => {
         imageName: "Task",
         pid: 1234,
       }),
-    ).toThrow("requires exactly one of pid or imageName");
+    ).toThrow("Give pid or imageName, not both.");
   });
 });

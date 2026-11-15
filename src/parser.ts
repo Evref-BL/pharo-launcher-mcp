@@ -1,256 +1,65 @@
-import path from "node:path";
-import type {
-  LauncherImage,
-  LauncherOutputFormat,
-  LauncherProcess,
-  LauncherTemplate,
-} from "./models.js";
-import {
-  hasCaseInsensitiveSuffix,
-  isAsciiDigit,
-  isWhitespace,
-  leadingDigits,
-  quotedValues,
-  stripLeadingNumber,
-  whitespaceTokens,
-} from "./textTokens.js";
+import type { LauncherOutputFormat, LauncherTemplate } from "./models.js";
+import { objectOpenings, stonFields, stringValue, urlValue } from "./ston.js";
 
 export interface ParseResult<T = unknown> {
   status: "parsed" | "unsupported" | "failed";
   format: LauncherOutputFormat;
   data?: T;
+  /** The category the Launcher marks as its default, for a category listing. */
+  defaultCategory?: string;
   message?: string;
 }
 
-function stonBlocks(source: string, className: string): string[] {
-  const blocks: string[] = [];
-  let index = 0;
-  const marker = `${className}{`;
-
-  while (index < source.length) {
-    const start = source.indexOf(marker, index);
-    if (start === -1) {
-      break;
-    }
-
-    let depth = 0;
-    let end = start + className.length;
-    for (; end < source.length; end += 1) {
-      const char = source[end];
-      if (char === "{") {
-        depth += 1;
-      } else if (char === "}") {
-        depth -= 1;
-        if (depth === 0) {
-          end += 1;
-          break;
-        }
-      }
-    }
-
-    blocks.push(source.slice(start, end));
-    index = end;
-  }
-
-  return blocks;
-}
-
-function field(block: string, name: string): string | undefined {
-  return block.match(new RegExp(`#${name}:'([^']*)'`))?.[1];
-}
-
-function numberField(block: string, name: string): number | undefined {
-  const value = block.match(new RegExp(`#${name}:(\\d+)`))?.[1];
-  return value ? Number(value) : undefined;
-}
-
-function urlField(block: string): string | undefined {
-  return block.match(/#url:URL\['([^']*)'\]/)?.[1];
-}
-
-function relativePath(block: string): string | undefined {
-  const match = block.match(/RelativePath\[((?:'[^']*'(?:,\s*)?)+)\]/);
-  if (!match?.[1]) {
-    return undefined;
-  }
-
-  const parts = [...match[1].matchAll(/'([^']*)'/g)].map((part) => part[1]);
-  return parts.join("/");
-}
-
-function splitFixedColumns(value: string): string[] {
-  const columns: string[] = [];
-  let columnStart = 0;
-  let index = 0;
-
-  while (index < value.length) {
-    if (!isWhitespace(value[index])) {
-      index += 1;
-      continue;
-    }
-
-    const whitespaceStart = index;
-    while (isWhitespace(value[index])) {
-      index += 1;
-    }
-
-    if (index - whitespaceStart >= 2) {
-      columns.push(value.slice(columnStart, whitespaceStart).trim());
-      columnStart = index;
-    }
-  }
-
-  columns.push(value.slice(columnStart).trim());
-  return columns.filter((column) => column.length > 0);
-}
-
-function withoutBoundaryQuotes(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  return value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value;
-}
-
-function basenameWithoutImageExtension(imagePath: string): string {
-  const basename = imagePath.split(/[\\/]/).at(-1) ?? imagePath;
-  return basename.replace(/\.image$/i, "");
-}
-
-// PharoLauncher keeps an image at <Name>/<Name>.image, so the directory the
-// image file sits in is the image's name — the same rule the metadata repair
-// reads. Metadata that stores only the file name has no directory to read, so
-// take the name off the file instead.
-function imageNameFromRelativePath(imagePath: string): string {
-  const parts = imagePath.split(/[\\/]/);
-  const parent = parts.at(-2);
-
-  return parent ?? basenameWithoutImageExtension(imagePath);
-}
-
-export function parseLauncherImagesFromSton(source: string): LauncherImage[] {
-  return stonBlocks(source, "PhLImage").map((block) => {
-    const imagePath = relativePath(block);
-
+/**
+ * Every template of `template list --ston`, in the Launcher's order: each
+ * `PhL…Template{` object, whatever its class, a `PhLLocalTemplate` as well as a
+ * `PhLRemoteTemplate`. A `PhLTemplateGroup` is not one.
+ */
+export function parseLauncherTemplatesFromSton(source: string): LauncherTemplate[] {
+  return objectOpenings(source, /PhL\w*Template/).map((open) => {
+    const fields = stonFields(source, open);
+    const name = stringValue(fields.get("name"));
+    const category = stringValue(fields.get("category"));
+    const url = urlValue(fields.get("url"));
+    const local = /PhLLocalTemplate\s*$/.test(source.slice(0, open));
     return {
-      ...(imagePath ? { name: imageNameFromRelativePath(imagePath), imagePath } : {}),
-      ...(field(block, "architecture")
-        ? { architecture: field(block, "architecture") }
-        : {}),
-      ...(field(block, "pharoVersion")
-        ? { pharoVersion: field(block, "pharoVersion") }
-        : {}),
-      ...(numberField(block, "formatNumber")
-        ? { formatNumber: numberField(block, "formatNumber") }
-        : {}),
-      originTemplate: {
-        ...(field(block, "name") ? { name: field(block, "name") } : {}),
-        ...(urlField(block) ? { url: urlField(block) } : {}),
-      },
-      ...(field(block, "id") ? { vmId: field(block, "id") } : {}),
+      ...(name ? { name } : {}),
+      ...(category ? { category } : {}),
+      ...(url ? { url } : {}),
+      ...(local ? { local } : {}),
     };
   });
 }
 
-export function parseLauncherImagesFromText(source: string): LauncherImage[] {
-  return source
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line) => {
-      const digits = leadingDigits(line);
-      return Boolean(digits && isWhitespace(line[digits.length]));
-    })
-    .map((line) => {
-      const columns = splitFixedColumns(line);
-      const dataColumns =
-        columns[0] !== undefined && leadingDigits(columns[0]) === columns[0]
-          ? columns.slice(1)
-          : columns;
-      if (dataColumns.length < 3) {
-        return { name: stripLeadingNumber(line).trim() };
-      }
+const briefCategoryRow = /^(\*?)\s*\d+\s+(.*?)\s*$/;
 
-      return {
-        name: stripLeadingNumber(dataColumns[0]).trim(),
-        architecture: dataColumns[1],
-        pharoVersion: whitespaceTokens(dataColumns[2])[0] ?? dataColumns[2],
-      };
-    });
-}
+/**
+ * The categories of `template categories --brief`, in the Launcher's order.
+ *
+ * It prints one row per category and no header
+ * (`ConsoleListFormatter>>printAttributeRows`): the mark `*` on the default, or
+ * a space, when one is the default; the index, padded right to two; one space;
+ * the name, which the Launcher shortens past 75 characters as every cell.
+ */
+export function parseTemplateCategoriesFromBrief(source: string): {
+  categories: string[];
+  defaultCategory?: string;
+} {
+  const categories: string[] = [];
+  let defaultCategory: string | undefined;
+  for (const line of source.split(/\r?\n/)) {
+    const row = briefCategoryRow.exec(line);
+    if (!row || !row[2]) {
+      continue;
+    }
 
-export function parseLauncherTemplatesFromSton(source: string): LauncherTemplate[] {
-  const blocks = [
-    ...stonBlocks(source, "PhLRemoteTemplate"),
-    ...stonBlocks(source, "PhLTemplate"),
-  ];
+    categories.push(row[2]);
+    if (row[1] === "*") {
+      defaultCategory ??= row[2];
+    }
+  }
 
-  return blocks.map((block) => ({
-    ...(field(block, "name") ? { name: field(block, "name") } : {}),
-    ...(field(block, "category") ? { category: field(block, "category") } : {}),
-    ...(urlField(block) ? { url: urlField(block) } : {}),
-  }));
-}
-
-export function parseLauncherTemplatesFromText(source: string): LauncherTemplate[] {
-  return source
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !line.startsWith("#") && !line.startsWith("--"))
-    .map((line) => ({ name: line.replace(/^\d+\s+/, "") }));
-}
-
-export function parseTemplateCategoriesFromSton(source: string): string[] {
-  return [...source.matchAll(/'([^']+)'/g)].map((match) => match[1]);
-}
-
-export function parseTemplateCategoriesFromText(source: string): string[] {
-  return source
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !line.startsWith("#") && !line.startsWith("--"))
-    .map((line) => line.replace(/^\d+\s+/, ""));
-}
-
-export function parseLauncherProcessesFromText(source: string): LauncherProcess[] {
-  return source
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const pidText = leadingDigits(line);
-      if (!pidText) {
-        return undefined;
-      }
-
-      const values = quotedValues(line);
-      const commandText = stripLeadingNumber(line);
-      const imagePath =
-        values.find((value) => hasCaseInsensitiveSuffix(value, ".image")) ??
-        whitespaceTokens(commandText).find((value) =>
-          hasCaseInsensitiveSuffix(value, ".image"),
-        );
-      const executablePath =
-        values.find(
-          (value) =>
-            hasCaseInsensitiveSuffix(value, ".exe") ||
-            hasCaseInsensitiveSuffix(value, ".app"),
-        ) ?? withoutBoundaryQuotes(whitespaceTokens(commandText)[0]);
-
-      return {
-        pid: Number(pidText),
-        commandLine: line,
-        ...(executablePath ? { executablePath } : {}),
-        ...(imagePath
-          ? {
-              imagePath,
-              imageName: basenameWithoutImageExtension(path.basename(imagePath)),
-            }
-          : {}),
-      };
-    })
-    .filter((process): process is LauncherProcess => Boolean(process));
+  return { categories, ...(defaultCategory ? { defaultCategory } : {}) };
 }
 
 function parseWithStatus<T>(
@@ -272,48 +81,25 @@ function parseWithStatus<T>(
   }
 }
 
-function singleOrArray<T>(items: T[]): T | T[] {
-  return items.length === 1 ? items[0] : items;
-}
-
 export function parseLauncherOutput(
   toolName: string,
   format: LauncherOutputFormat,
   stdout: string,
 ): ParseResult {
   switch (toolName) {
-    case "pharo_launcher_image_list":
-      return parseWithStatus(format, () =>
-        format === "ston"
-          ? parseLauncherImagesFromSton(stdout)
-          : parseLauncherImagesFromText(stdout),
-      );
-
-    case "pharo_launcher_image_info":
-      return parseWithStatus(format, () =>
-        singleOrArray(
-          format === "ston"
-            ? parseLauncherImagesFromSton(stdout)
-            : parseLauncherImagesFromText(stdout),
-        ),
-      );
-
-    case "pharo_launcher_template_category_list":
-      return parseWithStatus(format, () =>
-        format === "ston"
-          ? parseTemplateCategoriesFromSton(stdout)
-          : parseTemplateCategoriesFromText(stdout),
-      );
+    case "pharo_launcher_template_category_list": {
+      const { categories, defaultCategory } =
+        parseTemplateCategoriesFromBrief(stdout);
+      return {
+        status: "parsed",
+        format,
+        data: categories,
+        ...(defaultCategory ? { defaultCategory } : {}),
+      };
+    }
 
     case "pharo_launcher_template_list":
-      return parseWithStatus(format, () =>
-        format === "ston"
-          ? parseLauncherTemplatesFromSton(stdout)
-          : parseLauncherTemplatesFromText(stdout),
-      );
-
-    case "pharo_launcher_process_list":
-      return parseWithStatus("text", () => parseLauncherProcessesFromText(stdout));
+      return parseWithStatus(format, () => parseLauncherTemplatesFromSton(stdout));
 
     default:
       return {

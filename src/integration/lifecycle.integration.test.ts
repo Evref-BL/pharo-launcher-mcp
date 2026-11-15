@@ -1,141 +1,30 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { LauncherProcess } from "../models.js";
 import {
   callLiveTool,
-  expectOkTool,
+  expectAnswered,
+  expectOk,
+  firstTemplate,
+  imagesDirOf,
   type IntegrationProfile,
-  localPharoVersions,
+  liveLauncher,
   prepareIntegrationProfile,
   removeIntegrationProfile,
-  stringField,
 } from "./helpers.js";
 
 const lifecycleTimeoutMs = 240_000;
 
-interface TemplateChoice {
-  name: string;
-  category?: string;
-}
-
-function dataArray(body: Record<string, unknown>): Record<string, unknown>[] {
-  return Array.isArray(body.data)
-    ? (body.data as Record<string, unknown>[])
-    : [];
-}
-
-function firstNamedModel(
-  body: Record<string, unknown>,
-  modelName: string,
-): Record<string, unknown> {
-  const model = dataArray(body).find((item) => typeof item.name === "string");
-  if (!model) {
-    throw new Error(`No ${modelName} with a name was returned`);
-  }
-
-  return model;
-}
-
-function expectSuccessfulTool(
-  label: string,
-  toolResult: {
-    result: { isError?: boolean };
-    body: Record<string, unknown>;
-  },
-): void {
-  if (toolResult.result.isError) {
-    throw new Error(`${label} failed: ${JSON.stringify(toolResult.body, null, 2)}`);
-  }
-
-  expectOkTool(toolResult.body);
-}
-
-async function firstTemplate(profile: IntegrationProfile): Promise<TemplateChoice> {
-  const availableVersions = localPharoVersions(profile);
-
-  const update = await callLiveTool(
-    profile,
-    "pharo_launcher_template_update",
-    {},
-    { timeoutMs: lifecycleTimeoutMs },
-  );
-  expectSuccessfulTool("template update", update);
-
-  const { result, body } = await callLiveTool(
-    profile,
-    "pharo_launcher_template_list",
-    { format: "ston" },
-    { timeoutMs: lifecycleTimeoutMs },
-  );
-
-  expect(result.isError).toBeUndefined();
-  expectOkTool(body);
-
-  const templates = dataArray(body);
-  const template =
-    templates.find((candidate) => {
-      const name = typeof candidate.name === "string" ? candidate.name : "";
-      const url = typeof candidate.url === "string" ? candidate.url : "";
-
-      return availableVersions.some(
-        (version) =>
-          name.includes(`Pharo ${Number(version)}.`) ||
-          url.includes(`/${version}/`),
-      );
-    }) ?? firstNamedModel(body, "template");
-
-  return {
-    name: stringField(template.name, "template.name"),
-    ...(typeof template.category === "string"
-      ? { category: template.category }
-      : {}),
-  };
-}
-
-async function deleteImageIfPresent(
-  profile: IntegrationProfile,
-  imageName: string,
-): Promise<void> {
-  await callLiveTool(
-    profile,
-    "pharo_launcher_image_delete",
-    { imageName },
-    { timeoutMs: lifecycleTimeoutMs },
-  ).catch(() => undefined);
-}
-
-async function killProcessIfPresent(
-  profile: IntegrationProfile,
-  imageName: string,
-): Promise<void> {
-  await callLiveTool(
-    profile,
-    "pharo_launcher_process_kill",
-    { imageName },
-    { timeoutMs: lifecycleTimeoutMs },
-  ).catch(() => undefined);
-}
-
 async function waitForProcess(
   profile: IntegrationProfile,
   imageName: string,
-): Promise<Record<string, unknown>> {
+): Promise<LauncherProcess> {
   const deadline = Date.now() + 60_000;
 
   while (Date.now() < deadline) {
-    const { body } = await callLiveTool(
-      profile,
-      "pharo_launcher_process_list",
-      {},
-      { timeoutMs: lifecycleTimeoutMs },
-    );
-    const process = dataArray(body).find(
-      (item) =>
-        item.imageName === imageName ||
-        (typeof item.commandLine === "string" &&
-          item.commandLine.includes(imageName)),
-    );
-
+    const listed = await liveLauncher(profile).listProcesses();
+    const process = listed.data?.find((item) => item.imageName === imageName);
     if (process) {
       return process;
     }
@@ -160,55 +49,87 @@ describe("PharoLauncher image lifecycle integration", () => {
 
   afterAll(async () => {
     if (profile) {
-      await killProcessIfPresent(profile, copiedImageName);
-      await killProcessIfPresent(profile, sourceImageName);
-      await deleteImageIfPresent(profile, copiedImageName);
-      await deleteImageIfPresent(profile, sourceImageName);
+      const launcher = liveLauncher(profile, { timeoutMs: lifecycleTimeoutMs });
+      for (const imageName of [copiedImageName, sourceImageName]) {
+        await launcher.killProcess({ imageName }).catch(() => undefined);
+        await launcher.deleteImage({ imageName }).catch(() => undefined);
+      }
       removeIntegrationProfile(profile);
     }
   });
 
   it(
-    "creates, copies, inspects, packages, launches, stops, recreates, and deletes an image",
+    "creates, copies, inspects, starts, refuses to delete while running, kills and deletes an image",
     async () => {
-      const template = await firstTemplate(profile);
+      const launcher = liveLauncher(profile, { timeoutMs: lifecycleTimeoutMs });
+      const options = { timeoutMs: lifecycleTimeoutMs };
+      const images = imagesDirOf(profile);
+      const template = await firstTemplate(profile, lifecycleTimeoutMs);
 
-      const createInput = {
-        templateName: template.name,
-        ...(template.category ? { templateCategory: template.category } : {}),
-        newImageName: sourceImageName,
-        noLaunch: true,
-      };
-      const created = await callLiveTool(
-        profile,
-        "pharo_launcher_image_create",
-        createInput,
-        { timeoutMs: lifecycleTimeoutMs },
+      const createdText = expectAnswered(
+        "image create",
+        await callLiveTool(
+          profile,
+          "pharo_launcher_image_create",
+          {
+            templateName: template.name,
+            ...(template.category ? { templateCategory: template.category } : {}),
+            newImageName: sourceImageName,
+          },
+          options,
+        ),
       );
-      expectSuccessfulTool("image create", created);
-
-      const info = await callLiveTool(
-        profile,
-        "pharo_launcher_image_info",
-        { imageName: sourceImageName, format: "ston" },
-        { timeoutMs: lifecycleTimeoutMs },
-      );
-      expect(info.result.isError).toBeUndefined();
-      expect(info.body).toMatchObject({
-        ok: true,
-        parser: {
-          status: "parsed",
-          format: "ston",
-        },
+      const created = await launcher.imageInfo({ imageName: sourceImageName });
+      if (!created.found) {
+        throw new Error(`${sourceImageName} is not in ${images} after: ${createdText}`);
+      }
+      expect(created.image).toMatchObject({
+        name: sourceImageName,
+        imagePath: path.join(images, sourceImageName, `${sourceImageName}.image`),
+        pharoVersion: expect.any(String),
+        architecture: "64",
+        template: { name: template.name },
       });
+      expect(created.image.pids ?? []).toEqual([]);
+      expect(createdText.split("\n")).toEqual([
+        `Created image ${sourceImageName} from template ${template.name}.`,
+        `path: ${created.image.imagePath}`,
+        `pharoVersion: ${created.image.pharoVersion}`,
+        "architecture: 64",
+      ]);
 
-      const copied = await callLiveTool(
-        profile,
-        "pharo_launcher_image_copy",
-        { imageName: sourceImageName, newImageName: copiedImageName },
-        { timeoutMs: lifecycleTimeoutMs },
+      // What a model reads of the image it just made.
+      const listText = expectAnswered(
+        "image list",
+        await callLiveTool(profile, "pharo_launcher_image_list", {}, options),
       );
-      expectSuccessfulTool("image copy", copied);
+      expect(listText.split("\n")).toEqual([
+        `1 image in ${images}, not running.`,
+        "images:",
+        `  ${sourceImageName} pharoVersion=${created.image.pharoVersion} architecture=64 template="${template.name}"`,
+      ]);
+      const infoText = expectAnswered(
+        "image info",
+        await callLiveTool(profile, "pharo_launcher_image_info", { imageName: sourceImageName }, options),
+      );
+      expect(infoText.split("\n")[0]).toBe(`Image ${sourceImageName} is not running.`);
+      expect(infoText).toContain(`\ntemplate: ${template.name}\n`);
+
+      const copiedText = expectAnswered(
+        "image copy",
+        await callLiveTool(
+          profile,
+          "pharo_launcher_image_copy",
+          { imageName: sourceImageName, newImageName: copiedImageName },
+          options,
+        ),
+      );
+      const copyPath = path.join(images, copiedImageName, `${copiedImageName}.image`);
+      expect(copiedText.split("\n")).toEqual([
+        `Copied image ${sourceImageName} to ${copiedImageName}.`,
+        `path: ${copyPath}`,
+      ]);
+      expect((await launcher.imageInfo({ imageName: copiedImageName })).found).toBe(true);
 
       const launchScript = path.join(
         profile.stateRoot,
@@ -225,47 +146,56 @@ describe("PharoLauncher image lifecycle integration", () => {
         "utf8",
       );
 
-      const launched = await callLiveTool(
-        profile,
-        "pharo_launcher_image_start",
-        {
-          imageName: copiedImageName,
-          detached: true,
-          script: launchScript,
-        },
-        { timeoutMs: lifecycleTimeoutMs },
+      const startedText = expectAnswered(
+        "image start",
+        await callLiveTool(
+          profile,
+          "pharo_launcher_image_start",
+          { imageName: copiedImageName, detached: true, script: launchScript },
+          options,
+        ),
       );
-      expectSuccessfulTool("image launch", launched);
+      const started = /^Started (\S+) headless, detached, as pid (\d+)\.$/.exec(
+        startedText.split("\n")[0] ?? "",
+      );
+      expect(started?.[1], startedText).toBe(copiedImageName);
+      expect(startedText).toMatch(/\nlogs: .+-launch\.out\.log and .+-launch\.err\.log$/);
 
-      const runningProcess = await waitForProcess(profile, copiedImageName);
-      expect(runningProcess).toMatchObject({
-        pid: expect.any(Number),
+      const running = await waitForProcess(profile, copiedImageName);
+      expect(running.pid).toBe(Number(started?.[2]));
+      expect(running.imagePath).toBe(copyPath);
+
+      const refused = await callLiveTool(
+        profile,
+        "pharo_launcher_image_delete",
+        { imageName: copiedImageName },
+        options,
+      );
+      expect(refused).toEqual({
+        isError: true,
+        text: `Image ${copiedImageName} runs as pid ${running.pid}: stop it with pharo_launcher_process_kill, then delete it.`,
       });
+      expect(fs.existsSync(copyPath)).toBe(true);
 
-      const killed = await callLiveTool(
-        profile,
-        "pharo_launcher_process_kill",
-        { imageName: copiedImageName },
-        { timeoutMs: lifecycleTimeoutMs },
-      );
-      expectSuccessfulTool("process kill", killed);
+      expect(
+        expectAnswered(
+          "process kill",
+          await callLiveTool(profile, "pharo_launcher_process_kill", { imageName: copiedImageName }, options),
+        ),
+      ).toBe(`Killed ${copiedImageName} (pid ${running.pid}).`);
 
-      const deletedCopy = await callLiveTool(
-        profile,
-        "pharo_launcher_image_delete",
-        { imageName: copiedImageName },
-        { timeoutMs: lifecycleTimeoutMs },
-      );
-      expectSuccessfulTool("image delete copy", deletedCopy);
+      // Right after the kill: the kill waited for the VM to exit.
+      expect(
+        expectAnswered(
+          "image delete copy",
+          await callLiveTool(profile, "pharo_launcher_image_delete", { imageName: copiedImageName }, options),
+        ),
+      ).toBe(`Deleted image ${copiedImageName}.`);
+      expect((await launcher.imageInfo({ imageName: copiedImageName })).found).toBe(false);
 
-      const deletedSource = await callLiveTool(
-        profile,
-        "pharo_launcher_image_delete",
-        { imageName: sourceImageName },
-        { timeoutMs: lifecycleTimeoutMs },
-      );
-      expectSuccessfulTool("image delete source", deletedSource);
+      expectOk("image delete source", await launcher.deleteImage({ imageName: sourceImageName }));
+      expect((await launcher.listImages()).images).toEqual([]);
     },
-    lifecycleTimeoutMs,
+    900_000,
   );
 });

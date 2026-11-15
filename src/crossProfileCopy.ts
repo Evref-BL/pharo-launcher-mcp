@@ -93,8 +93,26 @@ interface CleanupGuidance {
   temporaryDirectory?: string;
 }
 
+/** Why a copy between profiles failed, so a caller need not read its text. */
+export type CrossProfileCopyFailure =
+  /** The source image's directory does not exist. */
+  | "source-missing"
+  /** It holds no `<source>.image`. */
+  | "source-image-missing"
+  /** It holds no meta-inf.ston. */
+  | "source-metadata-missing"
+  /** The destination's directory exists already, and is never replaced. */
+  | "destination-exists"
+  /** The temporary copy did not check out, and was removed. */
+  | "preflight"
+  /** The copy, moved in place, did not check out, and was left there. */
+  | "post-move"
+  /** Copying threw; `error` says what. */
+  | "exception";
+
 export interface CrossProfileImageCopyResult {
   ok: boolean;
+  failure?: CrossProfileCopyFailure;
   operation: "copy_between_profiles";
   sourceImageName: string;
   destinationImageName: string;
@@ -515,6 +533,17 @@ function resultBase(
   };
 }
 
+/**
+ * How a profile is named to a reader: by its state root, or its images
+ * directory when it has none. A `profileName` the caller did not give is
+ * `explicit`, which names nothing.
+ */
+export function profileLabel(
+  profile: Pick<ResolvedScopedProfile, "stateRoot" | "imagesDir">,
+): string {
+  return profile.stateRoot ?? profile.imagesDir;
+}
+
 // A caller that reports only the tool name says nothing a reader can act on,
 // and the structure below is only as good as the consumer that walks it. Lead
 // with one line naming both images, both profiles and the way out, so even a
@@ -525,10 +554,18 @@ function copyFailureMessage(
   action: string,
   error?: string,
 ): string {
-  const source = `'${request.sourceImageName}' in profile '${request.sourceProfile.profileName}'`;
-  const destination = `'${request.destinationImageName}' in profile '${request.destinationProfile.profileName}'`;
+  const renamed =
+    request.destinationImageName === request.sourceImageName
+      ? ""
+      : ` as ${request.destinationImageName}`;
 
-  return [`Cannot copy image ${source} to ${destination}: ${diagnostic}`, error, action]
+  return [
+    `Cannot copy image ${request.sourceImageName} from ${profileLabel(
+      request.sourceProfile,
+    )} to ${profileLabel(request.destinationProfile)}${renamed}: ${diagnostic}`,
+    error,
+    action,
+  ]
     .filter(Boolean)
     .join(" ");
 }
@@ -536,6 +573,7 @@ function copyFailureMessage(
 function failureResult(
   request: CopyRequest,
   touchedPaths: TouchedPaths,
+  failure: CrossProfileCopyFailure,
   diagnostic: string,
   action: string,
   temporaryDirectory?: string,
@@ -544,6 +582,7 @@ function failureResult(
   return {
     ...resultBase(request, touchedPaths, temporaryDirectory),
     ok: false,
+    failure,
     message: copyFailureMessage(request, diagnostic, action, error),
     diagnostic,
     action,
@@ -747,6 +786,7 @@ export function copyImageBetweenProfiles(
     return failureResult(
       request,
       touchedPaths,
+      "source-missing",
       "Source image directory is missing.",
       "Verify sourceProfile.imagesDir and sourceImageName before copying.",
     );
@@ -755,6 +795,7 @@ export function copyImageBetweenProfiles(
     return failureResult(
       request,
       touchedPaths,
+      "source-image-missing",
       "Source image file is missing.",
       "Verify the source image directory contains an image file named after sourceImageName.",
     );
@@ -763,6 +804,7 @@ export function copyImageBetweenProfiles(
     return failureResult(
       request,
       touchedPaths,
+      "source-metadata-missing",
       "Source image metadata file is missing.",
       "Repair or recreate the source image before copying it between explicit profiles.",
     );
@@ -771,6 +813,7 @@ export function copyImageBetweenProfiles(
     return failureResult(
       request,
       touchedPaths,
+      "destination-exists",
       `Destination image already exists at ${destinationImage.directory}, and an existing image is never replaced.`,
       "Read destinationImage to see what is already there and adopt it if it fits,"
         + " copy under a different destinationImageName,"
@@ -837,6 +880,7 @@ export function copyImageBetweenProfiles(
         ...failureResult(
           request,
           touchedPaths,
+          "preflight",
           `Copied image verification failed: ${preflightVerification.diagnostic}`,
           "Inspect the source image layout and metadata before retrying the copy.",
           temporaryDirectory,
@@ -863,6 +907,7 @@ export function copyImageBetweenProfiles(
         ...failureResult(
           request,
           touchedPaths,
+          "post-move",
           `Destination image verification failed: ${verification.diagnostic}`,
           "Delete the destination image directory if it is caller-owned, then retry from a valid source image.",
         ),
@@ -883,6 +928,7 @@ export function copyImageBetweenProfiles(
     return failureResult(
       request,
       touchedPaths,
+      "exception",
       "Cross-profile image copy failed.",
       "Inspect touchedPaths and retry after removing any listed temporary path.",
       temporaryDirectory,

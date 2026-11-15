@@ -35,7 +35,7 @@ describe("native process backend selection", () => {
       platform: "aix",
       backend: "unsupported",
       supported: false,
-      reason: "Native process backend is not supported on aix",
+      reason: "listing processes is not supported on aix",
     });
     expect(shouldUseNativeProcessTool("aix")).toBe(false);
   });
@@ -177,6 +177,69 @@ describe("runNativeProcessTool", () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toBe("Native process backend is not supported on aix");
+    expect(result.stderr).toBe("listing processes is not supported on aix");
+  });
+
+  it("hands over the records it lists", async () => {
+    const result = await runNativeProcessTool(["process", "list"], {
+      platform: "linux",
+      runCommand: async () =>
+        "3093 /opt/pharo/pharo --headless /home/ada/images/MCP13/MCP13.image",
+    });
+
+    expect(result.processes).toEqual([
+      {
+        pid: 3093,
+        executablePath: "/opt/pharo/pharo",
+        imagePath: "/home/ada/images/MCP13/MCP13.image",
+        imageName: "MCP13",
+        commandLine: "/opt/pharo/pharo --headless /home/ada/images/MCP13/MCP13.image",
+      },
+    ]);
+  });
+
+  // PLexus's killVms does the same: a VM gone meanwhile did what was asked.
+  it("tries every target, counting a pid already gone as stopped", async () => {
+    const tried: number[] = [];
+    const errno = (code: string) =>
+      Object.assign(new Error(`kill ${code}`), { code });
+
+    const result = await runNativeProcessTool(["process", "kill", "MCP13"], {
+      platform: "linux",
+      runCommand: async () =>
+        [
+          "11 /opt/pharo/pharo /home/ada/images/MCP13/MCP13.image",
+          "12 /opt/pharo/pharo /home/ada/images/MCP13/MCP13.image",
+          "13 /opt/pharo/pharo /home/ada/images/MCP13/MCP13.image",
+        ].join("\n"),
+      killProcess: (pid) => {
+        tried.push(pid);
+        if (pid === 11) {
+          throw errno("EPERM");
+        }
+        if (pid === 12) {
+          throw errno("ESRCH");
+        }
+      },
+    });
+
+    expect(tried).toEqual([11, 12, 13]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe("Killed 12\nKilled 13");
+    expect(result.stderr).toBe("Could not kill pid 11: kill EPERM");
+  });
+
+  it("succeeds when every target is stopped, gone ones included", async () => {
+    const result = await runNativeProcessTool(["process", "kill", "4711"], {
+      platform: "linux",
+      runCommand: async () =>
+        "4711 /opt/pharo/pharo /home/ada/images/MCP13/MCP13.image",
+      killProcess: () => {
+        throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("Killed 4711");
   });
 });

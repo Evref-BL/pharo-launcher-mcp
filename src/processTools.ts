@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import type { LauncherCliResult } from "./launcherCli.js";
+import type { LauncherProcess } from "./models.js";
 import {
   afterLeadingDigits,
   hasCaseInsensitiveSuffix,
@@ -17,13 +18,7 @@ interface WindowsProcessRecord {
   CommandLine?: string;
 }
 
-interface PharoProcessRecord {
-  pid: number;
-  executablePath?: string;
-  imagePath?: string;
-  imageName?: string;
-  commandLine: string;
-}
+type PharoProcessRecord = LauncherProcess;
 
 export interface NativeProcessToolCapability {
   platform: NodeJS.Platform;
@@ -43,6 +38,39 @@ export interface RunNativeProcessToolOptions {
   platform?: NodeJS.Platform;
   runCommand?: NativeProcessCommandRunner;
   killProcess?: (pid: number) => void;
+  /** Whether a pid still runs; by default `process.kill(pid, 0)`. */
+  isAlive?: (pid: number) => boolean;
+}
+
+/**
+ * Which of the machine's Pharo processes a call sees, and what a kill given an
+ * image name stops among them.
+ */
+export interface NativeProcessScope {
+  select(processes: readonly LauncherProcess[]): LauncherProcess[];
+  imageTargets(
+    processes: readonly LauncherProcess[],
+    imageName: string,
+  ): LauncherProcess[];
+}
+
+/** Every Pharo VM on the machine, an image named as its command line names it. */
+export const machineWideProcessScope: NativeProcessScope = {
+  select: (processes) => [...processes],
+  imageTargets: (processes, target) =>
+    processes.filter(
+      (process) => process.imageName === target || process.imagePath === target,
+    ),
+};
+
+/** Whether a pid runs: signal 0 checks without killing, `ESRCH` is gone. */
+export function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }
 
 function duration(startTime: number): number {
@@ -232,14 +260,6 @@ async function listPosixPharoProcesses(
 // way, so the kind is read back off the target: all digits is a pid, anything
 // else is an image. Matching the command line as well used to make a pid kill
 // reach every process whose command line merely contained those digits.
-function matchesTarget(process: PharoProcessRecord, target: string): boolean {
-  if (isPid(target)) {
-    return String(process.pid) === target;
-  }
-
-  return process.imageName === target || process.imagePath === target;
-}
-
 function isPid(target: string): boolean {
   return /^\d+$/.test(target);
 }
@@ -267,7 +287,7 @@ export function nativeProcessToolCapability(
     platform,
     backend: "unsupported",
     supported: false,
-    reason: `Native process backend is not supported on ${platform}`,
+    reason: `listing processes is not supported on ${platform}`,
   };
 }
 
@@ -290,39 +310,78 @@ async function listNativePharoProcesses(
     return listPosixPharoProcesses(timeoutMs, runCommand);
   }
 
-  throw new Error(capability.reason ?? "Native process backend is not supported");
+  throw new Error(capability.reason ?? "listing processes is not supported");
+}
+
+/**
+ * The machine's Pharo processes: each line of the native list that names a
+ * `.image` and mentions pharo or squeak. Throws why it cannot list them.
+ */
+export async function listNativeProcesses(
+  options: RunNativeProcessToolOptions = {},
+): Promise<LauncherProcess[]> {
+  return listNativePharoProcesses(
+    nativeProcessToolCapability(options.platform),
+    options.timeoutMs ?? 30_000,
+    options.runCommand ?? runProcessCommand,
+  );
+}
+
+interface KillFailure {
+  pid: number;
+  message: string;
+}
+
+/**
+ * Kill every target, and say which kills failed. A pid gone meanwhile
+ * (`ESRCH`) is stopped, which is what the kill was for.
+ */
+function killEach(
+  targets: readonly LauncherProcess[],
+  killProcess: (pid: number) => void,
+): { killed: number[]; failures: KillFailure[] } {
+  const killed: number[] = [];
+  const failures: KillFailure[] = [];
+  for (const { pid } of targets) {
+    try {
+      killProcess(pid);
+      killed.push(pid);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        killed.push(pid);
+      } else {
+        failures.push({
+          pid,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  return { killed, failures };
 }
 
 export async function runNativeProcessTool(
   args: readonly string[],
   optionsOrTimeoutMs: number | RunNativeProcessToolOptions = 30_000,
+  scope: NativeProcessScope = machineWideProcessScope,
 ): Promise<LauncherCliResult> {
   const options =
     typeof optionsOrTimeoutMs === "number"
       ? { timeoutMs: optionsOrTimeoutMs }
       : optionsOrTimeoutMs;
-  const timeoutMs = options.timeoutMs ?? 30_000;
-  const capability = nativeProcessToolCapability(options.platform);
-  const runCommand = options.runCommand ?? runProcessCommand;
-  const killProcess = options.killProcess ?? process.kill;
+  const killProcess = options.killProcess ?? ((pid: number) => process.kill(pid));
   const startTime = Date.now();
+  const failed = (stderr: string): LauncherCliResult => ({
+    exitCode: 1,
+    stdout: "",
+    stderr,
+    durationMs: duration(startTime),
+    timedOut: false,
+  });
 
   try {
-    if (!capability.supported) {
-      return {
-        exitCode: 1,
-        stdout: "",
-        stderr: capability.reason ?? "Native process backend is not supported",
-        durationMs: duration(startTime),
-        timedOut: false,
-      };
-    }
-
-    const processes = await listNativePharoProcesses(
-      capability,
-      timeoutMs,
-      runCommand,
-    );
+    const processes = scope.select(await listNativeProcesses(options));
 
     if (args[0] === "process" && args[1] === "list") {
       return {
@@ -331,59 +390,38 @@ export async function runNativeProcessTool(
         stderr: "",
         durationMs: duration(startTime),
         timedOut: false,
+        processes,
       };
     }
 
     if (args[0] === "process" && args[1] === "kill") {
       const target = args[2];
       if (!target) {
-        return {
-          exitCode: 1,
-          stdout: "",
-          stderr: "process kill requires a PID or image name",
-          durationMs: duration(startTime),
-          timedOut: false,
-        };
+        return failed("process kill requires a PID or image name");
       }
 
-      const targets = processes.filter((process) => matchesTarget(process, target));
+      const targets = isPid(target)
+        ? processes.filter((process) => String(process.pid) === target)
+        : scope.imageTargets(processes, target);
       if (targets.length === 0) {
-        return {
-          exitCode: 1,
-          stdout: "",
-          stderr: `No matching Pharo process found for ${target}`,
-          durationMs: duration(startTime),
-          timedOut: false,
-        };
+        return failed(`No matching Pharo process found for ${target}`);
       }
 
-      for (const targetProcess of targets) {
-        killProcess(targetProcess.pid);
-      }
-
+      const { killed, failures } = killEach(targets, killProcess);
       return {
-        exitCode: 0,
-        stdout: targets.map((targetProcess) => `Killed ${targetProcess.pid}`).join("\n"),
-        stderr: "",
+        exitCode: failures.length === 0 ? 0 : 1,
+        stdout: killed.map((pid) => `Killed ${pid}`).join("\n"),
+        stderr: failures
+          .map(({ pid, message }) => `Could not kill pid ${pid}: ${message}`)
+          .join("\n"),
         durationMs: duration(startTime),
         timedOut: false,
+        processes: targets,
       };
     }
 
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `Unsupported native process tool args: ${args.join(" ")}`,
-      durationMs: duration(startTime),
-      timedOut: false,
-    };
+    return failed(`Unsupported native process tool args: ${args.join(" ")}`);
   } catch (error) {
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: error instanceof Error ? error.message : String(error),
-      durationMs: duration(startTime),
-      timedOut: false,
-    };
+    return failed(error instanceof Error ? error.message : String(error));
   }
 }
