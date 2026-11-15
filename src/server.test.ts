@@ -126,6 +126,41 @@ describe("the server", () => {
     }
     await client.close();
   });
+
+  // What a model reads before it calls: which images, what it answers, what it
+  // refuses.
+  it("describes the tools as answering about this Launcher's images", async () => {
+    const client = new Client({ name: "probe", version: "0.0.0" }, {});
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await createServer().connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const descriptions = Object.fromEntries(
+      (await client.listTools()).tools.map((tool) => [tool.name, tool.description]),
+    );
+    expect(descriptions).toMatchObject({
+      pharo_launcher_config:
+        "Say which Pharo Launcher this server runs, and where its images are.",
+      pharo_launcher_image_list:
+        "List this Launcher's images, each with its Pharo version, architecture, template and whether it runs. nameFilter keeps the images whose name contains it.",
+      pharo_launcher_image_info:
+        "Describe an image of this Launcher: its path, Pharo version, architecture, template and whether it runs.",
+      pharo_launcher_image_create:
+        "Create an image from a template. It is not started: pharo_launcher_image_start starts it.",
+      pharo_launcher_image_delete:
+        "Delete an image and its directory. Nothing asks for a confirmation. A running image is refused: stop it first with pharo_launcher_process_kill.",
+      pharo_launcher_image_start:
+        "Start an image, optionally with a script for it to run. Unless detached, the call lasts until the image quits.",
+      pharo_launcher_process_list:
+        "List the Pharo processes running an image of this Launcher, by image name and pid.",
+      pharo_launcher_process_kill:
+        "Kill a process running an image of this Launcher, by pid or by image name. A pid stops that process alone; an image name stops every process running that image.",
+    });
+    expect(descriptions.pharo_launcher_image_copy_between_profiles).toMatch(
+      / A profile is given by its stateRoot, as pharo_launcher_config prints it\.$/,
+    );
+    await client.close();
+  });
 });
 
 // Every tool, succeeding and failing: text for a model, never the library's

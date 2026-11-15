@@ -5,7 +5,7 @@
  * a protocol. It does not: PLexus is a Node program that already depends on
  * this package, and no agent subscribes to these names — they reach the
  * launcher through PLexus's own scoped tools. So the functions are the
- * surface, and `server.ts` is an adapter that maps thirteen names onto them.
+ * surface, and `server.ts` is an adapter that maps the tool names onto them.
  *
  * Scope is a config, not a process. `loadPharoLauncherConfig` takes an
  * environment object, so a caller that needs a profile passes one rather than

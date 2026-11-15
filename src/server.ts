@@ -66,13 +66,14 @@ const tools = [
   {
     name: "pharo_launcher_config",
     description:
-      "Return resolved PharoLauncher configuration paths, script source, and file existence.",
+      "Say which Pharo Launcher this server runs, and where its images are.",
     inputSchema: emptyInputSchema,
   },
   {
     name: "pharo_launcher_image_copy_between_profiles",
     description:
-      "Copy a launcher image from one explicitly supplied scoped launcher profile to another explicitly supplied scoped launcher profile.",
+      "Copy a launcher image from one explicitly supplied scoped launcher profile to another explicitly supplied scoped launcher profile. " +
+      "A profile is given by its stateRoot, as pharo_launcher_config prints it.",
     inputSchema: copyBetweenProfilesInputSchema,
   },
   ...launcherCommandTools,

@@ -241,7 +241,8 @@ export const launcherCommandTools: LauncherCommandTool[] = [
   {
     name: "pharo_launcher_image_create",
     description:
-      "Create a new local image from a caller-selected template and image name.",
+      "Create an image from a template. It is not started: " +
+      "pharo_launcher_image_start starts it.",
     inputSchema: objectSchema(
       {
         newImageName: stringSchema,
@@ -256,23 +257,31 @@ export const launcherCommandTools: LauncherCommandTool[] = [
   {
     name: "pharo_launcher_image_delete",
     description:
-      "Delete a local image and its directory. Nothing asks for a confirmation.",
+      "Delete an image and its directory. Nothing asks for a confirmation. " +
+      "A running image is refused: stop it first with pharo_launcher_process_kill.",
     inputSchema: objectSchema({ imageName: stringSchema }, ["imageName"]),
     buildArgs: imageDelete,
   },
   {
     name: "pharo_launcher_image_info",
-    description: "Print information about an image.",
+    description:
+      "Describe an image of this Launcher: its path, Pharo version, " +
+      "architecture, template and whether it runs.",
     inputSchema: objectSchema({ imageName: stringSchema }, ["imageName"]),
   },
   {
     name: "pharo_launcher_image_list",
-    description: "List local images.",
+    description:
+      "List this Launcher's images, each with its Pharo version, architecture, " +
+      "template and whether it runs. nameFilter keeps the images whose name " +
+      "contains it.",
     inputSchema: objectSchema({ nameFilter: stringSchema }),
   },
   {
     name: "pharo_launcher_image_start",
-    description: "Start an image, optionally with a launch script.",
+    description:
+      "Start an image, optionally with a script for it to run. Unless " +
+      "detached, the call lasts until the image quits.",
     inputSchema: objectSchema(
       {
         imageName: stringSchema,
@@ -292,8 +301,9 @@ export const launcherCommandTools: LauncherCommandTool[] = [
   {
     name: "pharo_launcher_process_kill",
     description:
-      "Kill a running Pharo process by image name or PID. A PID stops that " +
-      "process alone; an image name stops every process running that image.",
+      "Kill a process running an image of this Launcher, by pid or by image " +
+      "name. A pid stops that process alone; an image name stops every " +
+      "process running that image.",
     inputSchema: objectSchema({
       imageName: stringSchema,
       pid: { anyOf: [stringSchema, { type: "number" }] },
@@ -302,7 +312,9 @@ export const launcherCommandTools: LauncherCommandTool[] = [
   },
   {
     name: "pharo_launcher_process_list",
-    description: "List running Pharo image processes.",
+    description:
+      "List the Pharo processes running an image of this Launcher, by image " +
+      "name and pid.",
     inputSchema: emptyInputSchema,
     buildArgs: () => ["process", "list"],
   },
