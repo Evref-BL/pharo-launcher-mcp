@@ -919,18 +919,21 @@ describe("pharo_launcher_image_delete", () => {
     expect(calls).toEqual([["image", "delete", "--force", "tmp-scratch"]]);
   });
 
-  it("refuses a running image, in every mode, with no Launcher call", async () => {
+  it("refuses a running image, in every mode, with no Launcher call, and deletes it once its VM is gone", async () => {
     for (const { config, images } of [inProfile(), outsideProfile()]) {
       const scratch = writeImage(images, "tmp-scratch");
+      const { runner, calls } = recording();
       const answer = async (lines: string[]) =>
         callTool(
           "pharo_launcher_image_delete",
           { imageName: "tmp-scratch" },
-          { config, runner: unusedRunner, nativeProcess: processes(lines) },
+          { config, runner, nativeProcess: processes(lines) },
         );
 
       const one = await answer([`71513 /vms/pharo ${scratch}`]);
       const two = await answer([`71513 /vms/pharo ${scratch}`, `71520 /vms/pharo ${scratch}`]);
+      const refusedCalls = calls.length;
+      const gone = await answer([]);
 
       expect(one.isError).toBe(true);
       expect(text(one)).toBe(
@@ -939,6 +942,10 @@ describe("pharo_launcher_image_delete", () => {
       expect(text(two)).toBe(
         "Image tmp-scratch runs as pids 71513, 71520: stop it with pharo_launcher_process_kill, then delete it.",
       );
+      expect(refusedCalls).toBe(0);
+      expect(gone.isError).toBeUndefined();
+      expect(text(gone)).toBe("Deleted image tmp-scratch.");
+      expect(calls).toEqual([["image", "delete", "--force", "tmp-scratch"]]);
     }
   });
 
