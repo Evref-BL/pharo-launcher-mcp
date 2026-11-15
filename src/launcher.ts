@@ -125,8 +125,13 @@ export interface PharoLauncherOptions {
   nativeProcess?: RunNativeProcessToolOptions;
 }
 
-/** The name the MCP adapter still uses for the same options. */
-export type CallToolOptions = PharoLauncherOptions;
+/** The options of the MCP adapter: the library's, and how long a kill waits. */
+export interface CallToolOptions extends PharoLauncherOptions {
+  /** How long `process_kill` waits for a killed pid to exit; 10 s. */
+  processExitTimeoutMs?: number;
+  /** How often it looks; every 200 ms. */
+  processExitPollMs?: number;
+}
 
 function runnerOptions(
   options: PharoLauncherOptions,
