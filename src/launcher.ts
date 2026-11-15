@@ -86,6 +86,8 @@ export type {
   LauncherOutputFormat,
   LauncherProcess,
   LauncherTemplate,
+  MadeImageFailure,
+  MadeImageResult,
   NotAnImage,
   TemplateCategoriesResult,
 } from "./models.js";
@@ -101,6 +103,8 @@ import type {
   LauncherImageList,
   LauncherProcess,
   LauncherTemplate,
+  MadeImageFailure,
+  MadeImageResult,
   TemplateCategoriesResult,
 } from "./models.js";
 
@@ -234,7 +238,30 @@ function sleep(milliseconds: number): Promise<void> {
 
 type MadeImage =
   | { ok: true; image?: LauncherImage }
-  | { ok: false; diagnostic: string };
+  | { ok: false; failure: MadeImageFailure };
+
+/**
+ * Why a create or copy made no image, in a sentence. `said` is what the
+ * Launcher said it did (`created X`, `copied X to Y`), and `newImageName` the
+ * image it made, each written as the caller writes names.
+ */
+export function madeImageFailureText(
+  failure: MadeImageFailure,
+  said: string,
+  newImageName: string,
+): string {
+  if (failure.kind === "not-opened") {
+    return sentenceWithMessage(
+      `Pharo Launcher made ${newImageName} but cannot open it`,
+      failure.message,
+    );
+  }
+
+  const lacks = failure.notAnImage
+    ? `${failure.notAnImage.directory} ${whatItLacks(failure.notAnImage)}`
+    : `${failure.directory} does not exist`;
+  return `Pharo Launcher said it ${said}, but ${lacks} after ${failure.seconds} s.`;
+}
 
 /**
  * Whether the Launcher can list the image a create or copy made, and open it,
@@ -250,7 +277,6 @@ type MadeImage =
 async function verifyMadeImage(
   runner: LauncherCliRunner,
   newImageName: string,
-  said: string,
   config: PharoLauncherConfig,
   options: PharoLauncherOptions,
 ): Promise<MadeImage> {
@@ -264,13 +290,17 @@ async function verifyMadeImage(
 
   while (true) {
     const listed = readImageDirectory(imagesDir, newImageName);
-    let diagnostic: string;
+    let failure: MadeImageFailure;
     if (config.profile && listed.kind !== "image") {
-      const lacks =
+      failure =
         listed.kind === "missing"
-          ? `${listed.directory} does not exist`
-          : `${listed.notAnImage.directory} ${whatItLacks(listed.notAnImage)}`;
-      diagnostic = `Pharo Launcher said it ${said}, but ${lacks} after ${seconds} s.`;
+          ? { kind: "not-listed", directory: listed.directory, seconds }
+          : {
+              kind: "not-listed",
+              directory: listed.notAnImage.directory,
+              notAnImage: listed.notAnImage,
+              seconds,
+            };
     } else {
       const info = await runLauncherToolCommand(
         runner,
@@ -284,15 +314,12 @@ async function verifyMadeImage(
           ...(made.kind === "image" ? { image: readLauncherImage(made.image) } : {}),
         };
       }
-      diagnostic = sentenceWithMessage(
-        `Pharo Launcher made ${newImageName} but cannot open it`,
-        launcherMessage(info),
-      );
+      failure = { kind: "not-opened", message: launcherMessage(info) };
     }
 
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      return { ok: false, diagnostic };
+      return { ok: false, failure };
     }
     await wait(Math.min(pollMs, remainingMs));
   }
@@ -308,7 +335,9 @@ function madeImageResult(
   normalized: LauncherCommandResult,
   made: MadeImage,
   timedOut: boolean,
-): LauncherCommandResult<{ image?: LauncherImage }> {
+  said: string,
+  newImageName: string,
+): MadeImageResult {
   const { data: _data, diagnostic: _diagnostic, action: _action, ...rest } =
     normalized;
   if (made.ok) {
@@ -316,8 +345,13 @@ function madeImageResult(
   }
 
   return timedOut
-    ? (normalized as LauncherCommandResult<{ image?: LauncherImage }>)
-    : { ...rest, ok: false, diagnostic: made.diagnostic };
+    ? normalized
+    : {
+        ...rest,
+        ok: false,
+        diagnostic: madeImageFailureText(made.failure, said, newImageName),
+        failure: made.failure,
+      };
 }
 
 async function madeImageCommand(
@@ -327,7 +361,7 @@ async function madeImageCommand(
   said: string,
   options: PharoLauncherOptions,
 ): Promise<{
-  result: LauncherCommandResult<{ image?: LauncherImage }>;
+  result: MadeImageResult;
   config: PharoLauncherConfig;
 }> {
   const runner = options.runner ?? runLauncherCli;
@@ -342,20 +376,17 @@ async function madeImageCommand(
     return { result: refused, config };
   }
 
-  const made = await verifyMadeImage(
-    runner,
-    newImageName,
-    said,
+  const made = await verifyMadeImage(runner, newImageName, config, commandOptions);
+  return {
+    result: madeImageResult(normalized, made, result.timedOut, said, newImageName),
     config,
-    commandOptions,
-  );
-  return { result: madeImageResult(normalized, made, result.timedOut), config };
+  };
 }
 
 export async function imageCopyResult(
   args: string[],
   options: PharoLauncherOptions,
-): Promise<LauncherCommandResult<{ image?: LauncherImage }>> {
+): Promise<MadeImageResult> {
   const imageName = args[2];
   const newImageName = args[3];
   const { result, config } = await madeImageCommand(
@@ -378,7 +409,7 @@ export async function imageCopyResult(
 export async function imageCreateResult(
   args: string[],
   options: PharoLauncherOptions,
-): Promise<LauncherCommandResult<{ image?: LauncherImage }>> {
+): Promise<MadeImageResult> {
   const newImageName = args.at(-1);
   const { result } = await madeImageCommand(
     "pharo_launcher_image_create",
@@ -762,14 +793,15 @@ export interface PharoLauncher {
   ): Promise<LauncherImageInfo>;
   /**
    * Its `data` is `{ image?: LauncherImage }`, the image when the images
-   * directory holds it. Typed as any result's, so a fake written against
+   * directory holds it, and `failure` says why a command that exited 0 made
+   * none. Its `data` is typed as any result's, so a fake written against
    * 0.4.1, as PLexus 0.16.0's is, still implements it.
    */
-  createImage(input: ImageCreateInput): Promise<LauncherCommandResult>;
-  /** Its `data` is `{ image?: LauncherImage }`, as `createImage`'s. */
+  createImage(input: ImageCreateInput): Promise<MadeImageResult>;
+  /** Its `data` and `failure` are as `createImage`'s. */
   copyImage(
     input: { imageName: string; newImageName: string } & LauncherTableOptions,
-  ): Promise<LauncherCommandResult>;
+  ): Promise<MadeImageResult>;
   startImage(input: ImageStartInput): Promise<LauncherCommandResult>;
   deleteImage(
     input: { imageName: string } & LauncherTableOptions,

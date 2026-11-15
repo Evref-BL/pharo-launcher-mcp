@@ -28,6 +28,7 @@ import {
   whatItLacks,
 } from "./imageStore.js";
 import {
+  madeImageFailureText,
   runCommand,
   type CallToolOptions,
   type PharoLauncher,
@@ -38,6 +39,7 @@ import type {
   LauncherCommandResult,
   LauncherImage,
   LauncherProcess,
+  MadeImageResult,
   NotAnImage,
 } from "./models.js";
 import { isPidAlive } from "./processTools.js";
@@ -249,15 +251,22 @@ function timedOutWarning(result: LauncherCommandResult, context: AnswerContext):
     : undefined;
 }
 
-/** A create or copy that did not make its image. */
+/**
+ * A create or copy that did not make its image. `operation` is what it was
+ * asked (`create image X`), `said` what the Launcher said it did (`created
+ * X`), and `newImageName` the image it made, names written as answers write
+ * them.
+ */
 function madeImageFailure(
   operation: string,
-  result: LauncherCommandResult,
+  said: string,
+  newImageName: string,
+  result: MadeImageResult,
   context: AnswerContext,
 ): ToolResult {
-  // Exited 0, but never listed or never opened: the library's sentence.
-  if (!result.command.timedOut && result.command.exitCode === 0 && result.diagnostic) {
-    return failure(result.diagnostic);
+  // Exited 0, but never listed or never opened.
+  if (result.failure) {
+    return failure(madeImageFailureText(result.failure, said, newImageName));
   }
 
   const output = rawOutput(result);
@@ -463,7 +472,8 @@ const answerImageCreate: Answer = async (context, input) => {
     input as unknown as Parameters<PharoLauncher["createImage"]>[0],
   );
   if (!result.ok) {
-    return madeImageFailure(`create image ${inlineValue(newImageName)}`, result, context);
+    const name = inlineValue(newImageName);
+    return madeImageFailure(`create image ${name}`, `created ${name}`, name, result, context);
   }
 
   const image = (result.data as { image?: LauncherImage } | undefined)?.image;
@@ -493,8 +503,11 @@ const answerImageCopy: Answer = async (context, input) => {
 
   const result = await context.launcher.copyImage({ imageName, newImageName });
   if (!result.ok) {
+    const copied = `${inlineValue(imageName)} to ${inlineValue(newImageName)}`;
     return madeImageFailure(
-      `copy image ${inlineValue(imageName)} to ${inlineValue(newImageName)}`,
+      `copy image ${copied}`,
+      `copied ${copied}`,
+      inlineValue(newImageName),
       result,
       context,
     );

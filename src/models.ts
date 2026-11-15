@@ -48,6 +48,33 @@ export type LauncherLaunchReport =
     }
   | { by: "launcher"; pid?: number; logs?: { stdout: string; stderr: string } };
 
+/**
+ * Why a create or copy whose command exited 0 made no image, by the time its
+ * check gave up: in profile mode, the images directory never held it under
+ * its name (`not-listed`); in any mode, the Launcher's `image info` could not
+ * open it (`not-opened`), `message` being what it said.
+ */
+export type MadeImageFailure =
+  | {
+      kind: "not-listed";
+      /** `<images>/<name>`. */
+      directory: string;
+      /** What the directory lacks, when it exists. */
+      notAnImage?: NotAnImage;
+      /** How long the check waited. */
+      seconds: number;
+    }
+  | { kind: "not-opened"; message: string };
+
+/**
+ * A create or copy. Its `data` is `{ image?: LauncherImage }`, the image when
+ * the images directory holds it; `failure` says why a command that exited 0
+ * made no image, beside `diagnostic`, so a caller writes its own sentence.
+ */
+export type MadeImageResult = LauncherCommandResult & {
+  failure?: MadeImageFailure;
+};
+
 /** A category listing, with the category the Launcher marks as its default. */
 export interface TemplateCategoriesResult extends LauncherCommandResult<string[]> {
   defaultCategory?: string;

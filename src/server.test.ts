@@ -770,6 +770,30 @@ describe("pharo_launcher_image_create", () => {
     );
   });
 
+  it("quotes a name holding a space when the image never appears or cannot be opened", async () => {
+    const { config, images } = inProfile();
+    const never = recording(() => exited(0));
+    const unopened = recording((args) => {
+      if (args[1] === "create") {
+        writeImage(images, "MCP debug");
+        return exited(0);
+      }
+      return exited(1, "", "STONReaderError: unexpected token");
+    });
+    const options = { config, imageCopyVerificationTimeoutMs: 0, sleep: async () => {} };
+    const input = { templateName: stable, newImageName: "MCP debug" };
+
+    const neverListed = await callTool("pharo_launcher_image_create", input, { ...options, runner: never.runner });
+    const neverOpened = await callTool("pharo_launcher_image_create", input, { ...options, runner: unopened.runner });
+
+    expect(text(neverListed)).toBe(
+      `Pharo Launcher said it created "MCP debug", but ${images}/MCP debug does not exist after 0 s.`,
+    );
+    expect(text(neverOpened)).toBe(
+      'Pharo Launcher made "MCP debug" but cannot open it: STONReaderError: unexpected token.',
+    );
+  });
+
   it("points at the template list or the categories when the Launcher finds neither", async () => {
     const { profile, config } = inProfile();
     const noTemplate = recording(() =>
@@ -898,6 +922,23 @@ describe("pharo_launcher_image_copy", () => {
 
     expect(text(result)).toBe(
       `Pharo Launcher said it copied pricing to pricing-backup, but ${images}/pricing-backup does not exist after 0 s.`,
+    );
+  });
+
+  it("quotes names holding a space when the copy never appears", async () => {
+    const { config, images } = inProfile();
+    writeImage(images, "MCP debug");
+    const { runner } = recording(() => exited(0));
+
+    const result = await callTool(
+      "pharo_launcher_image_copy",
+      { imageName: "MCP debug", newImageName: "MCP debug 2" },
+      { config, runner, imageCopyVerificationTimeoutMs: 0, sleep: async () => {} },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toBe(
+      `Pharo Launcher said it copied "MCP debug" to "MCP debug 2", but ${images}/MCP debug 2 does not exist after 0 s.`,
     );
   });
 });

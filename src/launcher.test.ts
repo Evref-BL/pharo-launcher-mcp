@@ -514,6 +514,7 @@ describe("createImage and copyImage", () => {
     expect(result).toMatchObject({
       ok: false,
       diagnostic: "Pharo Launcher made release-check but cannot open it: Cannot read meta-inf.ston.",
+      failure: { kind: "not-opened", message: "Cannot read meta-inf.ston" },
     });
     expect(result).not.toHaveProperty("data");
   });
@@ -540,6 +541,11 @@ describe("createImage and copyImage", () => {
     expect(result).toMatchObject({
       ok: false,
       diagnostic: `Pharo Launcher said it created release-check, but ${path.join(path.resolve(profile.imagesDir), "release-check")} does not exist after 30 s.`,
+      failure: {
+        kind: "not-listed",
+        directory: path.join(path.resolve(profile.imagesDir), "release-check"),
+        seconds: 30,
+      },
     });
     expect(sleeps).toEqual(Array(30).fill(1_000));
     // Listed is the directory: the Launcher is not asked until it is there.
@@ -568,6 +574,17 @@ describe("createImage and copyImage", () => {
     expect(result.diagnostic).toBe(
       `Pharo Launcher said it created release-check, but ${path.join(path.resolve(profile.imagesDir), "release-check")} holds no release-check.changes after 0 s.`,
     );
+    expect(result.failure).toEqual({
+      kind: "not-listed",
+      directory: path.join(path.resolve(profile.imagesDir), "release-check"),
+      notAnImage: {
+        name: "release-check",
+        directory: path.join(path.resolve(profile.imagesDir), "release-check"),
+        hasImage: true,
+        hasChanges: false,
+      },
+      seconds: 0,
+    });
   });
 
   it("asks only the Launcher whether a create worked, outside a profile", async () => {
