@@ -109,7 +109,8 @@ export interface LauncherTemplate {
   /**
    * A template the Launcher keeps on disk (`PhLLocalTemplate`): one the user
    * made from an image, or a copy of a remote template it downloaded, kept in
-   * its template cache under the remote one's name.
+   * its template cache under the remote one's name. Both are in the same
+   * category, and nothing in the listing tells them apart.
    */
   local?: true;
 }

@@ -174,7 +174,10 @@ says what it ran.
 
 `listTemplates` leaves out the templates the Launcher keeps on disk unless
 given `includeLocal: true`, as the tool is: the Launcher keeps a copy of every
-template it downloads, under the same name, in a category of its own.
+template it downloads, under the same name, in a category of its own. The
+templates the user made from an image are in that category too, of the same
+class, so a library caller sees them only with `includeLocal: true`, whether
+or not it names a category.
 
 ## Mutation Boundary
 

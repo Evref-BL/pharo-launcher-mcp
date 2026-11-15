@@ -789,9 +789,12 @@ export interface PharoLauncher {
    * The templates of a category, in the Launcher's order. Those it keeps on
    * disk (`local`) are left out unless `includeLocal` asks for them: the
    * Launcher keeps a copy of every template it downloads under the same name,
-   * in a category of its own, and a caller that takes a name listed in two
-   * categories as ambiguous, as PLexus 0.16.0 does, would then refuse every
-   * template downloaded once.
+   * in a category of its own (`Templates`), and a caller that takes a name
+   * listed in two categories as ambiguous, as PLexus 0.16.0 does, would then
+   * refuse every template downloaded once. A category named does not change
+   * it, since PLexus names each in turn. The templates the user made from an
+   * image are left out too: the Launcher keeps them in the same category, of
+   * the same class, so nothing tells them from its copies.
    */
   listTemplates(
     input?: { templateCategory?: string; includeLocal?: boolean } & LauncherTableOptions,
