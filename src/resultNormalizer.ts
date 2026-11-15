@@ -73,7 +73,9 @@ export function launcherMessage(result: LauncherCliResult): string {
     outputTail(result.stderr) ??
     outputTail(result.stdout) ??
     result.timeoutReason ??
-    `it exited with ${result.exitCode ?? "no exit code"}`
+    (result.signal
+      ? `it was killed by signal ${result.signal}`
+      : `it exited with ${result.exitCode ?? "no exit code"}`)
   );
 }
 
@@ -126,6 +128,7 @@ export function normalizeLauncherResult(
       args: [...args],
       durationMs: result.durationMs,
       exitCode: result.exitCode,
+      ...(result.signal ? { signal: result.signal } : {}),
       timedOut: result.timedOut,
       ...(result.timeoutReason
         ? { timeoutReason: result.timeoutReason }

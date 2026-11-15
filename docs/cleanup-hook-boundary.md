@@ -39,6 +39,7 @@ results instead, which carry status data for callers:
 - raw `stdout` and `stderr`, with `includeRaw`
 - command `durationMs`
 - command `exitCode`
+- command `signal`, when one ended the command
 - command `timedOut`
 - optional `timeoutReason`
 

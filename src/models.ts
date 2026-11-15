@@ -19,6 +19,8 @@ export interface LauncherCommandResult<T = unknown> {
     args: string[];
     durationMs: number;
     exitCode: number | null;
+    /** The signal that ended the command, which then has no exit code. */
+    signal?: NodeJS.Signals;
     timedOut: boolean;
     timeoutReason?: string;
   };

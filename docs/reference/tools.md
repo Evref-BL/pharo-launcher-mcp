@@ -160,6 +160,7 @@ functions that run a Launcher command answer a `LauncherCommandResult`:
     args: string[];
     durationMs: number;
     exitCode: number | null;
+    signal?: NodeJS.Signals;
     timedOut: boolean;
     timeoutReason?: string;
   };
@@ -171,7 +172,8 @@ Use `ok` and `data` for program flow. `raw` is there when the call passed
 `includeRaw: true`; treat `raw.stdout` and `raw.stderr` as diagnostics. A
 create or copy's `data` is `{ image?: LauncherImage }`, and its `failure` says
 why a command that exited 0 made no image: never listed or never opened. A
-start's `launch` says what it ran.
+start's `launch` says what it ran, including a run a signal ended, which has
+`command.signal` and no exit code.
 
 `listTemplates` leaves out the templates the Launcher keeps on disk unless
 given `includeLocal: true`, as the tool is: the Launcher keeps a copy of every

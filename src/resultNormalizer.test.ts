@@ -4,7 +4,7 @@ import {
   parseLauncherOutput,
   parseTemplateCategoriesFromBrief,
 } from "./parser.js";
-import { normalizeLauncherResult } from "./resultNormalizer.js";
+import { launcherMessage, normalizeLauncherResult } from "./resultNormalizer.js";
 
 const cliResult = {
   exitCode: 0,
@@ -225,6 +225,22 @@ describe("result normalizer", () => {
     expect(parseTemplateCategoriesFromBrief(source)).toEqual({
       categories,
       ...(defaultCategory ? { defaultCategory } : {}),
+    });
+  });
+
+  it("says a signal ended a command that wrote nothing, and carries the signal", () => {
+    const killed = { ...cliResult, exitCode: null, signal: "SIGKILL" as const };
+
+    expect(launcherMessage(killed)).toBe("it was killed by signal SIGKILL");
+    expect(launcherMessage({ ...killed, stderr: "Killed." })).toBe("Killed.");
+    expect(
+      normalizeLauncherResult("pharo_launcher_image_delete", ["image", "delete", "x"], killed).command,
+    ).toEqual({
+      args: ["image", "delete", "x"],
+      durationMs: 12,
+      exitCode: null,
+      signal: "SIGKILL",
+      timedOut: false,
     });
   });
 });

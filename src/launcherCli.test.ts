@@ -1218,6 +1218,100 @@ describe("buildLauncherCliInvocation", () => {
     expect(result.launch).toEqual({ by: "launcher" });
   });
 
+  // A VM that crashes, or one a kill from another call stops, has no exit
+  // code: it ran all the same, and what it wrote is its output.
+  describe("a waited launch a signal ended ran", () => {
+    function profileWithVm(vmScript: string[]) {
+      const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pharo-launcher-mcp-signal-"));
+      const installationLauncherImage = path.join(stateRoot, "installation", "PharoLauncher.image");
+      const profile = {
+        name: "isolated",
+        stateRoot,
+        launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+        imagesDir: path.join(stateRoot, "images"),
+        vmsDir: path.join(stateRoot, "vms"),
+        templateSourcesDir: path.join(stateRoot, "templates"),
+        initScriptsDir: path.join(stateRoot, "init-scripts"),
+        logsDir: path.join(stateRoot, "logs"),
+      };
+      const launcherScriptPath = path.join(stateRoot, "launcher.sh");
+      const vmPath = path.join(profile.vmsDir, "130-x64", "Pharo.app", "Contents", "MacOS", "Pharo");
+      fs.mkdirSync(path.dirname(installationLauncherImage), { recursive: true });
+      fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
+      fs.mkdirSync(path.dirname(vmPath), { recursive: true });
+      writeExecutableScript(launcherScriptPath, "#!/usr/bin/env sh\nexit 64\n");
+      writeExecutableScript(vmPath, ["#!/usr/bin/env sh", ...vmScript, ""].join("\n"));
+      writeImage(profile.imagesDir, "rc", { pharoVersion: "130" });
+      return {
+        stateRoot,
+        vmPath,
+        imagePath: path.join(profile.imagesDir, "rc", "rc.image"),
+        config: launcherConfig({
+          launcherDir: stateRoot,
+          launcherVm: "unused",
+          installationLauncherImage,
+          launcherImage: profile.launcherImage,
+          launcherScript: launcherScriptPath,
+          launcherConfiguration: path.join(stateRoot, "launcher", "pharo-launcher-cli-config.ston"),
+          profile,
+        }),
+      };
+    }
+
+    it("in profile mode, with what the VM wrote", async () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const { stateRoot, vmPath, imagePath, config } = profileWithVm([
+        `echo "Segmentation fault, dumping stack" >&2`,
+        "kill -SEGV $$",
+      ]);
+
+      try {
+        const result = await runLauncherCli(["image", "launch", "rc"], { config, timeoutMs: 5_000 });
+
+        expect(result).toMatchObject({ exitCode: null, signal: "SIGSEGV", timedOut: false });
+        expect(result.launch).toEqual({
+          by: "vm",
+          imagePath,
+          displayMode: "headless",
+          vmPath,
+          vmId: "130-x64",
+          vmUpdated: false,
+          output: { stdout: "", stderr: "Segmentation fault, dumping stack\n" },
+        });
+      } finally {
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("outside a profile, as the Launcher's", async () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pharo-launcher-mcp-signal-"));
+      const launcherScript = path.join(directory, "launcher.sh");
+      writeExecutableScript(launcherScript, "#!/usr/bin/env sh\nkill -KILL $$\n");
+
+      try {
+        const result = await runLauncherCli(["image", "launch", "Task"], {
+          config: launcherConfig({
+            launcherDir: directory,
+            launcherVm: "unused",
+            launcherImage: "unused",
+            launcherScript,
+          }),
+          timeoutMs: 5_000,
+        });
+
+        expect(result).toMatchObject({ exitCode: null, signal: "SIGKILL", timedOut: false });
+        expect(result.launch).toEqual({ by: "launcher" });
+      } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("refuses a display mode it cannot apply", async () => {
     // PharoLauncher's `image launch` takes --script and --detached, nothing
     // else. Without a profile this server runs that command rather than the

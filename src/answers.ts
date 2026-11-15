@@ -201,7 +201,10 @@ function launcherFailureText(
 
   return sentenceWithMessage(
     `Pharo Launcher could not ${operation}`,
-    result.diagnostic ?? `it exited with ${result.command.exitCode ?? "no exit code"}`,
+    result.diagnostic ??
+      (result.command.signal
+        ? `it was killed by signal ${result.command.signal}`
+        : `it exited with ${result.command.exitCode ?? "no exit code"}`),
   );
 }
 
@@ -595,6 +598,14 @@ const answerImageStart: Answer = async (context, input) => {
         ...outputTails(launch.output),
       );
     }
+    // A crash, or a kill from another call.
+    if (result.command.signal) {
+      return failure(
+        `${name} was killed by signal ${result.command.signal}.`,
+        downloaded,
+        ...outputTails(launch.output),
+      );
+    }
     if (result.command.exitCode !== 0) {
       return failure(
         `${name} quit with exit code ${result.command.exitCode}.`,
@@ -623,6 +634,14 @@ const answerImageStart: Answer = async (context, input) => {
   if (launch?.by === "launcher" && !detached) {
     if (result.command.timedOut) {
       return failure(launcherFailureText(`start image ${name}`, result, context));
+    }
+    // What a signal ended is the Launcher, not the image's VM, which may run on.
+    if (result.command.signal) {
+      return failure(
+        `Pharo Launcher was killed by signal ${result.command.signal} while starting ${name}. ` +
+          `pharo_launcher_process_list says whether ${name} runs.`,
+        ...outputTails(result.raw),
+      );
     }
     if (result.command.exitCode === 0) {
       return textResult([`${name} ran and quit with exit code 0.`, ...outputTails(result.raw)]);

@@ -825,6 +825,22 @@ describe("pharo_launcher_image_create", () => {
     );
   });
 
+  it("says a signal ended a Launcher that wrote nothing", async () => {
+    const { config } = inProfile();
+    const { runner } = recording(() => exited(null, "", "", { signal: "SIGKILL" }));
+
+    const result = await callTool(
+      "pharo_launcher_image_create",
+      { templateName: stable, newImageName: "release-check" },
+      { config, runner },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toBe(
+      "Pharo Launcher could not create image release-check: it was killed by signal SIGKILL.",
+    );
+  });
+
   it("gives a Launcher that could not start as its diagnostic lines", async () => {
     const { profile, config } = inProfile();
     const runner: LauncherCliRunner = async () => {
@@ -1179,6 +1195,36 @@ describe("pharo_launcher_image_start", () => {
     );
   });
 
+  // A VM that crashes, or one process_kill stops while the start waits.
+  it("says a signal ended a waited start, with what the VM wrote", async () => {
+    const { config, images } = inProfile();
+    writeImage(images, "release-check");
+    const crashed = started({
+      exitCode: null,
+      signal: "SIGSEGV",
+      launch: vmLaunch(images, { output: { stdout: "", stderr: "Segmentation fault, dumping stack\n" } }),
+    });
+    const killed = started({
+      exitCode: null,
+      signal: "SIGKILL",
+      launch: vmLaunch(images, { output: { stdout: "", stderr: "" } }),
+    });
+
+    const crash = await start(config, { script: "x.st" }, crashed.runner);
+    const kill = await start(config, { script: "x.st" }, killed.runner);
+
+    expect(crash.isError).toBe(true);
+    expect(text(crash)).toBe(
+      [
+        "release-check was killed by signal SIGSEGV.",
+        "Its error output ends with:",
+        "  Segmentation fault, dumping stack",
+      ].join("\n"),
+    );
+    expect(kill.isError).toBe(true);
+    expect(text(kill)).toBe("release-check was killed by signal SIGKILL.");
+  });
+
   it("names the pid and the logs of a detached start", async () => {
     const { config, images } = inProfile();
     writeImage(images, "release-check");
@@ -1234,6 +1280,20 @@ describe("pharo_launcher_image_start", () => {
     );
     expect(text(await start(config, {}, quit.runner))).toBe(
       ["release-check quit with exit code 1.", "Its error output ends with:", "  Error"].join("\n"),
+    );
+  });
+
+  it("says a signal ended the Launcher, outside a profile", async () => {
+    const { config, images } = outsideProfile();
+    writeImage(images, "release-check");
+    const { runner } = started({ exitCode: null, signal: "SIGKILL", launch: { by: "launcher" } });
+
+    const result = await start(config, {}, runner);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toBe(
+      "Pharo Launcher was killed by signal SIGKILL while starting release-check. " +
+        "pharo_launcher_process_list says whether release-check runs.",
     );
   });
 

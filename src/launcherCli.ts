@@ -34,6 +34,8 @@ export interface LauncherCliInvocation {
 
 export interface LauncherCliResult {
   exitCode: number | null;
+  /** The signal that ended the command, which then has no exit code. */
+  signal?: NodeJS.Signals;
   stdout: string;
   stderr: string;
   durationMs: number;
@@ -554,10 +556,11 @@ function runInvocation(
         ...(timeoutReason ? { timeoutReason } : {}),
       });
     });
-    child.on("close", (exitCode) => {
+    child.on("close", (exitCode, signal) => {
       clearTimeout(timeout);
       resolve({
         exitCode,
+        ...(signal ? { signal } : {}),
         stdout,
         stderr,
         durationMs: Date.now() - startTime,
@@ -979,9 +982,12 @@ function vmLaunchReport(
   };
 }
 
-/** Whether a command ran at all: one that never started has no exit code. */
+/**
+ * Whether a command ran at all: one that never started has no exit code, nor
+ * a signal that ended it.
+ */
 function ran(result: LauncherCliResult): boolean {
-  return result.exitCode !== null || result.timedOut;
+  return result.exitCode !== null || result.signal !== undefined || result.timedOut;
 }
 
 async function runProfileScopedImageLaunch(
