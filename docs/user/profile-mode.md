@@ -94,14 +94,10 @@ template source file after Launcher returns. If the source file is missing or
 empty, the server seeds it from the default Pharo Launcher source list and then
 probes `template list`.
 
-If template listing still fails, inspect:
-
-```text
-pharo_launcher_config
-```
-
-Its report includes missing or unreadable profile directories and
-configuration files.
+Its answer says when downloading the source list or the probe failed. Until the
+profile has a source list, `pharo_launcher_template_list` and
+`pharo_launcher_image_create` answer that there are no templates yet, and to
+call `pharo_launcher_template_update` first.
 
 ## Image Launch In Profile Mode
 
@@ -138,7 +134,8 @@ Both `sourceProfile` and `destinationProfile` must include either:
   `vmsDir`, `templateSourcesDir`, `initScriptsDir`, and `logsDir`.
 
 All profile paths must be absolute. Image names must be launcher image names,
-not paths. Destination collisions are refused.
+not paths. Destination collisions are refused. `pharo_launcher_config` prints
+the active profile's `stateRoot`, which is how a profile is given here.
 
 Example:
 
@@ -157,21 +154,26 @@ Example:
 }
 ```
 
-The result reports source and destination image metadata, touched paths,
-metadata repair, verification, and cleanup guidance.
-
-A failure adds `message`, one line naming both images, both profiles, what went
-wrong and the way out, next to the `diagnostic` and `action` it is built from.
-A destination that already exists is named by its directory, so the caller can
-read `destinationImage`, adopt what is there, copy under another name, or
+The tool answers one line naming the image and both profiles, each by its
+`stateRoot` (or its `imagesDir` when it has none), then the copy's path. A
+failure is one sentence saying what went wrong and the way out. A destination
+that already exists is named by its directory: copy under another name, or
 delete it with the destination profile active. An existing image is never
 replaced.
 
+The library's `copyImageBetweenProfiles` answers the full result, as before:
+source and destination image metadata, touched paths, metadata repair,
+verification, and cleanup guidance. A failure adds `failure`, which names what
+went wrong (`source-missing`, `source-image-missing`,
+`source-metadata-missing`, `destination-exists`, `preflight`, `post-move` or
+`exception`), and `message`, one line naming both images and both profiles,
+next to the `diagnostic` and `action` it is built from.
+
 ## Cleanup Rules
 
-Only clean up caller-owned profile state. Keep command envelopes, log files,
-image names, image paths, process PIDs, and timeout reasons long enough to
-debug failed runs.
+Only clean up caller-owned profile state. Keep the library's results, log
+files, image names, image paths, process PIDs, and timeout reasons long enough
+to debug failed runs.
 
 For process cleanup, prefer a recorded PID from a detached launch. For image
 cleanup, delete only image names created by the caller in the active profile.

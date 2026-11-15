@@ -136,14 +136,14 @@ Then create an image with an explicit name:
   "tool": "pharo_launcher_image_create",
   "arguments": {
     "templateName": "Pharo 13.0 - 64bit",
-    "newImageName": "sample-130",
-    "noLaunch": true
+    "newImageName": "sample-130"
   }
 }
 ```
 
-The create result is only successful when the new image can be listed and
-inspected after Launcher returns.
+The create answer is only successful when Launcher can list the new image and
+open it after it returns. Creating does not start the image:
+`pharo_launcher_image_start` does.
 
 ## No-Profile Defaults
 

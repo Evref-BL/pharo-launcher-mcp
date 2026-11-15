@@ -1,7 +1,11 @@
 # Tool Reference
 
-pharo-launcher-mcp exposes MCP tools over stdio. Most tools call Pharo Launcher
-and return a normalized launcher result envelope.
+pharo-launcher-mcp exposes MCP tools over stdio. Each tool answers plain text,
+for a model to read: a sentence saying what happened, then `Warning: …` lines,
+`key: value` lines and indented lists. A failure has `isError` and says what to
+do when the caller can do something. The library the tools are made from,
+`openPharoLauncher`, answers typed objects instead (see
+[Library results](#library-results)).
 
 Every tool here has a caller. PharoLauncher's CLI covers the rest of its own
 surface, and this server does not wrap a subcommand until something asks it to.
@@ -11,66 +15,96 @@ speaking MCP. The executable answers `--health`, `--version-check`,
 `--validate-installation` and `--probe-images` and exits, which is what a
 preflight needs.
 
+A tool takes only the arguments its schema names. Any other argument is
+ignored.
+
 ## Configuration
 
 | Tool | Live Launcher invocation | Purpose |
 | --- | --- | --- |
-| `pharo_launcher_config` | No | Reports resolved installation, profile, wrapper, and configuration paths. |
+| `pharo_launcher_config` | No | Says which Pharo Launcher the server runs, its profile or settings file, and where its images are. |
 
-## Image Tools
+## Images
+
+An image of the Launcher is a directory `D` of its images directory holding
+the files `D.image` and `D.changes`, Pharo Launcher's own rule. The image tools
+read that directory; they do not ask the Launcher to list it. A name given to a
+tool finds the image named exactly so, else the one whose name differs only in
+case, as the Launcher does.
+
+The images directory is, in profile mode, the profile's. Outside a profile it
+is the `#imagesDirectory` of the configuration the Launcher's CLI reads: the
+file `PHARO_LAUNCHER_MCP_LAUNCHER_CONFIGURATION` names, else
+`launcherSettings.ston` in the Launcher's user files (`~/Documents/Pharo` on
+macOS and Windows, `~/Pharo` on Linux), else `<user files>/images`, the
+Launcher's default. `pharo_launcher_config` prints which.
 
 | Tool | Arguments |
 | --- | --- |
-| `pharo_launcher_image_list` | `nameFilter`, table options |
-| `pharo_launcher_image_info` | `imageName`, table options |
-| `pharo_launcher_image_create` | `templateName`, `newImageName`, `templateCategory`, `dev`, `noLaunch` |
+| `pharo_launcher_image_list` | `nameFilter` |
+| `pharo_launcher_image_info` | `imageName` |
+| `pharo_launcher_image_create` | `templateName`, `newImageName`, `templateCategory`, `dev` |
 | `pharo_launcher_image_copy` | `imageName`, `newImageName` |
 | `pharo_launcher_image_copy_between_profiles` | `sourceProfile`, `destinationProfile`, `sourceImageName`, `destinationImageName` |
 | `pharo_launcher_image_start` | `imageName`, `script`, `detached`, `displayMode` |
 | `pharo_launcher_image_delete` | `imageName` |
 
-`pharo_launcher_image_create` and `pharo_launcher_image_copy` verify the target
-image after Launcher returns. A successful Launcher exit is not enough: the MCP
-result is successful only when the target image can be listed and inspected.
+`pharo_launcher_image_list` and `pharo_launcher_image_info` call no Launcher
+command. Each image comes with its Pharo version, architecture and template,
+read from its `meta-inf.ston`, its `pharo.version` and its image header, and
+with the pids of the VMs running it. `nameFilter` keeps the names that contain
+it, case-sensitive. A directory that is not an image is named in a warning,
+with the file it lacks.
+
+`pharo_launcher_image_create` never starts the image it makes:
+`pharo_launcher_image_start` does.
+
+`pharo_launcher_image_create` and `pharo_launcher_image_copy` check that the
+Launcher can list the new image and open it, polling for up to 30 s after the
+command, and also after a command that outlived the call's timeout, since the
+Launcher goes on and makes the image. In profile mode, listed means the images
+directory holds it under the exact new name; outside a profile only the
+Launcher's `image info` is asked. A successful Launcher exit is not enough, and
+a failed check is an error that says which check failed.
+
+In profile mode, where the server wrote the images directory itself, a name it
+does not find is refused before any Launcher call (`image_info`,
+`image_start`, `image_delete`, and `image_copy`'s source), and so is a new name
+an image already has, in any case. Outside a profile those names go to the
+Launcher, whose answer is the answer.
 
 `pharo_launcher_image_start` supports:
 
 - `displayMode: "headless"` or `"interactive"`, in profile mode only.
   PharoLauncher's own `image launch` has no display mode, so outside profile
   mode the launch is refused rather than started with the mode dropped.
-- `detached: true` for detached launches with log paths in the result
+- `detached: true` to leave the image running: the answer names its pid and
+  its log files. Otherwise the call lasts until the image quits.
 - `script` for a launch script passed to Launcher, or evaluated by the profile
   VM launch path. A relative path is read from the server's working directory,
-  not from the image's or Launcher's.
+  not from the image's or Launcher's. A headless image given no script has
+  nothing to run and quits.
 
 In profile mode, image launch resolves the image and VM inside the active
 profile roots instead of using Launcher defaults.
 
 `pharo_launcher_image_delete` deletes without asking: calling it is the
 confirmation. Launcher's own `image delete` asks on standard input, where a
-call has nobody to answer.
+call has nobody to answer. It refuses an image a VM runs, in every mode, and
+refuses when it cannot tell: stop the image with
+`pharo_launcher_process_kill` first.
 
 ## Template Tools
 
 | Tool | Arguments |
 | --- | --- |
-| `pharo_launcher_template_category_list` | table options |
-| `pharo_launcher_template_list` | `templateCategory`, table options |
+| `pharo_launcher_template_category_list` | none |
+| `pharo_launcher_template_list` | `templateCategory` |
 | `pharo_launcher_template_update` | none |
 
-Table options are:
-
-```json
-{
-  "format": "ston",
-  "brief": true,
-  "rowMode": true,
-  "delimiter": "|"
-}
-```
-
-`format` can be `ston` or `text`. The default is `ston` when a tool supports
-table output.
+The categories come in the Launcher's order, with the one it marks as its
+default. A template list names templates only: a name is what
+`pharo_launcher_image_create` takes.
 
 In profile mode, `pharo_launcher_template_update` also verifies that the active
 profile source list is usable and probes `template list`.
@@ -82,21 +116,29 @@ profile source list is usable and probes `template list`.
 | `pharo_launcher_process_list` | none |
 | `pharo_launcher_process_kill` | exactly one of `pid` or `imageName` |
 
-On Windows, process tools use PowerShell/CIM. On macOS and Linux, they use
-`ps -axo pid=,args=`. Unsupported platforms return an explicit unsupported
-backend error.
+The process tools see the VMs running an image of this Launcher's images
+directory, in every mode, and no other process: a VM runs image `D` when its
+command line names `<images>/D/D.image`. So `pharo_launcher_image_list`'s
+running state and `pharo_launcher_process_list` agree, and a kill cannot reach
+an image of another Launcher or profile.
 
-A kill matches the target it was given. An all-digit target is a PID and
-matches that process only. Any other target is an image, and matches a process
-whose image name or image path is exactly that. An image launched more than
-once has more than one process, so an image-name kill can still stop several.
+On Windows, process tools use PowerShell/CIM. On macOS and Linux, they use
+`ps -axo pid=,args=`. On any other platform they fail, saying that listing
+processes is not supported there.
+
+A pid stops that process alone. An image name stops every process running that
+image: an image launched more than once has more than one. The answer comes
+once every killed process is gone, or says which one still runs 10 s later.
 
 Prefer the PID returned by a prior detached launch when cleaning up a launch
 you own.
 
-## Result Envelope
+## Library results
 
-Launcher tools return JSON shaped like this:
+The tools answer text. The library's functions answer objects, which a program
+reads instead: `listImages` answers `{ imagesDir, images, notImages,
+processListFailure? }` and `imageInfo` `{ found, imagesDir, image? }`. The
+functions that run a Launcher command answer a `LauncherCommandResult`:
 
 ```ts
 {
@@ -109,7 +151,7 @@ Launcher tools return JSON shaped like this:
     format: "ston" | "text";
     message?: string;
   };
-  raw: {
+  raw?: {
     stdout: string;
     stderr: string;
     format: "ston" | "text";
@@ -121,11 +163,14 @@ Launcher tools return JSON shaped like this:
     timedOut: boolean;
     timeoutReason?: string;
   };
+  launch?: LauncherLaunchReport;
 }
 ```
 
-Use `ok` and normalized `data` for program flow. Treat `raw.stdout` and
-`raw.stderr` as diagnostics.
+Use `ok` and `data` for program flow. `raw` is there when the call passed
+`includeRaw: true`; treat `raw.stdout` and `raw.stderr` as diagnostics. A
+create or copy's `data` is `{ image?: LauncherImage }`, and a start's `launch`
+says what it ran.
 
 ## Mutation Boundary
 

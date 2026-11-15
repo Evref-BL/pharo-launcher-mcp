@@ -45,12 +45,13 @@ import { openPharoLauncher } from "@evref-bl/pharo-launcher-mcp/launcher";
 
 const launcher = openPharoLauncher();
 const running = await launcher.listProcesses();
-const images = await launcher.listImages({ nameFilter: "Task" });
+const { imagesDir, images, notImages } = await launcher.listImages({ nameFilter: "Task" });
 ```
 
-Each call answers the normalized launcher result directly, with its `ok`,
-`data`, `diagnostic` and `command` fields typed, rather than JSON inside an MCP
-text block that the caller parses back.
+Each call answers a typed object, which the MCP tools only render as text.
+`listImages` reads the images directory and answers `{ imagesDir, images,
+notImages }`; a function that runs a Launcher command answers the launcher
+result, with its `ok`, `data`, `diagnostic` and `command` fields.
 
 A TypeScript caller gets those shapes with them, so a result does not have to
 be described a second time on the way out:
@@ -59,6 +60,7 @@ be described a second time on the way out:
 import type {
   LauncherCommandResult,
   LauncherImage,
+  LauncherImageList,
   LauncherProcess,
   LauncherTemplate,
 } from "@evref-bl/pharo-launcher-mcp/launcher";
@@ -96,9 +98,12 @@ server on stdio.
   state scope directly.
 - A **pharo-launcher-mcp profile** is an explicit isolated state scope selected
   through environment variables.
-- A **launcher tool result** is the normalized JSON envelope returned by most
-  tools. It includes parsed data when available, raw stdout/stderr, parser
-  status, command duration, exit code, and timeout state.
+- An **image** is a directory `D` of the Launcher's images directory holding
+  `D.image` and `D.changes`, Pharo Launcher's own rule.
+- A **launcher result** is the object the library's functions answer for a
+  Launcher command: parsed data when available, raw stdout/stderr when asked
+  for, parser status, command duration, exit code, and timeout state. The MCP
+  tools answer plain text rendered from it, for a model to read.
 
 ## Quick Start
 
@@ -139,12 +144,15 @@ pharo_launcher_image_list
 pharo_launcher_template_list
 ```
 
-`pharo_launcher_config` only inspects resolved configuration; the other two
-cross the live Launcher boundary.
+`pharo_launcher_config` only inspects resolved configuration, and
+`pharo_launcher_image_list` reads the images directory; the template list
+crosses the live Launcher boundary.
 
 Checking the installation before connecting is the executable's job, not a
-tool's. `pharo-launcher-mcp --health`, `--version-check`,
-`--validate-installation` and `--probe-images` each print JSON and exit.
+tool's. `pharo-launcher-mcp --health`, `--version-check` and
+`--validate-installation` each print JSON and exit. `--probe-images` asks the
+Launcher to list its images, exits with that command's status, and prints what
+`pharo_launcher_image_list` answers.
 
 ## Profile Quick Start
 
@@ -181,8 +189,7 @@ Create an image from a template:
   "tool": "pharo_launcher_image_create",
   "arguments": {
     "templateName": "Pharo 13.0 - 64bit",
-    "newImageName": "sample-130",
-    "noLaunch": true
+    "newImageName": "sample-130"
   }
 }
 ```
@@ -221,12 +228,14 @@ spelling of the same intent protects nothing.
 What does protect something is the target. `pharo_launcher_process_kill`
 requires exactly one of `pid` or `imageName`, and a PID stops that process
 alone. Prefer the PID a detached launch returned when cleaning up a launch you
-own.
+own. The process tools see only the VMs running an image of this Launcher's
+images directory, so a kill cannot reach another Launcher's image.
+`pharo_launcher_image_delete` refuses an image that a VM runs.
 
-`pharo_launcher_image_create` and `pharo_launcher_image_copy` verify the target
-image after Launcher reports success. If the target image cannot be listed and
-inspected, the MCP result is an error with the command output and verification
-diagnostics.
+`pharo_launcher_image_create` and `pharo_launcher_image_copy` check that the
+Launcher can list the new image and open it, even after a command that outlived
+the call's timeout. If it cannot, the answer is an error saying which check
+failed.
 
 ## Documentation
 
@@ -235,8 +244,8 @@ diagnostics.
 - [Profile mode](docs/user/profile-mode.md) explains no-profile mode, isolated
   profiles, profile paths, generated configuration, and cross-profile image
   copy.
-- [Tool reference](docs/reference/tools.md) lists the MCP tools, arguments,
-  result envelope, and special behaviors.
+- [Tool reference](docs/reference/tools.md) lists the MCP tools, their
+  arguments and answers, the library's results, and special behaviors.
 - [Troubleshooting](docs/troubleshooting.md) maps common setup and live Launcher
   failures to concrete checks.
 - [Development](docs/development.md) covers source layout, tests, local probes,

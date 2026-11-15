@@ -37,9 +37,9 @@ selected discovery source and all attempted candidates.
 bundled wrapper for the host platform. If that wrapper cannot be resolved, the
 server invokes the VM directly with the Launcher control image.
 
-If a selected wrapper path exists but is not executable, the command result
-contains a startup diagnostic with the command, args, working directory, PATH,
-and active profile variables.
+If a selected wrapper path exists but is not executable, the tool answers a
+startup diagnostic with the command, args, working directory, PATH, and active
+profile variables.
 
 ## Installation Validation Fails
 
@@ -82,24 +82,26 @@ pharo_launcher_template_list
 ```
 
 `template_update` seeds the active profile source list when Launcher leaves it
-missing or empty, then probes `template list`. Its diagnostics report missing
-profile directories, missing configuration files, and failed probes.
+missing or empty, then probes `template list`. Its answer says when the
+download of the source list or the probe failed. Until it ran once, a profile
+has no template sources, and `template_list` and `image_create` say so.
 
 ## Image Create Or Copy Reports An Error After Launcher Succeeds
 
-Create and copy tools verify the target image after the command exits. The MCP
-result is an error when the target image cannot be listed and inspected.
+Create and copy tools check, for up to 30 s after the command, that the Launcher
+can list the new image and open it. The answer is an error when it cannot, and
+says which check failed:
 
-Check:
+- `Pharo Launcher said it created X, but <images>/X does not exist after 30 s`,
+  or names the file `<images>/X` lacks: the images directory holds no image
+  named exactly `X`, which holds `X.image` and `X.changes`. Check that the
+  active profile, or the Launcher's settings outside a profile, point at the
+  images directory `pharo_launcher_config` prints.
+- `Pharo Launcher made X but cannot open it: …`: the Launcher's own
+  `image info X` failed, with its message.
 
-- the `createVerification` or `copyVerification` section
-- `raw.stdout` and `raw.stderr`
-- whether the image name already existed
-- whether the active profile points at the expected images directory
-- whether the Launcher template source list is valid
-
-For copied images, the result also reports metadata repair and inspected image
-metadata when available.
+A Launcher that refused the command answers its own message: a name already
+used, or a template or category it does not know.
 
 ## Image Start Is Refused Because The VM Directory Is Too Deep
 
@@ -128,20 +130,27 @@ Process tools use native host process queries:
 - Windows: PowerShell/CIM
 - macOS and Linux: `ps -axo pid=,args=`
 
-The process must have a Pharo or Squeak command line that includes a `.image`
-path. For cleanup, prefer a PID captured from the detached launch result, which
-stops that process and nothing else. An `imageName` has to match the process's
-image name or image path exactly, so an image that is not listed by
-`pharo_launcher_process_list` under that exact name will not be found.
+They see only the VMs running an image of this Launcher's images directory: a
+process whose command line names `<images>/D/D.image`, the path spelled as the
+images directory is or as its real path. A VM of another Launcher, of another
+profile, or given its image by a relative path is not listed and cannot be
+killed through the server. For cleanup, prefer a PID captured from the detached
+launch result, which stops that process and nothing else. An `imageName` finds
+the image as the other tools do, exactly, else ignoring case.
 
 ## Commands Time Out
 
-Every Launcher command is bounded by a timeout. Timeout results include:
+Every Launcher command is bounded by a timeout, and the tool answers that Pharo
+Launcher did not finish within it. The library's result says so with:
 
 - `command.timedOut: true`
 - `command.timeoutReason`
 - command args
-- raw stdout/stderr captured before the timeout
+- raw stdout/stderr captured before the timeout, with `includeRaw`
+
+A create or copy that outlived the timeout is still checked: when its image is
+there, the call succeeds with a warning, and the library's `command.timedOut`
+stays true.
 
 A timeout does not authorize broader host cleanup. Cleanup should use only
 recorded image names, profile roots, and PIDs that the caller owns.

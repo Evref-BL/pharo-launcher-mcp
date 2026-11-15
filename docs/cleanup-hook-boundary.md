@@ -11,8 +11,8 @@ These checks are safe for planning and static verification:
 
 - `npm test`, `npm run typecheck`, and `npm run build`
 - `git status --short --branch`
-- source review of command schemas, parser behavior, result envelopes, and
-  timeout handling
+- source review of command schemas, parser behavior, the library's results,
+  and timeout handling
 - `pharo-launcher-mcp --health`, because it reports resolved paths without
   invoking Pharo Launcher
 - `pharo_launcher_config`, because it reports resolved configuration without
@@ -22,20 +22,21 @@ These checks inspect live host state or invoke Pharo Launcher. Run them only
 when the caller has chosen to cross that boundary:
 
 - `pharo-launcher-mcp --version-check` and `--validate-installation`
-- `pharo_launcher_image_list`
-- `pharo_launcher_image_info`
-- `pharo_launcher_process_list`
+- `pharo_launcher_image_list` and `pharo_launcher_image_info`, which read the
+  images directory and the host's process list
+- `pharo_launcher_process_list`, which reads the host's process list
 
 They are non-mutating, but they still cross the live host boundary.
 
 ## Status Signals
 
-The existing launcher result envelope carries status data for callers:
+The tools answer text, for a model. A program reads the library's launcher
+results instead, which carry status data for callers:
 
 - `ok`
 - `parser.status`
 - normalized `data` when parsing is supported
-- raw `stdout` and `stderr`
+- raw `stdout` and `stderr`, with `includeRaw`
 - command `durationMs`
 - command `exitCode`
 - command `timedOut`
@@ -76,8 +77,8 @@ A future isolated live check must use a disposable profile rooted by
 - `PHARO_LAUNCHER_MCP_INIT_SCRIPTS_DIR`
 - `PHARO_LAUNCHER_MCP_LOGS_DIR`
 
-Retain the launcher logs, command envelopes, image names, image paths, process
-pids, and timeout reasons before deleting disposable directories.
+Retain the launcher logs, the library's results, image names, image paths,
+process pids, and timeout reasons before deleting disposable directories.
 
 ## Follow-Up Policy
 
