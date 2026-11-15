@@ -558,6 +558,11 @@ const answerImageStart: Answer = async (context, input) => {
     const mode = launch.displayMode === "interactive" ? "with its window" : "headless";
     const downloaded = launch.vmUpdated ? `Downloaded VM ${launch.vmId} for it first.` : undefined;
     const noScript = launch.displayMode === "headless" && !hasScript;
+    // Pharo 13 prints its usage and exits 0; Pharo 14 prints it and exits 1.
+    const nothingToRun =
+      noScript &&
+      "A headless image with no script has nothing to run and quits: " +
+        "pass a script, or displayMode: interactive.";
     if (detached) {
       return textResult([
         `Started ${name} ${mode}, detached, as pid ${launch.pid}.`,
@@ -581,6 +586,7 @@ const answerImageStart: Answer = async (context, input) => {
       return failure(
         `${name} quit with exit code ${result.command.exitCode}.`,
         downloaded,
+        nothingToRun,
         ...outputTails(launch.output),
       );
     }
@@ -588,9 +594,7 @@ const answerImageStart: Answer = async (context, input) => {
     return textResult([
       `${name} ran ${mode} and quit with exit code 0.`,
       downloaded,
-      noScript &&
-        "A headless image with no script has nothing to run and quits: " +
-          "pass a script, or displayMode: interactive.",
+      nothingToRun,
       ...outputTails(launch.output),
     ]);
   }

@@ -1072,6 +1072,29 @@ describe("pharo_launcher_image_start", () => {
     );
   });
 
+  // Measured on the real VMs: a Pharo 14 image given no script prints its
+  // usage and exits 1, a Pharo 13 one exits 0.
+  it("says a headless image with no script has nothing to run, whatever its exit code", async () => {
+    const { config, images } = inProfile();
+    writeImage(images, "release-check");
+    const { runner } = started({
+      exitCode: 1,
+      launch: vmLaunch(images, { output: { stdout: "Usage: [<subcommand>] [--help]", stderr: "" } }),
+    });
+
+    const result = await start(config, {}, runner);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toBe(
+      [
+        "release-check quit with exit code 1.",
+        "A headless image with no script has nothing to run and quits: pass a script, or displayMode: interactive.",
+        "Its output ends with:",
+        "  Usage: [<subcommand>] [--help]",
+      ].join("\n"),
+    );
+  });
+
   it("keeps the last 20 lines of what the VM wrote", async () => {
     const { config, images } = inProfile();
     writeImage(images, "release-check");
