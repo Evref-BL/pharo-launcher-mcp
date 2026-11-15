@@ -339,7 +339,7 @@ describe("pharo_launcher_config", () => {
 
     expect(result.isError).toBeUndefined();
     expect(text(result).split("\n")).toEqual([
-      "No usable Pharo Launcher in /no/u/PL.app, /no/Applications/PL.app or /no/opt/pl. Install it, or set PHARO_LAUNCHER_DIR to where it is.",
+      `No usable Pharo Launcher in ${path.resolve("/no/u/PL.app")}, ${path.resolve("/no/Applications/PL.app")} or ${path.resolve("/no/opt/pl")}. Install it, or set PHARO_LAUNCHER_DIR to where it is.`,
       `images: ${images}`,
     ]);
   });
@@ -375,7 +375,7 @@ describe("pharo_launcher_image_list", () => {
     expect(text(result)).toBe(
       [
         `6 images in ${images}, 2 running.`,
-        `Warning: pricing-backup is not an image: ${images}/pricing-backup holds neither pricing-backup.image nor pricing-backup.changes.`,
+        `Warning: pricing-backup is not an image: ${path.join(images, "pricing-backup")} holds neither pricing-backup.image nor pricing-backup.changes.`,
         shared,
         "  base",
         "  pricing",
@@ -528,7 +528,7 @@ describe("pharo_launcher_image_list", () => {
 
     expect(text(result).split("\n")).toEqual([
       `1 of 1 image in ${images} has tmp- in its name, not running.`,
-      `Warning: tmp-half is not an image: ${images}/tmp-half holds no tmp-half.changes.`,
+      `Warning: tmp-half is not an image: ${path.join(images, "tmp-half")} holds no tmp-half.changes.`,
       "images:",
       "  tmp-a pharo=14.0 architecture=64",
     ]);
@@ -566,7 +566,7 @@ describe("pharo_launcher_image_info", () => {
     expect(text(one)).toBe(
       [
         "Image stuck runs as pid 71513.",
-        `path: ${images}/stuck/stuck.image`,
+        `path: ${path.join(images, "stuck", "stuck.image")}`,
         "pharo: 14.0",
         "architecture: 64",
         `template: ${nextStable}`,
@@ -594,7 +594,7 @@ describe("pharo_launcher_image_info", () => {
       [
         "Image bare.",
         "Warning: cannot tell whether it runs: listing processes is not supported on freebsd.",
-        `path: ${images}/bare/bare.image`,
+        `path: ${path.join(images, "bare", "bare.image")}`,
         "modified: 2026-11-14T11:08:01Z",
       ].join("\n"),
     );
@@ -683,7 +683,7 @@ describe("pharo_launcher_image_create", () => {
     expect(text(result)).toBe(
       [
         `Created image release-check from template ${stable}.`,
-        `path: ${images}/release-check/release-check.image`,
+        `path: ${path.join(images, "release-check", "release-check.image")}`,
         "pharo: 13.0",
         "architecture: 64",
       ].join("\n"),
@@ -777,7 +777,7 @@ describe("pharo_launcher_image_create", () => {
 
     expect(neverListed.isError).toBe(true);
     expect(text(neverListed)).toBe(
-      `Pharo Launcher said it created release-check, but ${images}/release-check does not exist after 0 s.`,
+      `Pharo Launcher said it created release-check, but ${path.join(images, "release-check")} does not exist after 0 s.`,
     );
     expect(neverOpened.isError).toBe(true);
     expect(text(neverOpened)).toBe(
@@ -802,7 +802,7 @@ describe("pharo_launcher_image_create", () => {
     const neverOpened = await callTool("pharo_launcher_image_create", input, { ...options, runner: unopened.runner });
 
     expect(text(neverListed)).toBe(
-      `Pharo Launcher said it created "MCP debug", but ${images}/MCP debug does not exist after 0 s.`,
+      `Pharo Launcher said it created "MCP debug", but ${path.join(images, "MCP debug")} does not exist after 0 s.`,
     );
     expect(text(neverOpened)).toBe(
       'Pharo Launcher made "MCP debug" but cannot open it: STONReaderError: unexpected token.',
@@ -894,7 +894,7 @@ describe("pharo_launcher_image_copy", () => {
     expect(text(result)).toBe(
       [
         "Copied image pricing to pricing-backup.",
-        `path: ${images}/pricing-backup/pricing-backup.image`,
+        `path: ${path.join(images, "pricing-backup", "pricing-backup.image")}`,
       ].join("\n"),
     );
     expect(calls).toEqual([
@@ -952,7 +952,7 @@ describe("pharo_launcher_image_copy", () => {
     );
 
     expect(text(result)).toBe(
-      `Pharo Launcher said it copied pricing to pricing-backup, but ${images}/pricing-backup does not exist after 0 s.`,
+      `Pharo Launcher said it copied pricing to pricing-backup, but ${path.join(images, "pricing-backup")} does not exist after 0 s.`,
     );
   });
 
@@ -969,7 +969,7 @@ describe("pharo_launcher_image_copy", () => {
 
     expect(result.isError).toBe(true);
     expect(text(result)).toBe(
-      `Pharo Launcher said it copied "MCP debug" to "MCP debug 2", but ${images}/MCP debug 2 does not exist after 0 s.`,
+      `Pharo Launcher said it copied "MCP debug" to "MCP debug 2", but ${path.join(images, "MCP debug 2")} does not exist after 0 s.`,
     );
   });
 });
@@ -1406,7 +1406,7 @@ describe("pharo_launcher_image_copy_between_profiles", () => {
     expect(text(same)).toBe(
       [
         `Copied image pricing from ${source} to ${destination}.`,
-        `path: ${destination}/images/pricing/pricing.image`,
+        `path: ${path.join(destination, "images", "pricing", "pricing.image")}`,
       ].join("\n"),
     );
     expect(text(renamed).split("\n")[0]).toBe(
@@ -1421,16 +1421,16 @@ describe("pharo_launcher_image_copy_between_profiles", () => {
     await copy(source, destination);
 
     expect(text(await copy(source, destination, "pricng"))).toBe(
-      `Cannot copy image pricng: ${source}/images/pricng does not exist.`,
+      `Cannot copy image pricng: ${path.join(source, "images", "pricng")} does not exist.`,
     );
     expect(text(await copy(source, destination, "no-image"))).toBe(
-      `Cannot copy image no-image: ${source}/images/no-image holds no no-image.image.`,
+      `Cannot copy image no-image: ${path.join(source, "images", "no-image")} holds no no-image.image.`,
     );
     expect(text(await copy(source, destination, "no-record"))).toBe(
-      `Cannot copy image no-record: ${source}/images/no-record holds no meta-inf.ston, Pharo Launcher's record of the image.`,
+      `Cannot copy image no-record: ${path.join(source, "images", "no-record")} holds no meta-inf.ston, Pharo Launcher's record of the image.`,
     );
     expect(text(await copy(source, destination))).toBe(
-      `Cannot copy image pricing to ${destination}/images/pricing: that path already exists, and a copy never replaces it. Pick another destinationImageName, or remove it first.`,
+      `Cannot copy image pricing to ${path.join(destination, "images", "pricing")}: that path already exists, and a copy never replaces it. Pick another destinationImageName, or remove it first.`,
     );
   });
 
