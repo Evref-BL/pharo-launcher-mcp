@@ -988,12 +988,36 @@ export const toolAnswers: Readonly<Record<string, Answer>> = {
   pharo_launcher_template_update: answerTemplateUpdate,
 };
 
-/** Only the arguments a tool's schema names: an older caller's others change nothing. */
+/**
+ * Arguments an earlier release took and this one does not: an older caller
+ * still passes them, and they now change nothing, so they are dropped
+ * rather than refused.
+ */
+const retiredArguments = new Set([
+  "brief",
+  "confirm",
+  "delimiter",
+  "force",
+  "format",
+  "includeRaw",
+  "noLaunch",
+  "rowMode",
+]);
+
+/**
+ * Only the arguments a tool's schema names. One it never took is refused,
+ * as MCP and PLexus refuse it; one an earlier release took is dropped.
+ */
 export function toolArguments(
   schema: { properties?: Record<string, unknown> },
   argumentsValue: unknown,
 ): Record<string, unknown> {
   const given = inputObject(argumentsValue);
+  const named = new Set(Object.keys(schema.properties ?? {}));
+  const unknown = Object.keys(given).filter((key) => !named.has(key) && !retiredArguments.has(key));
+  if (unknown.length > 0) {
+    throw new ToolInputError(`${unknown.join(", ")} ${unknown.length === 1 ? "is" : "are"} not accepted here`);
+  }
   return Object.fromEntries(
     Object.keys(schema.properties ?? {})
       .filter((key) => given[key] !== undefined)

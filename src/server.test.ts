@@ -387,6 +387,21 @@ describe("pharo_launcher_image_list", () => {
     );
   });
 
+  it("refuses an argument it never took, naming the ones it takes", async () => {
+    const { config, images } = inProfile();
+    writeImage(images, "base", nextStableImage);
+    const result = await callTool(
+      "pharo_launcher_image_list",
+      { nameFilter: "base", bogus: 1 },
+      { config, runner: unusedRunner, nativeProcess: processes() },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toBe(
+      "Invalid arguments for pharo_launcher_image_list. bogus is not accepted here. It takes nameFilter.",
+    );
+  });
+
   it("answers the same text whatever format or includeRaw an older caller passes", async () => {
     const { config, images } = inProfile();
     writeImage(images, "base", nextStableImage);
