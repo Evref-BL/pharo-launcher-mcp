@@ -409,21 +409,22 @@ function isBound(char: string | undefined): boolean {
 }
 
 /**
- * Whether a command line names this file: it holds the path, starting at the
- * start of the line or after whitespace or a quote, and ending at its end or
- * before whitespace or a quote. On Windows case does not count, and `/` and
- * `\` are alike.
+ * Where a command line first names this file, or -1: where it holds the path,
+ * starting at the start of the line or after whitespace or a quote, and ending
+ * at its end or before whitespace or a quote. On Windows case does not count,
+ * and `/` and `\` are alike.
  *
  * Matched from the image's side because `ps` prints no quotes: for
  * `…/images/MCP debug/MCP debug.image` a token read off the line is
- * `debug.image`, which resolves nowhere. The bounds keep a VM on
- * `pricing-2025` from counting for `pricing`.
+ * `debug.image`, which resolves nowhere. The bounds keep a longer path that
+ * ends with this one (`/y/x/images/D/D.image` for `/x/images/D/D.image`), or
+ * a file whose name starts with it (`D.image.bak`), from counting.
  */
-export function commandLineNamesFile(
+export function whereCommandLineNamesFile(
   commandLine: string,
   filePath: string,
   platform: NodeJS.Platform = process.platform,
-): boolean {
+): number {
   const normalize =
     platform === "win32"
       ? (value: string) => value.replaceAll("\\", "/").toLowerCase()
@@ -431,16 +432,16 @@ export function commandLineNamesFile(
   const line = normalize(commandLine);
   const target = normalize(filePath);
   if (target.length === 0) {
-    return false;
+    return -1;
   }
 
   for (let at = line.indexOf(target); at >= 0; at = line.indexOf(target, at + 1)) {
     if (isBound(line[at - 1]) && isBound(line[at + target.length])) {
-      return true;
+      return at;
     }
   }
 
-  return false;
+  return -1;
 }
 
 function realPath(filePath: string): string | undefined {
@@ -454,8 +455,9 @@ function realPath(filePath: string): string | undefined {
 /**
  * The processes running these images, each named as its image and given the
  * path as the reader built it: a VM runs image `D` when its command line names
- * `<images>/D/D.image`, as built or as its real path. In image name order,
- * then pid.
+ * `<images>/D/D.image`, as built or as its real path. When it names several
+ * images, it runs the first it names: a VM's own image comes before its
+ * script and the script's arguments. In image name order, then pid.
  */
 export function processesOfImages(
   images: readonly ImageEntry[],
@@ -476,11 +478,17 @@ export function processesOfImages(
 
   return processes
     .flatMap((process) => {
-      const match = spellings.find(({ paths }) =>
-        paths.some((filePath) =>
-          commandLineNamesFile(process.commandLine, filePath, platform),
-        ),
-      );
+      let match: (typeof spellings)[number] | undefined;
+      let matchAt = Infinity;
+      for (const spelling of spellings) {
+        for (const filePath of spelling.paths) {
+          const at = whereCommandLineNamesFile(process.commandLine, filePath, platform);
+          if (at >= 0 && at < matchAt) {
+            match = spelling;
+            matchAt = at;
+          }
+        }
+      }
       return match
         ? [{ ...process, imagePath: match.image.imagePath, imageName: match.image.name }]
         : [];

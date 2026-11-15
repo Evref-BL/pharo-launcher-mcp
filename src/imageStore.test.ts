@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPharoLauncherConfig } from "./config.js";
 import {
-  commandLineNamesFile,
   compareCodePoints,
   filterByName,
   findByName,
@@ -13,6 +12,7 @@ import {
   scanImages,
   settingsImagesDirectory,
   whatItLacks,
+  whereCommandLineNamesFile,
 } from "./imageStore.js";
 import { launcherUserFilesLocation } from "./platform.js";
 import {
@@ -43,6 +43,10 @@ const nextStableUrl = "https://files.pharo.org/image/140/latest-64.zip";
 
 function vmProcess(pid: number, commandLine: string) {
   return { pid, commandLine };
+}
+
+function commandLineNamesFile(commandLine: string, filePath: string, platform: NodeJS.Platform): boolean {
+  return whereCommandLineNamesFile(commandLine, filePath, platform) >= 0;
 }
 
 describe("the images directory", () => {
@@ -309,6 +313,9 @@ describe("a VM runs an image", () => {
     expect(
       commandLineNamesFile("/vm/Pharo /y/x/images/pricing/pricing.image", image, "linux"),
     ).toBe(false);
+    expect(
+      whereCommandLineNamesFile(`/vm/Pharo /y${image} ${image}`, image, "linux"),
+    ).toBe(`/vm/Pharo /y${image} `.length);
   });
 
   it("on Windows, whatever the case and the slashes", () => {
@@ -349,6 +356,8 @@ describe("a VM runs an image", () => {
     ]);
   });
 
+  // The whole path is matched, not the name: `<images>/pricing/pricing.image`
+  // is no part of `<images>/pricing-2025/pricing-2025.image`.
   it("only when it is that image, not one whose name starts the same", () => {
     const imagesDir = temp("pharo-launcher-mcp-images-");
     writeImage(imagesDir, "pricing");
@@ -362,6 +371,28 @@ describe("a VM runs an image", () => {
     );
 
     expect(running.map((vm) => [vm.pid, vm.imageName])).toEqual([[7, "pricing-2025"]]);
+  });
+
+  // A VM's own image comes before its script and the script's arguments.
+  it("as the first image its command line names, not one a later argument names", () => {
+    const imagesDir = temp("pharo-launcher-mcp-images-");
+    const alpha = writeImage(imagesDir, "alpha");
+    const zeta = writeImage(imagesDir, "zeta");
+    const { images } = scanImages(imagesDir);
+
+    const running = processesOfImages(
+      images,
+      [
+        vmProcess(7, `/vms/140-x64/Pharo --headless ${zeta} eval Smalltalk at: #X put: '${alpha}'`),
+        vmProcess(8, `/vms/140-x64/Pharo --headless ${alpha} eval ${zeta}`),
+      ],
+      "linux",
+    );
+
+    expect(running.map((vm) => [vm.pid, vm.imageName, vm.imagePath])).toEqual([
+      [8, "alpha", alpha],
+      [7, "zeta", zeta],
+    ]);
   });
 
   it("when it names the real path of an images directory given through a link", () => {
