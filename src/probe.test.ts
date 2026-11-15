@@ -59,7 +59,7 @@ describe("--probe-images", () => {
       stderr: "",
       stdout: [
         `2 images in ${images}, none running.`,
-        'images (each pharoVersion=140 architecture=64 template="Pharo 14.0 - 64bit (next stable)"):',
+        'images (each pharo=14.0 architecture=64 template="Pharo 14.0 - 64bit (next stable)"):',
         "  base",
         "  pricing",
         "",

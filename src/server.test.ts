@@ -347,8 +347,8 @@ describe("pharo_launcher_config", () => {
 
 describe("pharo_launcher_image_list", () => {
   const nextStableImage = { metaInf: cliMetaInf(nextStable, nextStableUrl), pharoVersion: "140" };
-  const shared = 'images (each pharoVersion=140 architecture=64 template="Pharo 14.0 - 64bit (next stable)"):';
-  const alone = 'pharoVersion=140 architecture=64 template="Pharo 14.0 - 64bit (next stable)"';
+  const shared = 'images (each pharo=14.0 architecture=64 template="Pharo 14.0 - 64bit (next stable)"):';
+  const alone = 'pharo=14.0 architecture=64 template="Pharo 14.0 - 64bit (next stable)"';
 
   it("names every image, what they share once, and which run", async () => {
     const { config, images } = inProfile();
@@ -465,7 +465,7 @@ describe("pharo_launcher_image_list", () => {
     expect(text(result).split("\n").slice(1)).toEqual([
       "images:",
       `  "MCP14 debug" ${alone}`,
-      "  old pharoVersion=90 architecture=32",
+      "  old pharo=9.0 architecture=32",
     ]);
   });
 
@@ -515,7 +515,7 @@ describe("pharo_launcher_image_list", () => {
       `1 of 1 image in ${images} has tmp- in its name, not running.`,
       `Warning: tmp-half is not an image: ${images}/tmp-half holds no tmp-half.changes.`,
       "images:",
-      "  tmp-a pharoVersion=140 architecture=64",
+      "  tmp-a pharo=14.0 architecture=64",
     ]);
   });
 });
@@ -552,7 +552,7 @@ describe("pharo_launcher_image_info", () => {
       [
         "Image stuck runs as pid 71513.",
         `path: ${images}/stuck/stuck.image`,
-        "pharoVersion: 140",
+        "pharo: 14.0",
         "architecture: 64",
         `template: ${nextStable}`,
         `templateUrl: ${nextStableUrl}`,
@@ -669,7 +669,7 @@ describe("pharo_launcher_image_create", () => {
       [
         `Created image release-check from template ${stable}.`,
         `path: ${images}/release-check/release-check.image`,
-        "pharoVersion: 130",
+        "pharo: 13.0",
         "architecture: 64",
       ].join("\n"),
     );

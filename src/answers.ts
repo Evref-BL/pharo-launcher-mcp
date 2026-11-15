@@ -297,9 +297,14 @@ function madeImageFailure(
 
 // --- The images ---------------------------------------------------------
 
+/** The Pharo version as Pharo says it: "140" is 14.0 and "61" is 6.1; anything else as it is. */
+export function pharoVersionText(raw: string | undefined): string | undefined {
+  return raw !== undefined && /^\d{2,3}$/.test(raw) ? `${raw.slice(0, -1)}.${raw.slice(-1)}` : raw;
+}
+
 function imageAttributes(image: LauncherImage): Array<[string, string | undefined]> {
   return [
-    ["pharoVersion", image.pharoVersion],
+    ["pharo", pharoVersionText(image.pharoVersion)],
     ["architecture", image.architecture],
     ["template", image.template?.name],
   ];
@@ -388,7 +393,7 @@ const answerImageList: Answer = async (context, input) => {
           ["pids", image.pids && image.pids.length > 0 ? image.pids.join(",") : undefined],
         ],
       })),
-      ["pharoVersion", "architecture", "template"],
+      ["pharo", "architecture", "template"],
     ),
   ]);
 };
@@ -436,7 +441,7 @@ const answerImageInfo: Answer = async (context, input) => {
     info.processListFailure !== undefined &&
       `Warning: cannot tell whether it runs: ${sentence(info.processListFailure)}`,
     `path: ${image.imagePath}`,
-    image.pharoVersion && `pharoVersion: ${image.pharoVersion}`,
+    image.pharoVersion && `pharo: ${pharoVersionText(image.pharoVersion)}`,
     image.architecture && `architecture: ${image.architecture}`,
     image.template && `template: ${image.template.name}`,
     image.template?.url && `templateUrl: ${image.template.url}`,
@@ -453,7 +458,7 @@ function madeImageLines(image: LauncherImage | undefined, withVersions: boolean)
     `path: ${image.imagePath}`,
     ...(withVersions
       ? [
-          image.pharoVersion && `pharoVersion: ${image.pharoVersion}`,
+          image.pharoVersion && `pharo: ${pharoVersionText(image.pharoVersion)}`,
           image.architecture && `architecture: ${image.architecture}`,
         ].filter((line): line is string => Boolean(line))
       : []),
