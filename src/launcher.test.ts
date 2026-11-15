@@ -679,6 +679,29 @@ describe("createImage and copyImage", () => {
   });
 });
 
+describe("listTemplates", () => {
+  // Measured: every create from a remote template leaves a PhLLocalTemplate of
+  // the same name in the Launcher's cache category, which PLexus 0.16.0 lists
+  // too, and then refuses as a name in two categories.
+  it("leaves out the templates the Launcher keeps on disk, unless asked", async () => {
+    const ston =
+      "OrderedCollection[" +
+      "PhLLocalTemplate{#name:'Pharo 14.0 - 64bit (next stable)',#zipFile:FileReference{#path:'/x/140.zip'}}," +
+      "PhLRemoteTemplate{#name:'Pharo 13.0 - 64bit (stable)',#url:URL['https://files.pharo.org/image/130/latest-64.zip']}," +
+      "PhLLocalTemplate{#name:'mine'}]";
+    const launcher = openPharoLauncher({ config: testConfig({ profile: profileOnDisk() }), runner: stdout(ston) });
+
+    expect((await launcher.listTemplates({ templateCategory: "Templates" })).data).toEqual([
+      { name: "Pharo 13.0 - 64bit (stable)", url: "https://files.pharo.org/image/130/latest-64.zip" },
+    ]);
+    expect((await launcher.listTemplates({ templateCategory: "Templates", includeLocal: true })).data).toEqual([
+      { name: "Pharo 14.0 - 64bit (next stable)", local: true },
+      { name: "Pharo 13.0 - 64bit (stable)", url: "https://files.pharo.org/image/130/latest-64.zip" },
+      { name: "mine", local: true },
+    ]);
+  });
+});
+
 describe("startImage", () => {
   // PLexus's contract test drives the real library with a fake runner and no
   // profile, for an image on no disk: nothing in the library checks first.

@@ -106,6 +106,12 @@ export interface LauncherTemplate {
   name?: string;
   category?: string;
   url?: string;
+  /**
+   * A template the Launcher keeps on disk (`PhLLocalTemplate`): one the user
+   * made from an image, or a copy of a remote template it downloaded, kept in
+   * its template cache under the remote one's name.
+   */
+  local?: true;
 }
 
 export interface LauncherProcess {

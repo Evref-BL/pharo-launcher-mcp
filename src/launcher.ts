@@ -785,8 +785,16 @@ export interface PharoLauncher {
   listTemplateCategories(
     input?: LauncherTableOptions,
   ): Promise<TemplateCategoriesResult>;
+  /**
+   * The templates of a category, in the Launcher's order. Those it keeps on
+   * disk (`local`) are left out unless `includeLocal` asks for them: the
+   * Launcher keeps a copy of every template it downloads under the same name,
+   * in a category of its own, and a caller that takes a name listed in two
+   * categories as ambiguous, as PLexus 0.16.0 does, would then refuse every
+   * template downloaded once.
+   */
   listTemplates(
-    input?: { templateCategory?: string } & LauncherTableOptions,
+    input?: { templateCategory?: string; includeLocal?: boolean } & LauncherTableOptions,
   ): Promise<LauncherCommandResult<LauncherTemplate[]>>;
   updateTemplates(input?: LauncherTableOptions): Promise<TemplateUpdateResult>;
   copyImageBetweenProfiles(
@@ -894,7 +902,12 @@ export function openPharoLauncher(
       command("pharo_launcher_template_category_list", input) as Promise<
         TemplateCategoriesResult
       >,
-    listTemplates: (input) => command("pharo_launcher_template_list", input),
+    listTemplates: async (input) => {
+      const result = await command<LauncherTemplate[]>("pharo_launcher_template_list", input);
+      return input?.includeLocal === true || result.data === undefined
+        ? result
+        : { ...result, data: result.data.filter((template) => !template.local) };
+    },
     updateTemplates: (input) =>
       command("pharo_launcher_template_update", input) as Promise<
         TemplateUpdateResult

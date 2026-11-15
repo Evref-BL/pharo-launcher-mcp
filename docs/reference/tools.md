@@ -172,6 +172,10 @@ Use `ok` and `data` for program flow. `raw` is there when the call passed
 create or copy's `data` is `{ image?: LauncherImage }`, and a start's `launch`
 says what it ran.
 
+`listTemplates` leaves out the templates the Launcher keeps on disk unless
+given `includeLocal: true`, as the tool is: the Launcher keeps a copy of every
+template it downloads, under the same name, in a category of its own.
+
 ## Mutation Boundary
 
 No tool takes a confirmation argument. A confirmation could only say that the

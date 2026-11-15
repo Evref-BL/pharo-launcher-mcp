@@ -60,7 +60,7 @@ describe("PharoLauncher live integration", () => {
       ...categoryNames.map((name) => `  ${name}`),
     ]);
 
-    const templates = expectOk("template list", await launcher.listTemplates());
+    const templates = expectOk("template list", await launcher.listTemplates({ includeLocal: true }));
     const templateNames = (templates.data ?? []).map((template) => template.name);
     expect(templateNames.length).toBeGreaterThan(0);
     expect(templateNames.every((name) => typeof name === "string" && name.length > 0)).toBe(true);

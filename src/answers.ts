@@ -875,9 +875,12 @@ const answerTemplateCategoryList: Answer = async (context) => {
 
 const answerTemplateList: Answer = async (context, input) => {
   const templateCategory = optionalString(input, "templateCategory");
-  const result = await context.launcher.listTemplates(
-    templateCategory === undefined ? {} : { templateCategory },
-  );
+  // What the Launcher lists, its copies of downloaded templates and the
+  // user's own included.
+  const result = await context.launcher.listTemplates({
+    ...(templateCategory === undefined ? {} : { templateCategory }),
+    includeLocal: true,
+  });
   if (!result.ok) {
     const notFound = /Image template category '(.*?)' not found/.exec(rawOutput(result));
     if (notFound && !result.command.timedOut) {

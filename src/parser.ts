@@ -21,10 +21,12 @@ export function parseLauncherTemplatesFromSton(source: string): LauncherTemplate
     const name = stringValue(fields.get("name"));
     const category = stringValue(fields.get("category"));
     const url = urlValue(fields.get("url"));
+    const local = /PhLLocalTemplate\s*$/.test(source.slice(0, open));
     return {
       ...(name ? { name } : {}),
       ...(category ? { category } : {}),
       ...(url ? { url } : {}),
+      ...(local ? { local } : {}),
     };
   });
 }

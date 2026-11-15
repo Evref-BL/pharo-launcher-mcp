@@ -204,7 +204,7 @@ describe("result normalizer", () => {
         name: "Pharo 14.0 - 64bit (next stable)",
         url: "https://files.pharo.org/image/140/latest-64.zip",
       },
-      { name: "My 'own' template" },
+      { name: "My 'own' template", local: true },
       { name: "Pharo 13.0 - 64bit (stable)" },
     ]);
   });
