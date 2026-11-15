@@ -1,136 +1,24 @@
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   callLiveTool,
-  expectOkTool,
+  expectAnswered,
+  expectOk,
+  firstTemplate,
+  imagesDirOf,
   type IntegrationProfile,
-  localPharoVersions,
+  liveLauncher,
   prepareIntegrationProfile,
   removeIntegrationProfile,
-  stringField,
 } from "./helpers.js";
 
 const copyTimeoutMs = 240_000;
-
-interface TemplateChoice {
-  name: string;
-  category?: string;
-}
-
-function dataArray(body: Record<string, unknown>): Record<string, unknown>[] {
-  return Array.isArray(body.data)
-    ? (body.data as Record<string, unknown>[])
-    : [];
-}
-
-function imagesFromData(data: unknown): Record<string, unknown>[] {
-  if (Array.isArray(data)) {
-    return data.filter(
-      (item): item is Record<string, unknown> =>
-        typeof item === "object" && item !== null,
-    );
-  }
-
-  if (typeof data === "object" && data !== null) {
-    return [data as Record<string, unknown>];
-  }
-
-  return [];
-}
-
-function imageNamed(
-  body: Record<string, unknown>,
-  imageName: string,
-): Record<string, unknown> {
-  const image = imagesFromData(body.data).find((item) => item.name === imageName);
-  if (!image) {
-    throw new Error(
-      `Image ${imageName} was not returned: ${JSON.stringify(body, null, 2)}`,
-    );
-  }
-
-  return image;
-}
-
-function firstNamedModel(
-  body: Record<string, unknown>,
-  modelName: string,
-): Record<string, unknown> {
-  const model = dataArray(body).find((item) => typeof item.name === "string");
-  if (!model) {
-    throw new Error(`No ${modelName} with a name was returned`);
-  }
-
-  return model;
-}
-
-function expectSuccessfulTool(
-  label: string,
-  toolResult: {
-    result: { isError?: boolean };
-    body: Record<string, unknown>;
-  },
-): void {
-  if (toolResult.result.isError) {
-    throw new Error(`${label} failed: ${JSON.stringify(toolResult.body, null, 2)}`);
-  }
-
-  expectOkTool(toolResult.body);
-}
-
-async function firstTemplate(profile: IntegrationProfile): Promise<TemplateChoice> {
-  const availableVersions = localPharoVersions(profile);
-
-  const update = await callLiveTool(
-    profile,
-    "pharo_launcher_template_update",
-    {},
-    { timeoutMs: copyTimeoutMs },
-  );
-  expectSuccessfulTool("template update", update);
-
-  const templates = await callLiveTool(
-    profile,
-    "pharo_launcher_template_list",
-    { format: "ston" },
-    { timeoutMs: copyTimeoutMs },
-  );
-  expect(templates.result.isError).toBeUndefined();
-  expectOkTool(templates.body);
-
-  const template =
-    dataArray(templates.body).find((candidate) => {
-      const name = typeof candidate.name === "string" ? candidate.name : "";
-      const url = typeof candidate.url === "string" ? candidate.url : "";
-
-      return availableVersions.some(
-        (version) =>
-          name.includes(`Pharo ${Number(version)}.`) ||
-          url.includes(`/${version}/`),
-      );
-    }) ?? firstNamedModel(templates.body, "template");
-
-  return {
-    name: stringField(template.name, "template.name"),
-    ...(typeof template.category === "string"
-      ? { category: template.category }
-      : {}),
-  };
-}
-
-async function deleteImageIfPresent(
-  profile: IntegrationProfile,
-  imageName: string,
-): Promise<void> {
-  await callLiveTool(
-    profile,
-    "pharo_launcher_image_delete",
-    { imageName },
-    { timeoutMs: copyTimeoutMs },
-  ).catch(() => undefined);
-}
+// The create and copy post-condition polls for this long before it gives up.
+const verificationTimeoutMs = 30_000;
 
 describe("PharoLauncher image copy integration", () => {
   let profile: IntegrationProfile;
+  let longerName: string;
   let sourceImageName: string;
   let copiedImageName: string;
 
@@ -138,80 +26,81 @@ describe("PharoLauncher image copy integration", () => {
     profile = prepareIntegrationProfile("copy");
     const suffix = `${Date.now()}`;
     sourceImageName = `MCPPLCopySource-${suffix}`;
+    // Holds the source's name, as pricing-2025 holds pricing.
+    longerName = `${sourceImageName}-2025`;
     copiedImageName = `MCPPLCopyTarget-${suffix}`;
   });
 
   afterAll(async () => {
     if (profile) {
-      await deleteImageIfPresent(profile, copiedImageName);
-      await deleteImageIfPresent(profile, sourceImageName);
+      const launcher = liveLauncher(profile, { timeoutMs: copyTimeoutMs });
+      for (const imageName of [copiedImageName, sourceImageName, longerName]) {
+        await launcher.deleteImage({ imageName }).catch(() => undefined);
+      }
       removeIntegrationProfile(profile);
     }
   });
 
   it(
-    "returns a copied target image that can be listed and inspected",
+    "creates an image beside one whose name holds its own, and copies it",
     async () => {
-      const template = await firstTemplate(profile);
+      const launcher = liveLauncher(profile, { timeoutMs: copyTimeoutMs });
+      const images = imagesDirOf(profile);
+      const template = await firstTemplate(profile, copyTimeoutMs);
+      const createInput = (newImageName: string) => ({
+        templateName: template.name,
+        ...(template.category ? { templateCategory: template.category } : {}),
+        newImageName,
+      });
 
-      const created = await callLiveTool(
-        profile,
-        "pharo_launcher_image_create",
-        {
-          templateName: template.name,
-          ...(template.category ? { templateCategory: template.category } : {}),
-          newImageName: sourceImageName,
-          noLaunch: true,
-        },
-        { timeoutMs: copyTimeoutMs },
-      );
-      expectSuccessfulTool("image create", created);
+      expectOk("image create of the longer name", await launcher.createImage(createInput(longerName)));
 
-      const copied = await callLiveTool(
-        profile,
-        "pharo_launcher_image_copy",
-        { imageName: sourceImageName, newImageName: copiedImageName },
-        { timeoutMs: copyTimeoutMs },
-      );
-      expectSuccessfulTool("image copy", copied);
-      expect(copied.body).toMatchObject({
-        data: {
-          targetImageName: copiedImageName,
-          listedImage: {
-            name: copiedImageName,
-          },
-          inspectedImage: {
-            name: copiedImageName,
-          },
-        },
-        copyVerification: {
-          ok: true,
-          targetImageName: copiedImageName,
+      // Listed and opened on the first look: no poll for the 30 s.
+      const startedAt = Date.now();
+      const created = expectOk("image create", await launcher.createImage(createInput(sourceImageName)));
+      expect(Date.now() - startedAt).toBeLessThan(created.command.durationMs + verificationTimeoutMs);
+      expect(created.command.timedOut).toBe(false);
+      expect(created.data).toMatchObject({
+        image: {
+          name: sourceImageName,
+          imagePath: path.join(images, sourceImageName, `${sourceImageName}.image`),
         },
       });
 
-      const listed = await callLiveTool(
-        profile,
-        "pharo_launcher_image_list",
-        { nameFilter: copiedImageName, format: "ston" },
-        { timeoutMs: copyTimeoutMs },
+      const copiedText = expectAnswered(
+        "image copy",
+        await callLiveTool(
+          profile,
+          "pharo_launcher_image_copy",
+          { imageName: sourceImageName, newImageName: copiedImageName },
+          { timeoutMs: copyTimeoutMs },
+        ),
       );
-      expectSuccessfulTool("image list copied target", listed);
-      expect(imageNamed(listed.body, copiedImageName)).toMatchObject({
-        name: copiedImageName,
-      });
+      expect(copiedText.split("\n")).toEqual([
+        `Copied image ${sourceImageName} to ${copiedImageName}.`,
+        `path: ${path.join(images, copiedImageName, `${copiedImageName}.image`)}`,
+      ]);
 
-      const inspected = await callLiveTool(
-        profile,
-        "pharo_launcher_image_info",
-        { imageName: copiedImageName, format: "ston" },
-        { timeoutMs: copyTimeoutMs },
+      // Every image named, with its version and template.
+      const list = await launcher.listImages();
+      expect(list.notImages).toEqual([]);
+      expect(list.images.map((image) => image.name)).toEqual(
+        [copiedImageName, sourceImageName, longerName].sort(),
       );
-      expectSuccessfulTool("image info copied target", inspected);
-      expect(imageNamed(inspected.body, copiedImageName)).toMatchObject({
-        name: copiedImageName,
-      });
+      for (const image of list.images) {
+        expect(image).toMatchObject({
+          pharoVersion: expect.stringMatching(/^\d+$/),
+          architecture: "64",
+          template: { name: template.name },
+        });
+      }
+
+      const filtered = await launcher.listImages({ nameFilter: sourceImageName });
+      expect(filtered.images.map((image) => image.name)).toEqual([sourceImageName, longerName]);
+
+      const info = await launcher.imageInfo({ imageName: copiedImageName });
+      expect(info).toMatchObject({ found: true, image: { name: copiedImageName } });
     },
-    copyTimeoutMs,
+    900_000,
   );
 });
