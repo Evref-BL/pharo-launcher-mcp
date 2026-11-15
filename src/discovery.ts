@@ -6,6 +6,10 @@ import {
   type PharoLauncherInstallationCandidate,
   type PharoLauncherInstallationSource,
 } from "./config.js";
+import {
+  resolveImagesDirectory,
+  type ImagesDirectorySource,
+} from "./imageStore.js";
 import { runLauncherCli, type LauncherCliResult } from "./launcherCli.js";
 import {
   resolveLauncherScriptDetails,
@@ -42,6 +46,13 @@ export interface PharoLauncherInstallationDiscoveryReport {
   candidates: PharoLauncherInstallationCandidateReport[];
 }
 
+/** Where this server reads the Launcher's images, and why there. */
+export interface ImagesDirectoryReport extends PathStatus {
+  source: ImagesDirectorySource;
+  /** Outside a profile: the settings file read, or looked for. */
+  settingsFile?: string;
+}
+
 export interface PharoLauncherConfigReport {
   discovery: PharoLauncherInstallationDiscoveryReport;
   launcherDir: PathStatus;
@@ -51,6 +62,7 @@ export interface PharoLauncherConfigReport {
   launcherScript: ResolvedLauncherScript;
   launcherConfiguration?: string;
   profile?: PharoLauncherProfileReport;
+  imagesDir: ImagesDirectoryReport;
 }
 
 export interface PharoLauncherHealthReport {
@@ -150,6 +162,15 @@ function installationDiscoveryReport(
   };
 }
 
+function imagesDirectoryReport(config: PharoLauncherConfig): ImagesDirectoryReport {
+  const imagesDir = resolveImagesDirectory(config);
+  return {
+    ...pathStatus(imagesDir.path),
+    source: imagesDir.source,
+    ...(imagesDir.settingsFile ? { settingsFile: imagesDir.settingsFile } : {}),
+  };
+}
+
 export function getPharoLauncherConfigReport(
   config: PharoLauncherConfig = loadPharoLauncherConfig(),
 ): PharoLauncherConfigReport {
@@ -171,6 +192,7 @@ export function getPharoLauncherConfigReport(
       ? { launcherConfiguration: config.launcherConfiguration }
       : {}),
     ...(config.profile ? { profile: getProfileReport(config) } : {}),
+    imagesDir: imagesDirectoryReport(config),
   };
 }
 

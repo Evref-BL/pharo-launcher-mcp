@@ -190,6 +190,36 @@ describe("PharoLauncher discovery", () => {
     expect(report.profile?.name).toBe("isolated");
     expect(report.profile?.launcherImage.exists).toBe(true);
     expect(report.profile?.imagesDir.path).toBe(path.join(stateRoot, "images"));
+    expect(report.imagesDir).toEqual({
+      path: path.join(stateRoot, "images"),
+      exists: false,
+      source: "profile",
+    });
+  });
+
+  it("says where the images are outside a profile, and which settings say so", () => {
+    const userFilesDir = fs.mkdtempSync(path.join(os.tmpdir(), "pharo-launcher-mcp-user-files-"));
+    tempDirs.push(userFilesDir);
+    const settingsFile = path.join(userFilesDir, "launcherSettings.ston");
+    const config = { ...tempLauncherConfig(), launcherUserFilesDir: userFilesDir };
+
+    expect(getPharoLauncherConfigReport(config).imagesDir).toEqual({
+      path: path.join(userFilesDir, "images"),
+      exists: false,
+      source: "default",
+      settingsFile,
+    });
+
+    fs.writeFileSync(
+      settingsFile,
+      `PharoLauncherCLIConfiguration {\n\t#imagesDirectory : FILE [ '${userFilesDir}' ]\n}`,
+    );
+    expect(getPharoLauncherConfigReport(config).imagesDir).toEqual({
+      path: userFilesDir,
+      exists: true,
+      source: "settings",
+      settingsFile,
+    });
   });
 
   it("marks health ok only when required paths and script exist", () => {

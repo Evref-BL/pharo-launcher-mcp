@@ -15,18 +15,20 @@ export class ToolInputError extends Error {
   }
 }
 
+/**
+ * A profile whose VM directory is too deep for the VM to load its own
+ * modules. A `ToolInputError`, as it was before it had a class of its own, so
+ * a caller that catches one catches it; its message says what to do.
+ */
+export class ProfileTooDeepError extends ToolInputError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProfileTooDeepError";
+  }
+}
+
 const stringSchema = { type: "string", minLength: 1 } as const;
 const booleanSchema = { type: "boolean" } as const;
-const includeRawSchema = {
-  type: "boolean",
-  description:
-    "Include raw Pharo Launcher stdout and stderr in the tool result.",
-} as const;
-const formatSchema = {
-  type: "string",
-  enum: ["ston", "text"],
-  default: "ston",
-} as const;
 const displayModeSchema = {
   type: "string",
   enum: ["headless", "interactive"],
@@ -39,20 +41,13 @@ function objectSchema(
 ) {
   return {
     type: "object",
-    properties: { ...properties, includeRaw: includeRawSchema },
+    properties,
     required,
     additionalProperties: false,
   } as const;
 }
 
 const emptyInputSchema = objectSchema({});
-
-const tableProperties = {
-  format: formatSchema,
-  brief: booleanSchema,
-  rowMode: booleanSchema,
-  delimiter: stringSchema,
-} as const;
 
 export function inputObject(input: unknown): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -156,21 +151,6 @@ function addFlag(args: string[], flag: string, enabled: boolean): void {
   }
 }
 
-function addTableOptions(args: string[], input: Record<string, unknown>): void {
-  addFlag(args, "--brief", optionalBoolean(input, "brief"));
-  addFlag(args, "--rowMode", optionalBoolean(input, "rowMode"));
-  addOption(args, "--delimiter", optionalString(input, "delimiter"));
-
-  const format = optionalString(input, "format") ?? "ston";
-  if (format !== "ston" && format !== "text") {
-    throw new ToolInputError("format must be ston or text");
-  }
-
-  if (format === "ston") {
-    args.push("--ston");
-  }
-}
-
 // Without --no-launch PharoLauncher starts the new image and waits for it to
 // quit, so the call would last as long as the image runs. Starting an image is
 // image_start's; noLaunch is read by nothing.
@@ -220,34 +200,31 @@ function processKill(input: unknown): string[] {
   const imageName = optionalString(object, "imageName");
 
   if (pid && imageName) {
-    throw new ToolInputError(
-      "pharo_launcher_process_kill requires exactly one of pid or imageName",
-    );
+    throw new ToolInputError("Give pid or imageName, not both.");
   }
 
   const target = pid ?? imageName;
   if (!target) {
-    throw new ToolInputError(
-      "pharo_launcher_process_kill requires pid or imageName",
-    );
+    throw new ToolInputError("Give the pid or the imageName of the process to kill.");
   }
 
   args.push(target);
   return args;
 }
 
-function templateCategoryList(input: unknown): string[] {
-  const object = inputObject(input);
-  const args = ["template", "categories"];
-  addTableOptions(args, object);
-  return args;
+// One row per category, no header, the default marked: the one listing that
+// names the categories alone (the STON one walks the whole template tree).
+function templateCategoryList(): string[] {
+  return ["template", "categories", "--brief"];
 }
 
+// STON names every template whole; the table shortens a name past 75
+// characters.
 function templateList(input: unknown): string[] {
   const object = inputObject(input);
   const args = ["template", "list"];
   addOption(args, "--templateCategory", optionalString(object, "templateCategory"));
-  addTableOptions(args, object);
+  args.push("--ston");
   return args;
 }
 
@@ -286,21 +263,12 @@ export const launcherCommandTools: LauncherCommandTool[] = [
   {
     name: "pharo_launcher_image_info",
     description: "Print information about an image.",
-    inputSchema: objectSchema(
-      {
-        imageName: stringSchema,
-        ...tableProperties,
-      },
-      ["imageName"],
-    ),
+    inputSchema: objectSchema({ imageName: stringSchema }, ["imageName"]),
   },
   {
     name: "pharo_launcher_image_list",
     description: "List local images.",
-    inputSchema: objectSchema({
-      nameFilter: stringSchema,
-      ...tableProperties,
-    }),
+    inputSchema: objectSchema({ nameFilter: stringSchema }),
   },
   {
     name: "pharo_launcher_image_start",
@@ -341,16 +309,13 @@ export const launcherCommandTools: LauncherCommandTool[] = [
   {
     name: "pharo_launcher_template_category_list",
     description: "List template categories.",
-    inputSchema: objectSchema(tableProperties),
+    inputSchema: emptyInputSchema,
     buildArgs: templateCategoryList,
   },
   {
     name: "pharo_launcher_template_list",
     description: "List image templates.",
-    inputSchema: objectSchema({
-      templateCategory: stringSchema,
-      ...tableProperties,
-    }),
+    inputSchema: objectSchema({ templateCategory: stringSchema }),
     buildArgs: templateList,
   },
   {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseLauncherTemplatesFromSton,
   parseLauncherOutput,
+  parseTemplateCategoriesFromBrief,
 } from "./parser.js";
 import { normalizeLauncherResult } from "./resultNormalizer.js";
 
@@ -85,76 +86,59 @@ describe("result normalizer", () => {
     });
   });
 
-  it("normalizes default template category failures as bootstrap diagnostics", () => {
-    const result = normalizeLauncherResult(
+  // A canned text used to replace any of these, and hid why it failed.
+  it.each([
+    [
       "pharo_launcher_template_list",
       ["template", "list", "--ston"],
-      {
-        ...cliResult,
-        exitCode: 1,
-        stdout: "",
-        stderr:
-          "Image template category 'Official distributions' not found. Categories are: OrderedCollection[]",
-      },
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      diagnostic:
-        "Pharo Launcher could not list default templates because the active template source inventory is empty or not bootstrapped.",
-      action: expect.stringContaining(
-        "PHARO_LAUNCHER_MCP_TEMPLATE_SOURCES_DIR",
-      ),
-      parser: {
-        status: "skipped",
-        format: "ston",
-      },
+      "Image template category 'Official distributions' not found. Please enter a correct image tamplate category name.",
+    ],
+    [
+      "pharo_launcher_image_start",
+      ["image", "launch", "Task"],
+      "Cannot tell which VM Task needs: neither its meta-inf.ston, its pharo.version nor its template gives a Pharo version.",
+    ],
+    [
+      "pharo_launcher_image_start",
+      ["image", "launch", "Task"],
+      "Profile-scoped image launch could not find image file for Task.",
+    ],
+  ])("keeps the command's own words as the diagnostic of %s", (toolName, args, stderr) => {
+    const result = normalizeLauncherResult(toolName, args, {
+      ...cliResult,
+      exitCode: 1,
+      stderr,
     });
-    expect(result.raw).toBeUndefined();
-  });
 
-  it("does not normalize explicit template category failures as bootstrap diagnostics", () => {
-    const result = normalizeLauncherResult(
-      "pharo_launcher_template_list",
-      ["template", "list", "--templateCategory", "unknown", "--ston"],
-      {
-        ...cliResult,
-        exitCode: 1,
-        stdout: "",
-        stderr:
-          "Image template category 'unknown' not found. Categories are: OrderedCollection[]",
-      },
-    );
-
-    expect(result.ok).toBe(false);
-    expect(result.diagnostic).toContain("Image template category 'unknown'");
+    expect(result.diagnostic).toBe(stderr);
     expect(result.action).toBeUndefined();
   });
 
-  it("normalizes profile-scoped image launch refusals as VM store diagnostics", () => {
+  it("carries an image start's launch report", () => {
+    const launch = { by: "launcher" as const, pid: 73100 };
+
+    expect(
+      normalizeLauncherResult(
+        "pharo_launcher_image_start",
+        ["image", "launch", "--detached", "Task"],
+        { ...cliResult, launch },
+      ).launch,
+    ).toEqual(launch);
+  });
+
+  it("reads the brief category listing, with its default", () => {
     const result = normalizeLauncherResult(
-      "pharo_launcher_image_start",
-      ["image", "launch", "--script", "bootstrap.st", "ScopedImage"],
-      {
-        ...cliResult,
-        exitCode: 1,
-        stdout: "",
-        stderr:
-          "Refusing profile-scoped image launch before invoking Pharo Launcher.\nThat launch can download, extract, or run VMs outside PHARO_LAUNCHER_MCP_VMS_DIR (/tmp/profile/vms).",
-      },
+      "pharo_launcher_template_category_list",
+      ["template", "categories", "--brief"],
+      { ...cliResult, stdout: "*1  Official distributions\n 2  Pharo Mooc\n 10 Moose\n" },
     );
 
     expect(result).toMatchObject({
-      ok: false,
-      diagnostic:
-        "Profile-scoped image launch was refused because Pharo Launcher can use the default VM store instead of the configured profile VM directory.",
-      action: expect.stringContaining("PhLVirtualMachineManager"),
-      parser: {
-        status: "skipped",
-        format: "text",
-      },
+      ok: true,
+      data: ["Official distributions", "Pharo Mooc", "Moose"],
+      defaultCategory: "Official distributions",
+      parser: { status: "parsed" },
     });
-    expect(result.raw).toBeUndefined();
   });
 
   it("extracts LauncherTemplate models", () => {
@@ -200,6 +184,47 @@ describe("result normalizer", () => {
       status: "unsupported",
       format: "text",
       message: "No parser registered for pharo_launcher_image_copy",
+    });
+  });
+
+  // A PhLLocalTemplate is the user's own; the reader used to look for two
+  // class names only, and missed it.
+  it("lists every kind of template in the Launcher's order, and no group", () => {
+    const templates = parseLauncherTemplatesFromSton(
+      "OrderedCollection[" +
+        "PhLRemoteTemplate{#name:'Pharo 14.0 - 64bit (next stable)',#url:URL['https://files.pharo.org/image/140/latest-64.zip']}," +
+        "PhLLocalTemplate{#name:'My ''own'' template',#zipFile:FileReference{#path:'/x/my.zip'}}," +
+        "PhLTemplateGroup{#name:'Not a template'}," +
+        "PhLRemoteTemplate { #name : 'Pharo 13.0 - 64bit (stable)' }" +
+        "]",
+    );
+
+    expect(templates).toEqual([
+      {
+        name: "Pharo 14.0 - 64bit (next stable)",
+        url: "https://files.pharo.org/image/140/latest-64.zip",
+      },
+      { name: "My 'own' template" },
+      { name: "Pharo 13.0 - 64bit (stable)" },
+    ]);
+  });
+
+  // ConsoleListFormatter>>printAttributeRows: the default mark or a space, the
+  // index padded right to two, one space, the name. No header with --brief.
+  it.each([
+    [
+      "with a default",
+      "*1  Official distributions\n 2  Pharo Mooc\n 10 Moose\n",
+      ["Official distributions", "Pharo Mooc", "Moose"],
+      "Official distributions",
+    ],
+    ["with none", "1  Official distributions\n2  Pharo Mooc\n", ["Official distributions", "Pharo Mooc"], undefined],
+    ["with the default second", " 1 A\r\n*2 B b\r\n", ["A", "B b"], "B b"],
+    ["with no category", "", [], undefined],
+  ])("reads brief categories %s", (_label, source, categories, defaultCategory) => {
+    expect(parseTemplateCategoriesFromBrief(source)).toEqual({
+      categories,
+      ...(defaultCategory ? { defaultCategory } : {}),
     });
   });
 });

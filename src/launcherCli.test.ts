@@ -491,6 +491,11 @@ describe("buildLauncherCliInvocation", () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("Detached PharoLauncher CLI pid");
+      expect(result.launch).toEqual({
+        by: "launcher",
+        pid: Number(/pid (\d+)\./.exec(result.stdout)?.[1]),
+        logs: { stdout: stdoutPath, stderr: stderrPath },
+      });
       expect(stdoutPath).toContain(logsDir);
       expect(stderrPath).toContain(logsDir);
       expect(fs.existsSync(stdoutPath ?? "")).toBe(true);
@@ -598,11 +603,29 @@ describe("buildLauncherCliInvocation", () => {
       await waitForFile(vmArgsPath);
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Detached profile-scoped Pharo image pid");
+      // PLexus reads these lines, word for word.
+      expect(result.stdout).toMatch(/^Detached profile-scoped Pharo image pid \d+\.$/m);
       expect(result.stdout).toContain(`image: ${imagePath}`);
       expect(result.stdout).toContain("displayMode: headless");
       expect(result.stdout).toContain(`vm: ${vmPath}`);
+      expect(result.stdout).toContain(`vmId: ${vmId}`);
       expect(result.stdout).toContain("vmUpdated: false");
+      expect(result.stdout).toMatch(/^stdout: .+\.out\.log$/m);
+      expect(result.stdout).toMatch(/^stderr: .+\.err\.log$/m);
+      expect(result.launch).toEqual({
+        by: "vm",
+        imagePath,
+        displayMode: "headless",
+        vmPath,
+        vmId,
+        vmUpdated: false,
+        pid: Number(/pid (\d+)\./.exec(result.stdout)?.[1]),
+        logs: {
+          stdout: expect.stringMatching(/-Task-launch\.out\.log$/),
+          stderr: expect.stringMatching(/-Task-launch\.err\.log$/),
+        },
+      });
+      expect(path.dirname(result.launch!.logs!.stdout)).toBe(profile.logsDir);
       expect(result.stderr).toBe("");
       expect(result.timedOut).toBe(false);
       // The image is read from the images directory: no Launcher boot.
@@ -914,8 +937,22 @@ describe("buildLauncherCliInvocation", () => {
       expect(result.stdout).toContain("direct-vm:");
       expect(result.stdout).toContain(imagePath);
       expect(result.stdout).toContain(startupScriptPath);
+      expect(result.stdout).toContain("vmUpdated: true");
       expect(result.stderr).toBe("");
       expect(result.timedOut).toBe(false);
+      // The VM's own output, without the report lines before it.
+      expect(result.launch).toEqual({
+        by: "vm",
+        imagePath,
+        displayMode: "headless",
+        vmPath,
+        vmId,
+        vmUpdated: true,
+        output: {
+          stdout: `direct-vm:--headless ${imagePath} eval ${startupScriptPath}\n`,
+          stderr: "",
+        },
+      });
       expect(fs.readFileSync(launcherCallsPath, "utf8").trim().split("\n")).toEqual([
         expect.stringContaining(`vm update ${vmId}`),
       ]);
@@ -1061,6 +1098,126 @@ describe("buildLauncherCliInvocation", () => {
     }
   });
 
+  describe("a profile launch that cannot run says why, naming no tool", () => {
+    function profileOnDisk(launcherScript: string[]) {
+      const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pharo-launcher-mcp-launch-"));
+      const installationLauncherImage = path.join(stateRoot, "installation", "PharoLauncher.image");
+      const profile = {
+        name: "isolated",
+        stateRoot,
+        launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+        imagesDir: path.join(stateRoot, "images"),
+        vmsDir: path.join(stateRoot, "vms"),
+        templateSourcesDir: path.join(stateRoot, "templates"),
+        initScriptsDir: path.join(stateRoot, "init-scripts"),
+        logsDir: path.join(stateRoot, "logs"),
+      };
+      const launcherScriptPath = path.join(stateRoot, "launcher.sh");
+      fs.mkdirSync(path.dirname(installationLauncherImage), { recursive: true });
+      fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
+      writeExecutableScript(launcherScriptPath, ["#!/usr/bin/env sh", ...launcherScript, ""].join("\n"));
+      return {
+        stateRoot,
+        profile,
+        config: launcherConfig({
+          launcherDir: stateRoot,
+          launcherVm: "unused",
+          installationLauncherImage,
+          launcherImage: profile.launcherImage,
+          launcherScript: launcherScriptPath,
+          launcherConfiguration: path.join(stateRoot, "launcher", "pharo-launcher-cli-config.ston"),
+          profile,
+        }),
+      };
+    }
+
+    it("when nothing gives a Pharo version", async () => {
+      const { stateRoot, profile, config } = profileOnDisk(["exit 64"]);
+      writeImage(profile.imagesDir, "release-check");
+
+      try {
+        const result = await runLauncherCli(["image", "launch", "release-check"], {
+          config,
+          timeoutMs: 2_000,
+        });
+
+        expect(result).toMatchObject({
+          exitCode: 1,
+          stderr:
+            "Cannot tell which VM release-check needs: neither its meta-inf.ston, " +
+            "its pharo.version nor its template gives a Pharo version.",
+        });
+        expect(result).not.toHaveProperty("launch");
+      } finally {
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("when the VM cannot be downloaded", async () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const { stateRoot, profile, config } = profileOnDisk([
+        `echo "VM 130-x64 not found on files.pharo.org" >&2`,
+        "exit 1",
+      ]);
+      writeImage(profile.imagesDir, "release-check", { pharoVersion: "130" });
+
+      try {
+        const result = await runLauncherCli(["image", "launch", "release-check"], {
+          config,
+          timeoutMs: 2_000,
+        });
+
+        expect(result).toMatchObject({
+          exitCode: 1,
+          stderr: `Could not download VM 130-x64 into ${profile.vmsDir}: VM 130-x64 not found on files.pharo.org.`,
+        });
+      } finally {
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("when the downloaded VM holds no executable", async () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const { stateRoot, profile, config } = profileOnDisk(["exit 0"]);
+      writeImage(profile.imagesDir, "release-check", { pharoVersion: "130" });
+
+      try {
+        const result = await runLauncherCli(["image", "launch", "release-check"], {
+          config,
+          timeoutMs: 2_000,
+        });
+
+        expect(result).toMatchObject({
+          exitCode: 1,
+          stderr: `VM 130-x64 was downloaded into ${path.join(profile.vmsDir, "130-x64")}, but no Pharo executable is in it.`,
+        });
+      } finally {
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("reports a waited launch outside a profile as the Launcher's", async () => {
+    const result = await runLauncherCli(["image", "launch", "Task"], {
+      config: launcherConfig({
+        launcherDir: process.cwd(),
+        launcherVm: "unused",
+        launcherImage: "unused",
+        launcherScript: process.execPath,
+      }),
+      timeoutMs: 5_000,
+    });
+
+    // node given "image launch Task" fails to find the module "image": what
+    // matters is that something ran, and that it was the Launcher's command.
+    expect(result.exitCode).not.toBe(null);
+    expect(result.launch).toEqual({ by: "launcher" });
+  });
+
   it("refuses a display mode it cannot apply", async () => {
     // PharoLauncher's `image launch` takes --script and --detached, nothing
     // else. Without a profile this server runs that command rather than the
@@ -1102,6 +1259,7 @@ describe("buildLauncherCliInvocation", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("ok");
     expect(result.stderr).toBe("warn");
+    expect(result).not.toHaveProperty("launch");
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.timedOut).toBe(false);
     expect(result.timeoutReason).toBeUndefined();

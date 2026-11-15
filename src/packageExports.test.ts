@@ -8,12 +8,14 @@ import type {
   LauncherImage,
   LauncherImageInfo,
   LauncherImageList,
+  LauncherLaunchReport,
   LauncherOutputFormat,
   LauncherProcess,
   LauncherTemplate,
   NotAnImage,
   PharoLauncherConfigReport,
   RunNativeProcessToolOptions,
+  TemplateCategoriesResult,
 } from "./launcher.js";
 
 interface PackageManifest {
@@ -52,6 +54,7 @@ type LauncherResultTypes = [
   LauncherImage,
   LauncherImageInfo,
   LauncherImageList,
+  LauncherLaunchReport,
   NotAnImage,
   LauncherOutputFormat,
   LauncherProcess,
@@ -59,6 +62,7 @@ type LauncherResultTypes = [
   PharoLauncherConfigReport,
   CrossProfileImageCopyResult,
   RunNativeProcessToolOptions,
+  TemplateCategoriesResult,
 ];
 
 describe("package exports", () => {

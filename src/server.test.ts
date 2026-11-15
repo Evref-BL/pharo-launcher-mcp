@@ -575,7 +575,7 @@ describe("callTool", () => {
     expect(result.isError).toBe(true);
     expect(body).toMatchObject({
       ok: false,
-      diagnostic: expect.stringContaining("bootstrap file is missing or empty"),
+      diagnostic: expect.stringContaining("this profile still has no template sources"),
       templateSourcesBootstrap: {
         ok: false,
         action: "failed",

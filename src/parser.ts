@@ -1,86 +1,63 @@
 import type { LauncherOutputFormat, LauncherTemplate } from "./models.js";
+import { objectOpenings, stonFields, stringValue, urlValue } from "./ston.js";
 
 export interface ParseResult<T = unknown> {
   status: "parsed" | "unsupported" | "failed";
   format: LauncherOutputFormat;
   data?: T;
+  /** The category the Launcher marks as its default, for a category listing. */
+  defaultCategory?: string;
   message?: string;
 }
 
-function stonBlocks(source: string, className: string): string[] {
-  const blocks: string[] = [];
-  let index = 0;
-  const marker = `${className}{`;
+/**
+ * Every template of `template list --ston`, in the Launcher's order: each
+ * `PhL…Template{` object, whatever its class, a `PhLLocalTemplate` as well as a
+ * `PhLRemoteTemplate`. A `PhLTemplateGroup` is not one.
+ */
+export function parseLauncherTemplatesFromSton(source: string): LauncherTemplate[] {
+  return objectOpenings(source, /PhL\w*Template/).map((open) => {
+    const fields = stonFields(source, open);
+    const name = stringValue(fields.get("name"));
+    const category = stringValue(fields.get("category"));
+    const url = urlValue(fields.get("url"));
+    return {
+      ...(name ? { name } : {}),
+      ...(category ? { category } : {}),
+      ...(url ? { url } : {}),
+    };
+  });
+}
 
-  while (index < source.length) {
-    const start = source.indexOf(marker, index);
-    if (start === -1) {
-      break;
+const briefCategoryRow = /^(\*?)\s*\d+\s+(.*?)\s*$/;
+
+/**
+ * The categories of `template categories --brief`, in the Launcher's order.
+ *
+ * It prints one row per category and no header
+ * (`ConsoleListFormatter>>printAttributeRows`): the mark `*` on the default, or
+ * a space, when one is the default; the index, padded right to two; one space;
+ * the name, which the Launcher shortens past 75 characters as every cell.
+ */
+export function parseTemplateCategoriesFromBrief(source: string): {
+  categories: string[];
+  defaultCategory?: string;
+} {
+  const categories: string[] = [];
+  let defaultCategory: string | undefined;
+  for (const line of source.split(/\r?\n/)) {
+    const row = briefCategoryRow.exec(line);
+    if (!row || !row[2]) {
+      continue;
     }
 
-    let depth = 0;
-    let end = start + className.length;
-    for (; end < source.length; end += 1) {
-      const char = source[end];
-      if (char === "{") {
-        depth += 1;
-      } else if (char === "}") {
-        depth -= 1;
-        if (depth === 0) {
-          end += 1;
-          break;
-        }
-      }
+    categories.push(row[2]);
+    if (row[1] === "*") {
+      defaultCategory ??= row[2];
     }
-
-    blocks.push(source.slice(start, end));
-    index = end;
   }
 
-  return blocks;
-}
-
-function field(block: string, name: string): string | undefined {
-  return block.match(new RegExp(`#${name}:'([^']*)'`))?.[1];
-}
-
-function urlField(block: string): string | undefined {
-  return block.match(/#url:URL\['([^']*)'\]/)?.[1];
-}
-
-export function parseLauncherTemplatesFromSton(source: string): LauncherTemplate[] {
-  const blocks = [
-    ...stonBlocks(source, "PhLRemoteTemplate"),
-    ...stonBlocks(source, "PhLTemplate"),
-  ];
-
-  return blocks.map((block) => ({
-    ...(field(block, "name") ? { name: field(block, "name") } : {}),
-    ...(field(block, "category") ? { category: field(block, "category") } : {}),
-    ...(urlField(block) ? { url: urlField(block) } : {}),
-  }));
-}
-
-export function parseLauncherTemplatesFromText(source: string): LauncherTemplate[] {
-  return source
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !line.startsWith("#") && !line.startsWith("--"))
-    .map((line) => ({ name: line.replace(/^\d+\s+/, "") }));
-}
-
-export function parseTemplateCategoriesFromSton(source: string): string[] {
-  return [...source.matchAll(/'([^']+)'/g)].map((match) => match[1]);
-}
-
-export function parseTemplateCategoriesFromText(source: string): string[] {
-  return source
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !line.startsWith("#") && !line.startsWith("--"))
-    .map((line) => line.replace(/^\d+\s+/, ""));
+  return { categories, ...(defaultCategory ? { defaultCategory } : {}) };
 }
 
 function parseWithStatus<T>(
@@ -108,19 +85,19 @@ export function parseLauncherOutput(
   stdout: string,
 ): ParseResult {
   switch (toolName) {
-    case "pharo_launcher_template_category_list":
-      return parseWithStatus(format, () =>
-        format === "ston"
-          ? parseTemplateCategoriesFromSton(stdout)
-          : parseTemplateCategoriesFromText(stdout),
-      );
+    case "pharo_launcher_template_category_list": {
+      const { categories, defaultCategory } =
+        parseTemplateCategoriesFromBrief(stdout);
+      return {
+        status: "parsed",
+        format,
+        data: categories,
+        ...(defaultCategory ? { defaultCategory } : {}),
+      };
+    }
 
     case "pharo_launcher_template_list":
-      return parseWithStatus(format, () =>
-        format === "ston"
-          ? parseLauncherTemplatesFromSton(stdout)
-          : parseLauncherTemplatesFromText(stdout),
-      );
+      return parseWithStatus(format, () => parseLauncherTemplatesFromSton(stdout));
 
     default:
       return {

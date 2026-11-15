@@ -1,6 +1,6 @@
 import type { LauncherCliResult } from "./launcherCli.js";
 import type { LauncherCommandResult, LauncherOutputFormat } from "./models.js";
-import { parseLauncherOutput } from "./parser.js";
+import { parseLauncherOutput, type ParseResult } from "./parser.js";
 
 export interface NormalizeLauncherResultOptions {
   includeRaw?: boolean;
@@ -53,58 +53,28 @@ function failedOutputDiagnostic(
   return stdout ? { diagnostic: stdout } : undefined;
 }
 
-function templateSourceBootstrapDiagnostic(
-  toolName: string,
-  args: readonly string[],
-  result: LauncherCliResult,
-): Pick<LauncherCommandResult, "diagnostic" | "action"> | undefined {
-  if (toolName !== "pharo_launcher_template_list") {
-    return undefined;
+/**
+ * A message put at the end of a sentence: no second period when it ends with
+ * one, and after a colon, its lines indented, when it has several.
+ */
+export function sentenceWithMessage(sentence: string, message: string): string {
+  const lines = message.trim().split(/\r?\n/);
+  if (lines.length > 1) {
+    return `${sentence}:\n${lines.map((line) => (line ? `  ${line}` : "")).join("\n")}`;
   }
 
-  const output = `${result.stdout}\n${result.stderr}`;
-  if (
-    !/Image template category '.*' not found/i.test(output) ||
-    args.includes("--templateCategory")
-  ) {
-    return undefined;
-  }
-
-  return {
-    diagnostic:
-      "Pharo Launcher could not list default templates because the active template source inventory is empty or not bootstrapped.",
-    action:
-      "Verify PHARO_LAUNCHER_MCP_TEMPLATE_SOURCES_DIR, then refresh or seed the active profile template sources with pharo_launcher_template_update before planning image creation.",
-  };
+  const line = lines[0] ?? "";
+  return `${sentence}: ${line}${line.endsWith(".") ? "" : "."}`;
 }
 
-function scopedImageLaunchVmStoreDiagnostic(
-  toolName: string,
-  result: LauncherCliResult,
-): Pick<LauncherCommandResult, "diagnostic" | "action"> | undefined {
-  if (toolName !== "pharo_launcher_image_start") {
-    return undefined;
-  }
-
-  if (result.stderr.includes("Refusing profile-scoped image launch")) {
-    return {
-      diagnostic:
-        "Profile-scoped image launch was refused because Pharo Launcher can use the default VM store instead of the configured profile VM directory.",
-      action:
-        "Launch from an explicit profile only after Pharo Launcher initializes PhLVirtualMachineManager from the CLI configuration, or after pharo-launcher-mcp has a verified launch path that keeps VM artifacts inside PHARO_LAUNCHER_MCP_VMS_DIR.",
-    };
-  }
-
-  if (!result.stderr.includes("Profile-scoped image launch")) {
-    return undefined;
-  }
-
-  return {
-    diagnostic:
-      "Profile-scoped image launch could not prepare the profile-local image and VM paths needed for direct launch.",
-    action:
-      "Inspect pharo_launcher_image_info, PHARO_LAUNCHER_MCP_IMAGES_DIR and PHARO_LAUNCHER_MCP_VMS_DIR before retrying the launch.",
-  };
+/** What a Launcher command said when it failed. */
+export function launcherMessage(result: LauncherCliResult): string {
+  return (
+    outputTail(result.stderr) ??
+    outputTail(result.stdout) ??
+    result.timeoutReason ??
+    `it exited with ${result.exitCode ?? "no exit code"}`
+  );
 }
 
 export function normalizeLauncherResult(
@@ -116,7 +86,9 @@ export function normalizeLauncherResult(
   const ok = result.exitCode === 0 && !result.timedOut;
   const format = outputFormat(args);
   // A native process list hands over its records: nothing to parse back.
-  const parseResult = !ok
+  const parseResult: Omit<ParseResult, "status"> & {
+    status: ParseResult["status"] | "skipped";
+  } = !ok
     ? { status: "skipped" as const, format, message: "Command failed" }
     : toolName === "pharo_launcher_process_list" && result.processes
       ? { status: "parsed" as const, format, data: result.processes }
@@ -127,16 +99,13 @@ export function normalizeLauncherResult(
       : ok && parseResult.status === "unsupported"
         ? { message: trimmedMessage(result.stdout) }
         : undefined;
-  const diagnostic = templateSourceBootstrapDiagnostic(toolName, args, result);
-  const commandDiagnostic =
-    diagnostic ??
-    scopedImageLaunchVmStoreDiagnostic(toolName, result) ??
-    (!ok
-      ? failedOutputDiagnostic(
-          result,
-          options.diagnosticTailLength ?? defaultDiagnosticTailLength,
-        )
-      : undefined);
+  // A command's own output is its diagnostic: nothing here rewrites it.
+  const commandDiagnostic = !ok
+    ? failedOutputDiagnostic(
+        result,
+        options.diagnosticTailLength ?? defaultDiagnosticTailLength,
+      )
+    : undefined;
   const raw = {
     stdout: result.stdout,
     stderr: result.stderr,
@@ -162,5 +131,9 @@ export function normalizeLauncherResult(
         ? { timeoutReason: result.timeoutReason }
         : {}),
     },
+    ...(result.launch ? { launch: result.launch } : {}),
+    ...(ok && parseResult.defaultCategory
+      ? { defaultCategory: parseResult.defaultCategory }
+      : {}),
   };
 }

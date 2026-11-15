@@ -22,6 +22,35 @@ export interface LauncherCommandResult<T = unknown> {
     timedOut: boolean;
     timeoutReason?: string;
   };
+  /** What an image start ran, once it ran something. */
+  launch?: LauncherLaunchReport;
+}
+
+/**
+ * What an image start ran. In profile mode this server runs the VM itself
+ * (`by: "vm"`), and `output` is what that VM wrote, when the start waited for
+ * it. Outside a profile it runs the Launcher's `image launch`
+ * (`by: "launcher"`), and a detached start's pid is the Launcher's, not the
+ * VM's. A detached start writes its output to the files `logs` names.
+ */
+export type LauncherLaunchReport =
+  | {
+      by: "vm";
+      imagePath: string;
+      displayMode: "headless" | "interactive";
+      vmPath: string;
+      vmId: string;
+      /** Whether this start downloaded the VM first. */
+      vmUpdated: boolean;
+      pid?: number;
+      logs?: { stdout: string; stderr: string };
+      output?: { stdout: string; stderr: string };
+    }
+  | { by: "launcher"; pid?: number; logs?: { stdout: string; stderr: string } };
+
+/** A category listing, with the category the Launcher marks as its default. */
+export interface TemplateCategoriesResult extends LauncherCommandResult<string[]> {
+  defaultCategory?: string;
 }
 
 /**

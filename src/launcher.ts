@@ -21,6 +21,7 @@ import {
   buildLauncherCommandArgs,
   inputObject as argumentsObject,
   optionalString,
+  ProfileTooDeepError,
   requiredString,
   ToolInputError,
 } from "./commandCatalog.js";
@@ -56,7 +57,11 @@ import {
   whatItLacks,
   type ImageEntry,
 } from "./imageStore.js";
-import { normalizeLauncherResult, outputTail } from "./resultNormalizer.js";
+import {
+  launcherMessage,
+  normalizeLauncherResult,
+  sentenceWithMessage,
+} from "./resultNormalizer.js";
 import type { LauncherCliResult } from "./launcherCli.js";
 import { copyImageBetweenProfiles } from "./crossProfileCopy.js";
 
@@ -77,11 +82,15 @@ export type {
   LauncherImage,
   LauncherImageInfo,
   LauncherImageList,
+  LauncherLaunchReport,
   LauncherOutputFormat,
   LauncherProcess,
   LauncherTemplate,
   NotAnImage,
+  TemplateCategoriesResult,
 } from "./models.js";
+export { ProfileTooDeepError, ToolInputError } from "./commandCatalog.js";
+export { sentenceWithMessage } from "./resultNormalizer.js";
 export type { RunNativeProcessToolOptions } from "./processTools.js";
 export type { PharoLauncherConfigReport } from "./discovery.js";
 export type { CrossProfileImageCopyResult } from "./crossProfileCopy.js";
@@ -92,6 +101,7 @@ import type {
   LauncherImageList,
   LauncherProcess,
   LauncherTemplate,
+  TemplateCategoriesResult,
 } from "./models.js";
 
 const defaultTemplateSourcesUrl =
@@ -215,30 +225,6 @@ function runnerExceptionDiagnostic(
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-/**
- * A message put at the end of a sentence: no second period when it ends with
- * one, and after a colon, its lines indented, when it has several.
- */
-export function sentenceWithMessage(sentence: string, message: string): string {
-  const lines = message.trim().split(/\r?\n/);
-  if (lines.length > 1) {
-    return `${sentence}:\n${lines.map((line) => (line ? `  ${line}` : "")).join("\n")}`;
-  }
-
-  const line = lines[0] ?? "";
-  return `${sentence}: ${line}${line.endsWith(".") ? "" : "."}`;
-}
-
-/** What a Launcher command said when it failed. */
-function launcherMessage(result: LauncherCliResult): string {
-  return (
-    outputTail(result.stderr) ??
-    outputTail(result.stdout) ??
-    result.timeoutReason ??
-    `it exited with ${result.exitCode ?? "no exit code"}`
-  );
 }
 
 type MadeImage =
@@ -483,7 +469,8 @@ async function ensureProfileTemplateSourcesBootstrap(
       path: sourcesPath,
       url,
       diagnostic:
-        "Pharo Launcher template update completed, but the active profile template source bootstrap file is missing or empty.",
+        `Refreshed the template list, but this profile still has no template ` +
+        `sources: downloading ${url} failed (${message}).`,
       error: message,
     };
   }
@@ -528,8 +515,9 @@ export async function templateUpdateResult(
       ...normalized,
       ok: false,
       diagnostic: bootstrap.diagnostic,
-      action:
-        "Fetch or seed the active profile sources.list, then run pharo_launcher_template_update again before planning image creation.",
+      action: `Update the templates again, or put a sources.list in ${path.dirname(
+        bootstrap.path ?? "",
+      )}.`,
       templateSourcesBootstrap: bootstrap,
     };
   }
@@ -542,22 +530,21 @@ export async function templateUpdateResult(
   }
 
   const probeArgs = ["template", "list", "--ston"];
+  const probe = await runLauncherToolCommand(runner, probeArgs, commandOptions);
   const probeResult = normalizeToolResult(
     "pharo_launcher_template_list",
     probeArgs,
-    await runLauncherToolCommand(runner, probeArgs, commandOptions),
+    probe,
     commandOptions,
   );
   if (!probeResult.ok) {
     return {
       ...normalized,
       ok: false,
-      diagnostic:
-        probeResult.diagnostic ??
-        "Pharo Launcher template update completed, but template list still failed for the active profile.",
-      action:
-        probeResult.action ??
-        "Inspect pharo_launcher_template_list diagnostics before planning image creation.",
+      diagnostic: sentenceWithMessage(
+        "Refreshed the template list, but Pharo Launcher still cannot list templates",
+        launcherMessage(probe),
+      ),
       templateSourcesBootstrap: bootstrap,
       templateSourcesProbe: probeResult,
     };
@@ -724,12 +711,11 @@ export async function imageInfoResult(
   };
 }
 
-/** Table shape, on every command that prints one. */
+/**
+ * What every call takes beside its own arguments: whether its result carries
+ * what the Launcher wrote, as `raw`. PLexus passes it to `startImage`.
+ */
 export interface LauncherTableOptions {
-  format?: "ston" | "text";
-  brief?: boolean;
-  rowMode?: boolean;
-  delimiter?: string;
   includeRaw?: boolean;
 }
 
@@ -790,9 +776,10 @@ export interface PharoLauncher {
     input: ({ pid: number | string } | { imageName: string }) &
       LauncherTableOptions,
   ): Promise<LauncherCommandResult>;
+  /** The categories in the Launcher's order, and which is its default. */
   listTemplateCategories(
     input?: LauncherTableOptions,
-  ): Promise<LauncherCommandResult<string[]>>;
+  ): Promise<TemplateCategoriesResult>;
   listTemplates(
     input?: { templateCategory?: string } & LauncherTableOptions,
   ): Promise<LauncherCommandResult<LauncherTemplate[]>>;
@@ -852,7 +839,7 @@ function assertLauncherModulePathsFit(
 
   const budget = launcherModulePathBudget(vmsDirectory, longestDescendantLength);
   if (!budget.ok) {
-    throw new ToolInputError(launcherModulePathBudgetMessage(budget));
+    throw new ProfileTooDeepError(launcherModulePathBudgetMessage(budget));
   }
 }
 
@@ -890,7 +877,8 @@ export function openPharoLauncher(
     imageInfo: async (input) => imageInfoResult(input, resolved),
     createImage: (input) => command("pharo_launcher_image_create", input),
     copyImage: (input) => command("pharo_launcher_image_copy", input),
-    startImage: (input) => {
+    // A function that answers a promise refuses with one, not with a throw.
+    startImage: async (input) => {
       assertLauncherModulePathsFit(resolved.config);
       return command("pharo_launcher_image_start", input);
     },
@@ -898,7 +886,9 @@ export function openPharoLauncher(
     listProcesses: (input) => command("pharo_launcher_process_list", input),
     killProcess: (input) => command("pharo_launcher_process_kill", input),
     listTemplateCategories: (input) =>
-      command("pharo_launcher_template_category_list", input),
+      command("pharo_launcher_template_category_list", input) as Promise<
+        TemplateCategoriesResult
+      >,
     listTemplates: (input) => command("pharo_launcher_template_list", input),
     updateTemplates: (input) =>
       command("pharo_launcher_template_update", input) as Promise<

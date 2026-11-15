@@ -12,7 +12,12 @@ import {
   scanImages,
 } from "./imageStore.js";
 import { resolveLauncherScript } from "./launcherScript.js";
-import type { LauncherImage, LauncherProcess } from "./models.js";
+import type {
+  LauncherImage,
+  LauncherLaunchReport,
+  LauncherProcess,
+} from "./models.js";
+import { launcherMessage, sentenceWithMessage } from "./resultNormalizer.js";
 import { compactTokenText } from "./textTokens.js";
 import {
   shouldRunScriptThroughBash,
@@ -36,6 +41,8 @@ export interface LauncherCliResult {
   timeoutReason?: string;
   /** The processes a native process list saw, or a kill aimed at. */
   processes?: LauncherProcess[];
+  /** What an image start ran, once it ran something. */
+  launch?: LauncherLaunchReport;
 }
 
 export interface RunLauncherCliOptions {
@@ -304,6 +311,17 @@ function diagnosticProfileLines(env: NodeJS.ProcessEnv): string[] {
   });
 }
 
+const invocationFailurePrefix = "Failed to start PharoLauncher CLI command:";
+
+/**
+ * Whether a command's error output says it never started: the lines
+ * `launcherInvocationFailureDiagnostic` writes, which help with a broken
+ * installation as they are.
+ */
+export function isLauncherInvocationFailure(text: string | undefined): boolean {
+  return text?.startsWith(invocationFailurePrefix) ?? false;
+}
+
 export function launcherInvocationFailureDiagnostic(
   invocation: LauncherCliInvocation,
   error: Error | NodeJS.ErrnoException,
@@ -311,7 +329,7 @@ export function launcherInvocationFailureDiagnostic(
   const pathValue = invocation.env.PATH ?? process.env.PATH ?? "";
 
   return [
-    `Failed to start PharoLauncher CLI command: ${error.message}`,
+    `${invocationFailurePrefix} ${error.message}`,
     `source: ${invocation.source}`,
     `command: ${invocation.command}`,
     `args: ${invocation.args.join(" ")}`,
@@ -461,29 +479,6 @@ function validateInvocationSetup(
       startTime,
     );
   }
-}
-
-function trimForDiagnostic(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function commandFailureDiagnostic(
-  label: string,
-  result: LauncherCliResult,
-): string {
-  return [
-    `${label} failed.`,
-    `exitCode: ${result.exitCode ?? "unknown"}`,
-    `timedOut: ${result.timedOut}`,
-    ...(result.timeoutReason ? [`timeoutReason: ${result.timeoutReason}`] : []),
-    ...(trimForDiagnostic(result.stdout)
-      ? [`stdout:\n${trimForDiagnostic(result.stdout)}`]
-      : []),
-    ...(trimForDiagnostic(result.stderr)
-      ? [`stderr:\n${trimForDiagnostic(result.stderr)}`]
-      : []),
-  ].join("\n");
 }
 
 function runInvocation(
@@ -785,10 +780,12 @@ async function resolveProfileVmForLaunch(
   const vmId = imageVmId(image);
   if (!vmId) {
     return failedResult(
-      `Profile-scoped image launch could not determine a VM id for image ${target.imageName}.`,
+      `Cannot tell which VM ${image.name} needs: neither its meta-inf.ston, ` +
+        "its pharo.version nor its template gives a Pharo version.",
       startTime,
     );
   }
+  const vmsDir = path.resolve(target.profile.vmsDir);
 
   let vmPath = resolveProfileVmExecutable(target.profile, vmId);
   let vmUpdated = false;
@@ -801,10 +798,10 @@ async function resolveProfileVmForLaunch(
     vmUpdated = updateResult.exitCode === 0 && !updateResult.timedOut;
     if (!vmUpdated) {
       return failedResult(
-        [
-          `Profile-scoped image launch could not install VM ${vmId} inside PHARO_LAUNCHER_MCP_VMS_DIR (${target.profile.vmsDir}).`,
-          commandFailureDiagnostic("pharo_launcher_vm_update", updateResult),
-        ].join("\n"),
+        sentenceWithMessage(
+          `Could not download VM ${vmId} into ${vmsDir}`,
+          launcherMessage(updateResult),
+        ),
         startTime,
         {
           timedOut: updateResult.timedOut,
@@ -819,10 +816,8 @@ async function resolveProfileVmForLaunch(
 
   if (!vmPath) {
     return failedResult(
-      [
-        `Profile-scoped image launch could not resolve a profile-local VM executable for ${vmId} after VM update.`,
-        `PHARO_LAUNCHER_MCP_VMS_DIR: ${target.profile.vmsDir}`,
-      ].join("\n"),
+      `VM ${vmId} was downloaded into ${path.join(vmsDir, vmId)}, ` +
+        "but no Pharo executable is in it.",
       startTime,
     );
   }
@@ -891,6 +886,10 @@ function spawnDetached(
   logPaths: { stdoutPath: string; stderrPath: string },
   startTime: number,
   describe: (pid: number) => string[],
+  report: (
+    pid: number,
+    logs: { stdout: string; stderr: string },
+  ) => LauncherLaunchReport,
 ): LauncherCliResult {
   fs.mkdirSync(path.dirname(logPaths.stdoutPath), { recursive: true });
   const stdoutFd = fs.openSync(logPaths.stdoutPath, "a");
@@ -931,6 +930,10 @@ function spawnDetached(
       stderr: "",
       durationMs: Date.now() - startTime,
       timedOut: false,
+      launch: report(child.pid, {
+        stdout: logPaths.stdoutPath,
+        stderr: logPaths.stderrPath,
+      }),
     };
   } finally {
     fs.closeSync(stdoutFd);
@@ -950,6 +953,7 @@ function runDetachedProfileImageLaunch(
     plan.invocation,
     detachedLaunchLogPaths(config, args, startTime),
     startTime,
+    // PLexus reads these lines from raw.stdout, word for word.
     (pid) => [
       `Detached profile-scoped Pharo image pid ${pid}.`,
       `image: ${plan.imagePath}`,
@@ -958,7 +962,26 @@ function runDetachedProfileImageLaunch(
       `vmId: ${plan.vmId}`,
       `vmUpdated: ${plan.vmUpdated}`,
     ],
+    (pid, logs) => ({ ...vmLaunchReport(plan), pid, logs }),
   );
+}
+
+function vmLaunchReport(
+  plan: ProfileImageLaunchPlan,
+): Extract<LauncherLaunchReport, { by: "vm" }> {
+  return {
+    by: "vm",
+    imagePath: plan.imagePath,
+    displayMode: plan.displayMode,
+    vmPath: plan.vmPath,
+    vmId: plan.vmId,
+    vmUpdated: plan.vmUpdated,
+  };
+}
+
+/** Whether a command ran at all: one that never started has no exit code. */
+function ran(result: LauncherCliResult): boolean {
+  return result.exitCode !== null || result.timedOut;
 }
 
 async function runProfileScopedImageLaunch(
@@ -994,6 +1017,15 @@ async function runProfileScopedImageLaunch(
   const result = await runInvocation(plan.invocation, timeoutMs, startTime);
   return {
     ...result,
+    ...(ran(result)
+      ? {
+          launch: {
+            ...vmLaunchReport(plan),
+            output: { stdout: result.stdout, stderr: result.stderr },
+          },
+        }
+      : {}),
+    // PLexus reads these lines from raw.stdout, word for word.
     stdout: [
       `Profile-scoped Pharo image launch.`,
       `image: ${plan.imagePath}`,
@@ -1064,9 +1096,15 @@ export function runLauncherCli(
         detachedLaunchLogPaths(config, args, startTime),
         startTime,
         (pid) => [`Detached PharoLauncher CLI pid ${pid}.`],
+        (pid, logs) => ({ by: "launcher", pid, logs }),
       ),
     );
   }
 
-  return runInvocation(invocation, timeoutMs, startTime);
+  const result = runInvocation(invocation, timeoutMs, startTime);
+  return isImageLaunch(launcherArgs)
+    ? result.then((ended) =>
+        ran(ended) ? { ...ended, launch: { by: "launcher" } } : ended,
+      )
+    : result;
 }

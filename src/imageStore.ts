@@ -16,6 +16,13 @@ import type { PharoLauncherConfig } from "./config.js";
 import type { LauncherImage, LauncherProcess, NotAnImage } from "./models.js";
 import { launcherUserFilesLocation } from "./platform.js";
 import type { NativeProcessScope } from "./processTools.js";
+import {
+  firstObjectOpen,
+  objectFields,
+  stonFields,
+  stringValue,
+  urlValue,
+} from "./ston.js";
 
 /** Where the images directory came from. */
 export type ImagesDirectorySource =
@@ -294,112 +301,7 @@ export function whatItLacks(
 }
 
 // meta-inf.ston is read as the Launcher writes it, pretty-printed: `#key :
-// value`, any spacing, `''` for one quote. Only what a field needs is read, so
-// a field this reader does not know never makes the file unreadable.
-
-function skipString(source: string, index: number): number {
-  let i = index + 1;
-  while (i < source.length) {
-    if (source[i] === "'") {
-      if (source[i + 1] === "'") {
-        i += 2;
-        continue;
-      }
-      return i + 1;
-    }
-    i += 1;
-  }
-
-  return i;
-}
-
-function endOfValue(source: string, index: number): number {
-  let depth = 0;
-  let i = index;
-  while (i < source.length) {
-    const char = source[i];
-    if (char === "'") {
-      i = skipString(source, i);
-      continue;
-    }
-    if (char === "{" || char === "[" || char === "(") {
-      depth += 1;
-    } else if (char === "}" || char === "]" || char === ")") {
-      if (depth === 0) {
-        return i;
-      }
-      depth -= 1;
-    } else if (char === "," && depth === 0) {
-      return i;
-    }
-    i += 1;
-  }
-
-  return i;
-}
-
-/** The first `{` that opens an object, outside any string. */
-function firstObjectOpen(source: string): number {
-  let i = 0;
-  while (i < source.length) {
-    if (source[i] === "'") {
-      i = skipString(source, i);
-      continue;
-    }
-    if (source[i] === "{") {
-      return i;
-    }
-    i += 1;
-  }
-
-  return -1;
-}
-
-/** The fields of the object whose `{` is at `open`, as their source. */
-function stonFields(source: string, open: number): Map<string, string> {
-  const fields = new Map<string, string>();
-  const key = /\s*#([A-Za-z_][A-Za-z0-9_]*)\s*:/y;
-  let i = open + 1;
-
-  while (i < source.length) {
-    while (/[\s,]/.test(source[i] ?? "")) {
-      i += 1;
-    }
-    key.lastIndex = i;
-    const match = key.exec(source);
-    if (!match) {
-      break;
-    }
-
-    const valueStart = key.lastIndex;
-    const valueEnd = endOfValue(source, valueStart);
-    fields.set(match[1]!, source.slice(valueStart, valueEnd).trim());
-    i = valueEnd;
-  }
-
-  return fields;
-}
-
-function objectFields(value: string | undefined): Map<string, string> | undefined {
-  if (value === undefined || !/^[A-Za-z]\w*\s*\{/.test(value)) {
-    return undefined;
-  }
-
-  return stonFields(value, value.indexOf("{"));
-}
-
-function stringValue(value: string | undefined): string | undefined {
-  const match = value === undefined ? null : /^'((?:''|[^'])*)'$/s.exec(value);
-  return match ? match[1]!.replaceAll("''", "'") : undefined;
-}
-
-function urlValue(value: string | undefined): string | undefined {
-  const url =
-    value === undefined
-      ? null
-      : /^URL\s*\[\s*('(?:''|[^'])*')\s*\]$/s.exec(value);
-  return stringValue(url ? url[1] : value);
-}
+// value`, any spacing, `''` for one quote.
 
 function nonEmpty(value: string | undefined): string | undefined {
   return value === undefined || value.length === 0 ? undefined : value;

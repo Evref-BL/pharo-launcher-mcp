@@ -4,7 +4,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LauncherCliRunner } from "./discovery.js";
 import type { LauncherCliResult } from "./launcherCli.js";
-import { openPharoLauncher, type PharoLauncher } from "./launcher.js";
+import {
+  openPharoLauncher,
+  ProfileTooDeepError,
+  ToolInputError,
+  type PharoLauncher,
+} from "./launcher.js";
+import { launcherModulePathLimit } from "./platform.js";
 import { toolNames } from "./server.js";
 import {
   cliMetaInf,
@@ -111,7 +117,7 @@ describe("openPharoLauncher", () => {
 
     await expect(
       launcher.killProcess({ pid: 1234, imageName: "Task" } as never),
-    ).rejects.toThrow("requires exactly one of pid or imageName");
+    ).rejects.toThrow("Give pid or imageName, not both.");
   });
 
   it("scopes to a profile from an environment, with no process of its own", () => {
@@ -687,5 +693,29 @@ describe("startImage", () => {
 
     expect(result.ok).toBe(true);
     expect(calls).toEqual([["image", "launch", "plexus-build-1"]]);
+  });
+
+  // A VM there could not load its own modules, and would say a symbol is
+  // missing from a file that is there.
+  it("refuses a profile too deep for its VM, as a ToolInputError of its own", async () => {
+    const profile = profileOnDisk();
+    const deep = {
+      ...profile,
+      vmsDir: path.join(profile.stateRoot, "v".repeat(launcherModulePathLimit)),
+    };
+    const launcher = openPharoLauncher({
+      config: testConfig({ profile: deep }),
+      runner: unusedRunner,
+    });
+
+    const refusal = await launcher
+      .startImage({ imageName: "release-check" })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(ProfileTooDeepError);
+    expect(refusal).toBeInstanceOf(ToolInputError);
+    expect((refusal as Error).message).toContain(
+      "The VM directory is too deep for Pharo to load its modules",
+    );
   });
 });
