@@ -31,17 +31,28 @@ const emptyInputSchema = {
   additionalProperties: false,
 } as const;
 const stringSchema = { type: "string", minLength: 1 } as const;
+/** A path of a profile, where stateRoot puts it. */
+function defaultsTo(place: string) {
+  return { ...stringSchema, description: `Defaults to <stateRoot>/${place}.` } as const;
+}
+// Undescribed, every path reads as one to fill in, and a model guesses each.
 const scopedProfileSchema = {
   type: "object",
+  description:
+    "A launcher profile, given by its stateRoot. Every other path defaults to its place " +
+    "inside stateRoot: give one only when the profile keeps it elsewhere.",
   properties: {
-    stateRoot: stringSchema,
-    launcherConfiguration: stringSchema,
-    imagesDir: stringSchema,
-    vmsDir: stringSchema,
-    templateSourcesDir: stringSchema,
-    initScriptsDir: stringSchema,
-    logsDir: stringSchema,
-    profileName: stringSchema,
+    stateRoot: {
+      ...stringSchema,
+      description: "Absolute path of the directory that holds the profile's images/ directory.",
+    },
+    launcherConfiguration: defaultsTo("launcher/pharo-launcher-cli-config.ston"),
+    imagesDir: defaultsTo("images"),
+    vmsDir: defaultsTo("vms"),
+    templateSourcesDir: defaultsTo("templates"),
+    initScriptsDir: defaultsTo("init-scripts"),
+    logsDir: defaultsTo("logs"),
+    profileName: { ...stringSchema, description: "Optional. The copy does not use it." },
   },
   additionalProperties: false,
 } as const;
@@ -72,8 +83,9 @@ const tools = [
   {
     name: "pharo_launcher_image_copy_between_profiles",
     description:
-      "Copy a launcher image from one explicitly supplied scoped launcher profile to another explicitly supplied scoped launcher profile. " +
-      "A profile is given by its stateRoot, as pharo_launcher_config prints it.",
+      "Copy a launcher image from one launcher profile to another. A profile is given by its " +
+      "stateRoot, the directory that holds its images/ directory; pharo_launcher_config prints " +
+      "this server's own. Every profile path must exist: the copy creates none.",
     inputSchema: copyBetweenProfilesInputSchema,
   },
   ...launcherCommandTools,

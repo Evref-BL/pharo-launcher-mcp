@@ -156,9 +156,46 @@ describe("the server", () => {
       pharo_launcher_process_kill:
         "Kill a process running an image of this Launcher, by pid or by image name. A pid stops that process alone; an image name stops every process running that image.",
     });
-    expect(descriptions.pharo_launcher_image_copy_between_profiles).toMatch(
-      / A profile is given by its stateRoot, as pharo_launcher_config prints it\.$/,
+    await client.close();
+  });
+
+  // config prints this server's profile only: another's stateRoot has to be
+  // recognizable from the description, and every other path from stateRoot.
+  it("says what another profile's stateRoot is, and where each other path defaults to", async () => {
+    const client = new Client({ name: "probe", version: "0.0.0" }, {});
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await createServer().connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const copy = (await client.listTools()).tools.find(
+      (tool) => tool.name === "pharo_launcher_image_copy_between_profiles",
     );
+    const profile = copy?.inputSchema.properties?.destinationProfile as {
+      description: string;
+      properties: Record<string, { description: string }>;
+    };
+
+    expect(copy?.description).toBe(
+      "Copy a launcher image from one launcher profile to another. A profile is given by its " +
+        "stateRoot, the directory that holds its images/ directory; pharo_launcher_config prints " +
+        "this server's own. Every profile path must exist: the copy creates none.",
+    );
+    expect(profile.description).toBe(
+      "A launcher profile, given by its stateRoot. Every other path defaults to its place " +
+        "inside stateRoot: give one only when the profile keeps it elsewhere.",
+    );
+    expect(
+      Object.fromEntries(Object.entries(profile.properties).map(([name, each]) => [name, each.description])),
+    ).toEqual({
+      stateRoot: "Absolute path of the directory that holds the profile's images/ directory.",
+      launcherConfiguration: "Defaults to <stateRoot>/launcher/pharo-launcher-cli-config.ston.",
+      imagesDir: "Defaults to <stateRoot>/images.",
+      vmsDir: "Defaults to <stateRoot>/vms.",
+      templateSourcesDir: "Defaults to <stateRoot>/templates.",
+      initScriptsDir: "Defaults to <stateRoot>/init-scripts.",
+      logsDir: "Defaults to <stateRoot>/logs.",
+      profileName: "Optional. The copy does not use it.",
+    });
     await client.close();
   });
 });
@@ -1208,6 +1245,7 @@ describe("pharo_launcher_image_copy_between_profiles", () => {
     const source = temporary("pharo-launcher-mcp-source-profile-");
     const destination = temporary("pharo-launcher-mcp-destination-profile-");
     writeImage(path.join(source, "images"), "pricing", { metaInf: cliMetaInf(stable, stableUrl) });
+    fs.mkdirSync(path.join(destination, "images"));
     return { source, destination };
   }
 
@@ -1253,6 +1291,60 @@ describe("pharo_launcher_image_copy_between_profiles", () => {
     expect(text(await copy(source, destination))).toBe(
       `Cannot copy image pricing to ${path.join(destination, "images", "pricing")}: that path already exists, and a copy never replaces it. Pick another destinationImageName, or remove it first.`,
     );
+  });
+
+  it("says a stateRoot is the directory that holds images/, and creates none", async () => {
+    const { source, destination } = profiles();
+    const missing = path.join(destination, "team");
+    const empty = temporary("pharo-launcher-mcp-not-a-profile-");
+    const advice =
+      "A profile's stateRoot is the directory that holds its images/ directory; " +
+      "pharo_launcher_config prints this server's own.";
+
+    const notThere = await copy(source, missing);
+    const noImages = await copy(source, empty);
+
+    expect(notThere.isError).toBe(true);
+    expect(text(notThere)).toBe(
+      `Cannot copy image pricing: destinationProfile.stateRoot ${missing} does not exist. ${advice}`,
+    );
+    expect(text(noImages)).toBe(
+      `Cannot copy image pricing: destinationProfile.stateRoot ${empty} holds no images/ directory. ${advice}`,
+    );
+    expect(fs.existsSync(missing)).toBe(false);
+    expect(fs.existsSync(path.join(empty, "images"))).toBe(false);
+  });
+
+  it("names each profile path given that does not exist, and says the others default", async () => {
+    const { source, destination } = profiles();
+    // Every path filled in, the configuration's guessed: launcher.json, where
+    // a profile keeps launcher/pharo-launcher-cli-config.ston.
+    const guessed = (root: string, profileName: string) => ({
+      stateRoot: root,
+      imagesDir: path.join(root, "images"),
+      launcherConfiguration: path.join(root, "launcher.json"),
+      profileName,
+    });
+
+    const result = await callTool(
+      "pharo_launcher_image_copy_between_profiles",
+      {
+        sourceProfile: guessed(source, "profile"),
+        destinationProfile: guessed(destination, "team"),
+        sourceImageName: "pricing",
+        destinationImageName: "pricing",
+      },
+      { runner: unusedRunner },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toBe(
+      `Cannot copy image pricing: sourceProfile.launcherConfiguration ${path.join(source, "launcher.json")} ` +
+        `and destinationProfile.launcherConfiguration ${path.join(destination, "launcher.json")} do not exist. ` +
+        "Leave out every path but stateRoot unless the profile keeps it elsewhere: " +
+        "each defaults to its place inside stateRoot.",
+    );
+    expect(fs.existsSync(path.join(destination, "images", "pricing"))).toBe(false);
   });
 
   it("says a copy that did not check out was removed", async () => {

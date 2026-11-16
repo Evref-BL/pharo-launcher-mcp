@@ -66,6 +66,7 @@ interface PathMetadata {
 }
 
 interface TouchedPaths {
+  /** Empty: a copy creates no profile directory, and refuses one that does not exist. */
   createdDirectories: string[];
   copiedDirectories: Array<{ from: string; to: string }>;
   renamedFiles: Array<{ from: string; to: string }>;
@@ -93,8 +94,19 @@ interface CleanupGuidance {
   temporaryDirectory?: string;
 }
 
+/** A profile path that does not exist, which a copy does not create. */
+export interface MissingProfilePath {
+  profile: "sourceProfile" | "destinationProfile";
+  field: ProfilePathKey;
+  path: string;
+  /** False for the images directory taken from stateRoot. */
+  given: boolean;
+}
+
 /** Why a copy between profiles failed, so a caller need not read its text. */
 export type CrossProfileCopyFailure =
+  /** A profile path does not exist; `missingProfilePaths` names each. */
+  | "profile-path-missing"
   /** The source image's directory does not exist. */
   | "source-missing"
   /** It holds no `<source>.image`. */
@@ -122,6 +134,7 @@ export interface CrossProfileImageCopyResult {
   destinationImage: ImagePathMetadata;
   touchedPaths: TouchedPaths;
   cleanup: CleanupGuidance;
+  missingProfilePaths?: MissingProfilePath[];
   metadataRepair?: ImageMetadataRepairResult;
   verification?: CopyVerification;
   message?: string;
@@ -590,6 +603,60 @@ function failureResult(
   };
 }
 
+// A copy creates no profile path. One that does not exist was guessed, and an
+// images directory made for it would hold a copy no Launcher reads, under an
+// answer that says it succeeded. A missing stateRoot is named alone: the paths
+// taken from it are missing with it.
+function missingProfilePaths(
+  profile: ResolvedScopedProfile,
+  label: MissingProfilePath["profile"],
+): MissingProfilePath[] {
+  if (profile.stateRoot !== undefined && !fs.existsSync(profile.stateRoot)) {
+    return [{ profile: label, field: "stateRoot", path: profile.stateRoot, given: true }];
+  }
+
+  const missing: MissingProfilePath[] = profilePathKeys
+    .filter((field) => profile.explicitFields.includes(field))
+    .flatMap((field) => {
+      const value = profile[field];
+      return value === undefined || fs.existsSync(value)
+        ? []
+        : [{ profile: label, field, path: value, given: true }];
+    });
+  if (!profile.explicitFields.includes("imagesDir") && !fs.existsSync(profile.imagesDir)) {
+    missing.push({ profile: label, field: "imagesDir", path: profile.imagesDir, given: false });
+  }
+  return missing;
+}
+
+/** `A, B and C`. */
+function allOf(items: readonly string[]): string {
+  return items.length <= 1
+    ? (items[0] ?? "")
+    : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
+
+/** `A /a and B /b do not exist.`, then each stateRoot that holds no images/. */
+function missingProfilePathsText(
+  request: CopyRequest,
+  missing: readonly MissingProfilePath[],
+): string {
+  const absent = missing
+    .filter((each) => each.given)
+    .map((each) => `${each.profile}.${each.field} ${each.path}`);
+  return [
+    absent.length > 0 && `${allOf(absent)} ${absent.length === 1 ? "does" : "do"} not exist.`,
+    ...missing
+      .filter((each) => !each.given)
+      .map(
+        (each) =>
+          `${each.profile}.stateRoot ${request[each.profile].stateRoot} holds no images/ directory.`,
+      ),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 // Everything the copy touched was touched inside the temporary directory, and
 // the move is what makes the copy real. Say where those paths are now: a
 // caller that walks touchedPaths to clean up can only act on a path that
@@ -782,6 +849,24 @@ export function copyImageBetweenProfiles(
   );
   let temporaryDirectory: string | undefined;
 
+  const missing = [
+    ...missingProfilePaths(request.sourceProfile, "sourceProfile"),
+    ...missingProfilePaths(request.destinationProfile, "destinationProfile"),
+  ];
+  if (missing.length > 0) {
+    return {
+      ...failureResult(
+        request,
+        touchedPaths,
+        "profile-path-missing",
+        missingProfilePathsText(request, missing),
+        "A profile's stateRoot is the directory that holds its images/ directory,"
+          + " and every other path defaults to its place inside it.",
+      ),
+      missingProfilePaths: missing,
+    };
+  }
+
   if (pathMetadata(sourceImage.directory).kind !== "directory") {
     return failureResult(
       request,
@@ -822,14 +907,6 @@ export function copyImageBetweenProfiles(
   }
 
   try {
-    const destinationImagesDirExists = fs.existsSync(
-      request.destinationProfile.imagesDir,
-    );
-    fs.mkdirSync(request.destinationProfile.imagesDir, { recursive: true });
-    if (!destinationImagesDirExists) {
-      touchedPaths.createdDirectories.push(request.destinationProfile.imagesDir);
-    }
-
     temporaryDirectory = uniqueTemporaryDirectory(
       request.destinationProfile.imagesDir,
       request.destinationImageName,

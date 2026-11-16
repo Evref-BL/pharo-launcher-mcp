@@ -129,13 +129,18 @@ profile.
 
 Both `sourceProfile` and `destinationProfile` must include either:
 
-- `stateRoot`, or
+- `stateRoot`, the directory that holds the profile's `images/` directory, or
 - the complete explicit path set: `launcherConfiguration`, `imagesDir`,
   `vmsDir`, `templateSourcesDir`, `initScriptsDir`, and `logsDir`.
 
-All profile paths must be absolute. Image names must be launcher image names,
-not paths. Destination collisions are refused. `pharo_launcher_config` prints
-the active profile's `stateRoot`, which is how a profile is given here.
+`pharo_launcher_config` prints the active profile's `stateRoot`. Given a
+`stateRoot`, every other path defaults to its place in the layout above, and is
+given only for a profile that keeps it elsewhere.
+
+All profile paths must be absolute, and must exist: the copy creates none. A
+`stateRoot` that does not exist or holds no `images/` directory, and any path
+given that does not exist, is refused and named. Image names must be launcher
+image names, not paths. Destination collisions are refused.
 
 Example:
 
@@ -156,7 +161,7 @@ Example:
 
 The tool answers one line naming the image and both profiles, each by its
 `stateRoot` (or its `imagesDir` when it has none), then the copy's path. A
-failure is one sentence saying what went wrong and the way out. A destination
+failure says what went wrong and the way out. A destination
 that already exists is named by its directory: copy under another name, or
 delete it with the destination profile active. An existing image is never
 replaced.
@@ -164,10 +169,12 @@ replaced.
 The library's `copyImageBetweenProfiles` answers the full result, as before:
 source and destination image metadata, touched paths, metadata repair,
 verification, and cleanup guidance. A failure adds `failure`, which names what
-went wrong (`source-missing`, `source-image-missing`,
+went wrong (`profile-path-missing`, `source-missing`, `source-image-missing`,
 `source-metadata-missing`, `destination-exists`, `preflight`, `post-move` or
 `exception`), and `message`, one line naming both images and both profiles,
-next to the `diagnostic` and `action` it is built from.
+next to the `diagnostic` and `action` it is built from. With
+`profile-path-missing`, `missingProfilePaths` names each path that does not
+exist, by profile and field.
 
 ## Cleanup Rules
 
