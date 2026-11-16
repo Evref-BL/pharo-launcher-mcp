@@ -624,8 +624,8 @@ function profilePathAdvice(result: CrossProfileImageCopyResult): string {
     each.given && each.field !== "stateRoot" && result[each.profile].stateRoot !== undefined;
   return [
     missing.some((each) => !override(each)) &&
-      " A profile's stateRoot is the directory that holds its images/ directory; " +
-        "pharo_launcher_config prints this server's own.",
+      " Give as stateRoot the directory that holds the profile's images/ directory; " +
+        "pharo_launcher_config prints this server's own stateRoot.",
     missing.some(override) &&
       " Leave out every path but stateRoot unless the profile keeps it elsewhere: " +
         "each defaults to its place inside stateRoot.",

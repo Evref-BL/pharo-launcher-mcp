@@ -860,8 +860,8 @@ export function copyImageBetweenProfiles(
         touchedPaths,
         "profile-path-missing",
         missingProfilePathsText(request, missing),
-        "A profile's stateRoot is the directory that holds its images/ directory,"
-          + " and every other path defaults to its place inside it.",
+        "Give as stateRoot the directory that holds the profile's images/ directory;"
+          + " every other path defaults to its place inside it.",
       ),
       missingProfilePaths: missing,
     };

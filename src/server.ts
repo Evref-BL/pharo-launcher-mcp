@@ -52,7 +52,10 @@ const scopedProfileSchema = {
     templateSourcesDir: defaultsTo("templates"),
     initScriptsDir: defaultsTo("init-scripts"),
     logsDir: defaultsTo("logs"),
-    profileName: { ...stringSchema, description: "Optional. The copy does not use it." },
+    profileName: {
+      ...stringSchema,
+      description: "A label for the profile; the copy does not use it.",
+    },
   },
   additionalProperties: false,
 } as const;
@@ -85,7 +88,7 @@ const tools = [
     description:
       "Copy a launcher image from one launcher profile to another. A profile is given by its " +
       "stateRoot, the directory that holds its images/ directory; pharo_launcher_config prints " +
-      "this server's own. Every profile path must exist: the copy creates none.",
+      "this server's own stateRoot. Every profile path must exist: the copy creates none.",
     inputSchema: copyBetweenProfilesInputSchema,
   },
   ...launcherCommandTools,
