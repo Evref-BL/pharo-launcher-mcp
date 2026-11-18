@@ -7,10 +7,13 @@ import {
   resolveScopedProfileInput,
 } from "./crossProfileCopy.js";
 
+/** A profile's state root, with the images/ directory every profile has. */
 function tempProfileRoot(name: string): string {
-  return fs.mkdtempSync(
+  const root = fs.mkdtempSync(
     path.join(os.tmpdir(), `pharo-launcher-mcp-${name}-profile-`),
   );
+  fs.mkdirSync(path.join(root, "images"));
+  return root;
 }
 
 function removeProfileRoot(root: string): void {
@@ -564,6 +567,10 @@ describe("cross-profile image copy", () => {
     try {
       writeImage(sourceRoot, "Base");
       fs.writeFileSync(destinationImages, "");
+      fs.writeFileSync(path.join(destinationRoot, "launcher.ston"), "");
+      for (const directory of ["vms", "templates", "init-scripts", "logs"]) {
+        fs.mkdirSync(path.join(destinationRoot, directory));
+      }
 
       const result = copyImageBetweenProfiles({
         sourceProfile: { stateRoot: sourceRoot },
@@ -584,6 +591,123 @@ describe("cross-profile image copy", () => {
       expect(result.message).toContain(
         `Cannot copy image Base from ${sourceRoot} to ${destinationImages} as Task:`,
       );
+    } finally {
+      removeProfileRoot(sourceRoot);
+      removeProfileRoot(destinationRoot);
+    }
+  });
+
+  it("refuses a stateRoot that does not exist, and creates nothing", () => {
+    const sourceRoot = tempProfileRoot("source");
+    const parent = tempProfileRoot("parent");
+    const destinationRoot = path.join(parent, "team");
+    try {
+      writeImage(sourceRoot, "Base");
+
+      const result = copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot },
+        destinationProfile: { stateRoot: destinationRoot },
+        sourceImageName: "Base",
+        destinationImageName: "Base",
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        failure: "profile-path-missing",
+        missingProfilePaths: [
+          {
+            profile: "destinationProfile",
+            field: "stateRoot",
+            path: destinationRoot,
+            given: true,
+          },
+        ],
+        diagnostic: `destinationProfile.stateRoot ${destinationRoot} does not exist.`,
+      });
+      expect(result.message).toContain(
+        `Cannot copy image Base from ${sourceRoot} to ${destinationRoot}: destinationProfile.stateRoot`,
+      );
+      expect(fs.existsSync(destinationRoot)).toBe(false);
+    } finally {
+      removeProfileRoot(sourceRoot);
+      removeProfileRoot(parent);
+    }
+  });
+
+  it("refuses a stateRoot that holds no images/ directory, and creates none", () => {
+    // The directory that holds the profiles, given as one of them.
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pharo-launcher-mcp-profiles-"));
+    const sourceRoot = path.join(parent, "profile");
+    try {
+      writeImage(sourceRoot, "Base");
+
+      const result = copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot },
+        destinationProfile: { stateRoot: parent },
+        sourceImageName: "Base",
+        destinationImageName: "Base",
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        failure: "profile-path-missing",
+        missingProfilePaths: [
+          {
+            profile: "destinationProfile",
+            field: "imagesDir",
+            path: path.join(parent, "images"),
+            given: false,
+          },
+        ],
+        diagnostic: `destinationProfile.stateRoot ${parent} holds no images/ directory.`,
+      });
+      expect(fs.existsSync(path.join(parent, "images"))).toBe(false);
+    } finally {
+      removeProfileRoot(parent);
+    }
+  });
+
+  it("refuses every profile path given that does not exist", () => {
+    const sourceRoot = tempProfileRoot("source");
+    const destinationRoot = tempProfileRoot("destination");
+    // Every path filled in, the configuration's guessed.
+    const guessed = (root: string) => ({
+      stateRoot: root,
+      imagesDir: path.join(root, "images"),
+      launcherConfiguration: path.join(root, "launcher.json"),
+    });
+    try {
+      writeImage(sourceRoot, "Base");
+
+      const result = copyImageBetweenProfiles({
+        sourceProfile: guessed(sourceRoot),
+        destinationProfile: guessed(destinationRoot),
+        sourceImageName: "Base",
+        destinationImageName: "Base",
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        failure: "profile-path-missing",
+        missingProfilePaths: [
+          {
+            profile: "sourceProfile",
+            field: "launcherConfiguration",
+            path: path.join(sourceRoot, "launcher.json"),
+            given: true,
+          },
+          {
+            profile: "destinationProfile",
+            field: "launcherConfiguration",
+            path: path.join(destinationRoot, "launcher.json"),
+            given: true,
+          },
+        ],
+        diagnostic:
+          `sourceProfile.launcherConfiguration ${path.join(sourceRoot, "launcher.json")} and ` +
+          `destinationProfile.launcherConfiguration ${path.join(destinationRoot, "launcher.json")} do not exist.`,
+      });
+      expect(fs.existsSync(imageDirectory(destinationRoot, "Base"))).toBe(false);
     } finally {
       removeProfileRoot(sourceRoot);
       removeProfileRoot(destinationRoot);

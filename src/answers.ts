@@ -614,6 +614,26 @@ function verificationClause(result: CrossProfileImageCopyResult): string {
   return text.charAt(0).toLowerCase() + text.slice(1);
 }
 
+/**
+ * What to give instead of a profile path that does not exist. config prints
+ * this server's own stateRoot only, so another's is said by what it holds.
+ */
+function profilePathAdvice(result: CrossProfileImageCopyResult): string {
+  const missing = result.missingProfilePaths ?? [];
+  const override = (each: (typeof missing)[number]): boolean =>
+    each.given && each.field !== "stateRoot" && result[each.profile].stateRoot !== undefined;
+  return [
+    missing.some((each) => !override(each)) &&
+      " Give as stateRoot the directory that holds the profile's images/ directory; " +
+        "pharo_launcher_config prints this server's own stateRoot.",
+    missing.some(override) &&
+      " Leave out every path but stateRoot unless the profile keeps it elsewhere: " +
+        "each defaults to its place inside stateRoot.",
+  ]
+    .filter(Boolean)
+    .join("");
+}
+
 const answerCopyBetweenProfiles: Answer = async (context, input) => {
   const result = context.launcher.copyImageBetweenProfiles(input);
   const source = inlineValue(result.sourceImageName);
@@ -630,6 +650,8 @@ const answerCopyBetweenProfiles: Answer = async (context, input) => {
 
   const sourceDirectory = result.sourceImage.directory;
   switch (result.failure) {
+    case "profile-path-missing":
+      return failure(`Cannot copy image ${source}: ${result.diagnostic}${profilePathAdvice(result)}`);
     case "source-missing":
     case "source-image-missing":
     case "source-metadata-missing":
