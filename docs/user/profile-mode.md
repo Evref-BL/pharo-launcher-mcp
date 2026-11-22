@@ -119,7 +119,9 @@ Launch supports:
 `displayMode` can be `headless` or `interactive`, and only here: PharoLauncher's
 own `image launch` has no display mode, so outside profile mode a launch that
 asks for one is refused. Detached launches return the spawned PID and log paths
-under the profile log directory.
+under the profile log directory. Each start leaves the logs of the image's last
+three starts and, when the log directory is inside the state root, removes those
+of images the profile no longer holds; a delete removes the image's.
 
 ## Cross-Profile Image Copy
 

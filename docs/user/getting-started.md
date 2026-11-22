@@ -152,7 +152,8 @@ Launcher state scope. pharo-launcher-mcp does not create a hidden default
 profile or redirect images and VMs into its own cache.
 
 Detached image launches may write log files under `.pharo-launcher-mcp/logs` in
-the server working directory when no profile log directory is active.
+the server working directory when no profile log directory is active, keeping
+those of each image's last three starts.
 
 ## When To Use A Profile
 

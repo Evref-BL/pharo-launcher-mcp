@@ -758,3 +758,80 @@ describe("startImage", () => {
     );
   });
 });
+
+describe("deleteImage and deleteLaunchLogs", () => {
+  function writeLogs(logsDir: string, imageName: string): string[] {
+    fs.mkdirSync(logsDir, { recursive: true });
+    const files = ["out", "err"].map((stream) =>
+      path.join(logsDir, `2026-01-01T00-00-00-000Z-${imageName}-launch.${stream}.log`),
+    );
+    for (const file of files) {
+      fs.writeFileSync(file, "");
+    }
+    return files;
+  }
+
+  it("deletes the logs of the image's starts once the Launcher deleted it", async () => {
+    const profile = profileOnDisk();
+    writeImage(profile.imagesDir, "task");
+    const taskLogs = writeLogs(profile.logsDir, "task");
+    const otherLogs = writeLogs(profile.logsDir, "task-2");
+    const { runner, calls } = recordingRunner(() => {
+      fs.rmSync(path.join(profile.imagesDir, "task"), { recursive: true, force: true });
+      return exited(0);
+    });
+    const launcher = openPharoLauncher({ config: testConfig({ profile }), runner });
+
+    const result = await launcher.deleteImage({ imageName: "task" });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toEqual([["image", "delete", "--force", "task"]]);
+    expect(taskLogs.filter((file) => fs.existsSync(file))).toEqual([]);
+    expect(otherLogs.filter((file) => fs.existsSync(file))).toEqual(otherLogs);
+  });
+
+  it("keeps the logs when the Launcher did not delete the image", async () => {
+    const profile = profileOnDisk();
+    writeImage(profile.imagesDir, "task");
+    const taskLogs = writeLogs(profile.logsDir, "task");
+    const launcher = openPharoLauncher({
+      config: testConfig({ profile }),
+      runner: async () => exited(1, "", "cannot delete"),
+    });
+
+    const result = await launcher.deleteImage({ imageName: "task" });
+
+    expect(result.ok).toBe(false);
+    expect(taskLogs.filter((file) => fs.existsSync(file))).toEqual(taskLogs);
+  });
+
+  it("deletes the logs of an image whose directory a caller removed itself, with no Launcher call", () => {
+    const profile = profileOnDisk();
+    const taskLogs = writeLogs(profile.logsDir, "task");
+    const launcher = openPharoLauncher({ config: testConfig({ profile }), runner: unusedRunner });
+
+    launcher.deleteLaunchLogs({ imageName: "task" });
+
+    expect(taskLogs.filter((file) => fs.existsSync(file))).toEqual([]);
+  });
+
+  it("keeps the logs of an image the images directory still holds", () => {
+    const profile = profileOnDisk();
+    writeImage(profile.imagesDir, "task");
+    const taskLogs = writeLogs(profile.logsDir, "task");
+    const launcher = openPharoLauncher({ config: testConfig({ profile }), runner: unusedRunner });
+
+    launcher.deleteLaunchLogs({ imageName: "task" });
+
+    expect(taskLogs.filter((file) => fs.existsSync(file))).toEqual(taskLogs);
+  });
+
+  it("refuses a call that names no image", () => {
+    const launcher = openPharoLauncher({
+      config: testConfig({ profile: profileOnDisk() }),
+      runner: unusedRunner,
+    });
+
+    expect(() => launcher.deleteLaunchLogs({} as { imageName: string })).toThrow(ToolInputError);
+  });
+});

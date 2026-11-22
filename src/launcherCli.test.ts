@@ -55,6 +55,82 @@ async function waitForFile(filePath: string): Promise<void> {
   throw new Error(`Timed out waiting for file: ${filePath}`);
 }
 
+/**
+ * A detached start of `Task` in a profile holding `Task` and `Idle`, over a
+ * logs directory holding earlier starts of those and of images it no longer
+ * holds: what a start's pruning keeps (all but Task's oldest start), what a
+ * sweep removes, and the logs this start wrote.
+ */
+async function detachedProfileStartOverLogs(options: { logsOutsideStateRoot: boolean }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pharo-launcher-mcp-launch-"));
+  const stateRoot = path.join(root, "state");
+  const vmArgsPath = path.join(root, "vm-args.txt");
+  const installationLauncherImage = path.join(root, "installation", "PharoLauncher.image");
+  const profile = {
+    name: "isolated",
+    stateRoot,
+    launcherImage: path.join(stateRoot, "launcher", "PharoLauncher.image"),
+    imagesDir: path.join(stateRoot, "images"),
+    vmsDir: path.join(stateRoot, "vms"),
+    templateSourcesDir: path.join(stateRoot, "templates"),
+    initScriptsDir: path.join(stateRoot, "init-scripts"),
+    logsDir: options.logsOutsideStateRoot ? path.join(root, "shared-logs") : path.join(stateRoot, "logs"),
+  };
+  const vmPath = path.join(profile.vmsDir, "130-x64", "Pharo.app", "Contents", "MacOS", "Pharo");
+  fs.mkdirSync(path.dirname(vmPath), { recursive: true });
+  fs.mkdirSync(path.dirname(installationLauncherImage), { recursive: true });
+  fs.mkdirSync(profile.logsDir, { recursive: true });
+  fs.writeFileSync(installationLauncherImage, "launcher-image", "utf8");
+  writeCreatedImage(profile.imagesDir, "Task");
+  writeCreatedImage(profile.imagesDir, "Idle");
+  writeExecutableScript(
+    vmPath,
+    ["#!/usr/bin/env sh", `printf '%s\\n' "$@" > ${shellQuote(vmArgsPath)}`, ""].join("\n"),
+  );
+  const log = (stamp: string, image: string, stream: "out" | "err") =>
+    path.join(profile.logsDir, `${stamp}-${image}-launch.${stream}.log`);
+  const earlierStarts = ["2026-01-01T00-00-01-000Z", "2026-01-01T00-00-02-000Z", "2026-01-01T00-00-03-000Z"];
+  const pruneKeeps = [
+    ...earlierStarts.slice(1).flatMap((stamp) => [log(stamp, "Task", "out"), log(stamp, "Task", "err")]),
+    // An image not started now keeps its logs, however many.
+    ...earlierStarts.map((stamp) => log(stamp, "Idle", "out")),
+    log(earlierStarts[0]!, "Idle", "err"),
+    path.join(profile.logsDir, "notes.txt"),
+  ];
+  const pruneRemoves = [log(earlierStarts[0]!, "Task", "out"), log(earlierStarts[0]!, "Task", "err")];
+  // Images the profile no longer holds.
+  const sweepRemoves = [
+    log(earlierStarts[0]!, "Gone", "out"),
+    log(earlierStarts[0]!, "Gone", "err"),
+    log(earlierStarts[2]!, "Task-2", "out"),
+  ];
+  for (const file of [...pruneKeeps, ...pruneRemoves, ...sweepRemoves]) {
+    fs.writeFileSync(file, "");
+  }
+
+  const result = await runLauncherCli(["image", "launch", "--detached", "Task"], {
+    config: launcherConfig({
+      launcherDir: root,
+      launcherVm: "unused",
+      installationLauncherImage,
+      launcherImage: profile.launcherImage,
+      launcherConfiguration: path.join(stateRoot, "launcher", "pharo-launcher-cli-config.ston"),
+      profile,
+    }),
+    timeoutMs: 2_000,
+  });
+  await waitForFile(vmArgsPath);
+
+  return {
+    exitCode: result.exitCode,
+    logsDir: profile.logsDir,
+    pruneKeeps,
+    sweepRemoves,
+    current: [result.launch!.logs!.stdout, result.launch!.logs!.stderr],
+    cleanUp: () => fs.rmSync(root, { recursive: true, force: true }),
+  };
+}
+
 describe("buildLauncherCliInvocation", () => {
   it("prefers an explicit launcher script", () => {
     const invocation = buildLauncherCliInvocation(
@@ -468,6 +544,15 @@ describe("buildLauncherCliInvocation", () => {
     if (process.platform !== "win32") {
       fs.chmodSync(scriptPath, 0o755);
     }
+    const logsDir = path.join(stateRoot, ".pharo-launcher-mcp", "logs");
+    fs.mkdirSync(logsDir, { recursive: true });
+    const earlierStarts = ["2026-01-01T00-00-01-000Z", "2026-01-01T00-00-02-000Z", "2026-01-01T00-00-03-000Z"];
+    for (const stamp of earlierStarts) {
+      fs.writeFileSync(path.join(logsDir, `${stamp}-Task-launch.out.log`), "");
+      fs.writeFileSync(path.join(logsDir, `${stamp}-Task-launch.err.log`), "");
+    }
+    const otherImageLog = path.join(logsDir, "2026-01-01T00-00-00-000Z-Other-launch.out.log");
+    fs.writeFileSync(otherImageLog, "");
 
     const originalCwd = process.cwd();
     try {
@@ -487,7 +572,6 @@ describe("buildLauncherCliInvocation", () => {
 
       const stdoutPath = result.stdout.match(/^stdout: (.+)$/m)?.[1];
       const stderrPath = result.stdout.match(/^stderr: (.+)$/m)?.[1];
-      const logsDir = path.join(stateRoot, ".pharo-launcher-mcp", "logs");
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("Detached PharoLauncher CLI pid");
@@ -500,11 +584,60 @@ describe("buildLauncherCliInvocation", () => {
       expect(stderrPath).toContain(logsDir);
       expect(fs.existsSync(stdoutPath ?? "")).toBe(true);
       expect(fs.existsSync(stderrPath ?? "")).toBe(true);
+      // The image's last three starts keep their logs. Outside a profile the
+      // images directory is not certain, so no other image's logs go.
+      expect(fs.readdirSync(logsDir).filter((name) => name.includes("-Task-")).sort()).toEqual(
+        [
+          ...earlierStarts.slice(1).flatMap((stamp) => [
+            `${stamp}-Task-launch.err.log`,
+            `${stamp}-Task-launch.out.log`,
+          ]),
+          path.basename(stderrPath ?? ""),
+          path.basename(stdoutPath ?? ""),
+        ].sort(),
+      );
+      expect(fs.existsSync(otherImageLog)).toBe(true);
 
       await new Promise((resolve) => setTimeout(resolve, 200));
     } finally {
       process.chdir(originalCwd);
       fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a profile's logs to the last starts of the images it holds", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const start = await detachedProfileStartOverLogs({ logsOutsideStateRoot: false });
+    try {
+      expect(start.exitCode).toBe(0);
+      expect(fs.readdirSync(start.logsDir).sort()).toEqual(
+        [...start.pruneKeeps, ...start.current].map((file) => path.basename(file)).sort(),
+      );
+    } finally {
+      start.cleanUp();
+    }
+  });
+
+  // Such a directory may be another profile's too, whose images this one
+  // cannot see, and whose running VMs write there.
+  it("sweeps no logs directory outside the profile's state root", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const start = await detachedProfileStartOverLogs({ logsOutsideStateRoot: true });
+    try {
+      expect(start.exitCode).toBe(0);
+      expect(fs.readdirSync(start.logsDir).sort()).toEqual(
+        [...start.pruneKeeps, ...start.sweepRemoves, ...start.current]
+          .map((file) => path.basename(file))
+          .sort(),
+      );
+    } finally {
+      start.cleanUp();
     }
   });
 
