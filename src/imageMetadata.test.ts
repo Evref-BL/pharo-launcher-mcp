@@ -37,11 +37,11 @@ describe("repairCopiedImageMetadata", () => {
     const config = profileConfig(stateRoot);
     const targetDirectory = path.join(
       config.profile!.imagesDir,
-      "PlexusSmokeTarget",
+      "SmokeTarget",
     );
     fs.mkdirSync(targetDirectory, { recursive: true });
     fs.writeFileSync(
-      path.join(targetDirectory, "PlexusSmokeTarget.image"),
+      path.join(targetDirectory, "SmokeTarget.image"),
       "",
     );
     const metaInfPath = path.join(targetDirectory, "meta-inf.ston");
@@ -61,10 +61,10 @@ describe("repairCopiedImageMetadata", () => {
     );
 
     expect(
-      repairCopiedImageMetadata(config, "MCP12-2", "PlexusSmokeTarget"),
+      repairCopiedImageMetadata(config, "MCP12-2", "SmokeTarget"),
     ).toMatchObject({ status: "repaired", metaInfPath });
     expect(fs.readFileSync(metaInfPath, "utf8")).toContain(
-      "RelativePath [ 'PlexusSmokeTarget', 'PlexusSmokeTarget.image' ]",
+      "RelativePath [ 'SmokeTarget', 'SmokeTarget.image' ]",
     );
 
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -85,7 +85,7 @@ describe("repairCopiedImageMetadata", () => {
         "PhLImage {",
         "\t#vmManager : PhLVirtualMachineManager {",
         "\t\t#imageFile : FileLocator {",
-        "\t\t\t#path : RelativePath [ 'devnexus-plexus-home-cache-run', 'home', 'profiles', 'pharo-launcher-mcp', 'image-cache', 'images', 'Base', 'Base.image' ],",
+        "\t\t\t#path : RelativePath [ 'home-cache-run', 'home', 'profiles', 'pharo-launcher-mcp', 'image-cache', 'images', 'Base', 'Base.image' ],",
         "\t\t\t#origin : #temp",
         "\t\t}",
         "\t}",
@@ -101,7 +101,7 @@ describe("repairCopiedImageMetadata", () => {
     const repaired = fs.readFileSync(metaInfPath, "utf8");
     expect(repaired).toContain("RelativePath [ 'Task', 'Task.image' ]");
     expect(repaired).toContain("#origin : #launcherImagesLocation");
-    expect(repaired).not.toContain("devnexus-plexus-home-cache-run");
+    expect(repaired).not.toContain("home-cache-run");
     expect(repaired).not.toContain("Base.image");
 
     fs.rmSync(stateRoot, { recursive: true, force: true });

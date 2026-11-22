@@ -9,7 +9,7 @@ focused on installation and first use; user-facing detail lives under `docs/`.
 - `src/answers.ts`: what each tool answers, as text, and the checks made
   before a call. Every text naming a `pharo_launcher_*` tool is here.
 - `src/launcher.ts`: the library, `openPharoLauncher`, which the tools are made
-  from and PLexus imports.
+  from and other programs import.
 - `src/commandCatalog.ts`: Pharo Launcher command definitions and input checks.
 - `src/config.ts`: Pharo Launcher and profile path resolution.
 - `src/platform.ts`: host-specific defaults and wrapper selection.

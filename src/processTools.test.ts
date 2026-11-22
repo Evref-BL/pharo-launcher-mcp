@@ -198,7 +198,7 @@ describe("runNativeProcessTool", () => {
     ]);
   });
 
-  // PLexus's killVms does the same: a VM gone meanwhile did what was asked.
+  // A VM gone meanwhile did what was asked.
   it("tries every target, counting a pid already gone as stopped", async () => {
     const tried: number[] = [];
     const errno = (code: string) =>

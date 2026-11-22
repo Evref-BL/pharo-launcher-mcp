@@ -153,7 +153,7 @@ function addFlag(args: string[], flag: string, enabled: boolean): void {
 
 // Without --no-launch PharoLauncher starts the new image and waits for it to
 // quit, so the call would last as long as the image runs. Starting an image is
-// image_start's; noLaunch is read by nothing.
+// image_start's.
 function imageCreate(input: unknown): string[] {
   const object = inputObject(input);
   const args = ["image", "create"];

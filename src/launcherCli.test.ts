@@ -603,7 +603,7 @@ describe("buildLauncherCliInvocation", () => {
       await waitForFile(vmArgsPath);
 
       expect(result.exitCode).toBe(0);
-      // PLexus reads these lines, word for word.
+      // The launch is reported twice: as lines for a reader, as fields for a caller.
       expect(result.stdout).toMatch(/^Detached profile-scoped Pharo image pid \d+\.$/m);
       expect(result.stdout).toContain(`image: ${imagePath}`);
       expect(result.stdout).toContain("displayMode: headless");

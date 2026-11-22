@@ -73,7 +73,7 @@ export type MadeImageFailure =
  * the images directory holds it; `failure` says why a command that exited 0
  * made no image, beside `diagnostic`, so a caller writes its own sentence.
  */
-export type MadeImageResult = LauncherCommandResult & {
+export type MadeImageResult = LauncherCommandResult<{ image?: LauncherImage }> & {
   failure?: MadeImageFailure;
 };
 
