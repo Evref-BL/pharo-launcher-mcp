@@ -67,6 +67,7 @@ interface ProfileImageLaunchPlan {
   displayMode: ImageLaunchDisplayMode;
   vmId: string;
   vmPath: string;
+  vmDirectory: string;
   invocation: LauncherCliInvocation;
   vmUpdated: boolean;
 }
@@ -84,6 +85,7 @@ interface ProfileImageInspection {
 interface ProfileVmResolution {
   vmId: string;
   vmPath: string;
+  vmDirectory: string;
   vmUpdated: boolean;
 }
 
@@ -825,7 +827,7 @@ async function resolveProfileVmForLaunch(
     );
   }
 
-  return { vmId, vmPath, vmUpdated };
+  return { vmId, vmPath, vmDirectory: path.join(vmsDir, vmId), vmUpdated };
 }
 
 async function profileScopedImageLaunchPlan(
@@ -869,6 +871,7 @@ async function profileScopedImageLaunchPlan(
     displayMode,
     vmId: vm.vmId,
     vmPath: vm.vmPath,
+    vmDirectory: vm.vmDirectory,
     invocation: {
       command: vm.vmPath,
       args: invocationArgs,
@@ -978,6 +981,7 @@ function vmLaunchReport(
     displayMode: plan.displayMode,
     vmPath: plan.vmPath,
     vmId: plan.vmId,
+    vmDirectory: plan.vmDirectory,
     vmUpdated: plan.vmUpdated,
   };
 }

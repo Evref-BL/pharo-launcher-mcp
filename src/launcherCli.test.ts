@@ -618,6 +618,7 @@ describe("buildLauncherCliInvocation", () => {
         displayMode: "headless",
         vmPath,
         vmId,
+        vmDirectory: expect.stringMatching(new RegExp(`[\\\\/]${vmId}$`)),
         vmUpdated: false,
         pid: Number(/pid (\d+)\./.exec(result.stdout)?.[1]),
         logs: {
@@ -947,6 +948,7 @@ describe("buildLauncherCliInvocation", () => {
         displayMode: "headless",
         vmPath,
         vmId,
+        vmDirectory: expect.stringMatching(new RegExp(`[\\\\/]${vmId}$`)),
         vmUpdated: true,
         output: {
           stdout: `direct-vm:--headless ${imagePath} eval ${startupScriptPath}\n`,
@@ -1277,6 +1279,7 @@ describe("buildLauncherCliInvocation", () => {
           displayMode: "headless",
           vmPath,
           vmId: "130-x64",
+          vmDirectory: expect.stringMatching(/[\\/]130-x64$/),
           vmUpdated: false,
           output: { stdout: "", stderr: "Segmentation fault, dumping stack\n" },
         });

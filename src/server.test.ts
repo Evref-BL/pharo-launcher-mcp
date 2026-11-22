@@ -231,6 +231,7 @@ describe("every answer is text", () => {
             displayMode: "headless",
             vmPath: "/vms/140-x64/pharo",
             vmId: "140-x64",
+            vmDirectory: "/vms/140-x64",
             vmUpdated: false,
             output: { stdout: "", stderr: "" },
           },
@@ -1071,6 +1072,7 @@ describe("pharo_launcher_image_start", () => {
       displayMode: "headless",
       vmPath: "/vms/130-x64/pharo",
       vmId: "130-x64",
+      vmDirectory: "/vms/130-x64",
       vmUpdated: false,
       ...extra,
     };

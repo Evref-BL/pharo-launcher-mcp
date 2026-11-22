@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type {
   CrossProfileImageCopyResult,
+  ImageDirectory,
+  ImageEntry,
+  ImageMetadataRepairResult,
   LauncherCommandResult,
   LauncherImage,
   LauncherImageInfo,
@@ -52,6 +55,9 @@ function sourceFor(distPath: string): string {
  * typecheck fails if `launcher.ts` stops re-exporting one.
  */
 type LauncherResultTypes = [
+  ImageDirectory,
+  ImageEntry,
+  ImageMetadataRepairResult,
   LauncherCommandResult,
   LauncherImage,
   LauncherImageInfo,
