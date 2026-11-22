@@ -959,7 +959,6 @@ function runDetachedProfileImageLaunch(
     plan.invocation,
     detachedLaunchLogPaths(config, args, startTime),
     startTime,
-    // PLexus reads these lines from raw.stdout, word for word.
     (pid) => [
       `Detached profile-scoped Pharo image pid ${pid}.`,
       `image: ${plan.imagePath}`,
@@ -1035,7 +1034,6 @@ async function runProfileScopedImageLaunch(
           },
         }
       : {}),
-    // PLexus reads these lines from raw.stdout, word for word.
     stdout: [
       `Profile-scoped Pharo image launch.`,
       `image: ${plan.imagePath}`,

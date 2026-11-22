@@ -1417,13 +1417,13 @@ describe("pharo_launcher_image_copy_between_profiles", () => {
 describe("the process tools", () => {
   const home = path.join(os.tmpdir(), "no-such-home");
   const latestMcp = path.join(home, "Documents", "Pharo", "images", "LatestMCP", "LatestMCP.image");
-  const plexus = path.join(home, ".plexus", "profiles", "images", "x", "x.image");
+  const profiled = path.join(home, ".tool", "profiles", "images", "x", "x.image");
 
   function machine(...images: string[]): string[] {
     return [
       `17880 /Applications/PharoLauncher.app/Contents/MacOS/Pharo ${latestMcp}`,
       ...images.map((image, index) => `${71513 + index * 7} /vms/140-x64/Pharo --headless ${image}`),
-      `71600 /plexus/vms/140-x64/Pharo ${plexus}`,
+      `71600 /tool/vms/140-x64/Pharo ${profiled}`,
     ];
   }
 

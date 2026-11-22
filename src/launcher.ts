@@ -1,11 +1,9 @@
 /**
  * What this package knows how to do, as functions.
  *
- * The tool list was the surface for as long as the only caller reached it over
- * a protocol. It does not: PLexus is a Node program that already depends on
- * this package, and no agent subscribes to these names — they reach the
- * launcher through PLexus's own scoped tools. So the functions are the
- * surface, and `server.ts` is an adapter that maps the tool names onto them.
+ * The functions are the surface: a Node program that depends on this package
+ * calls them and gets typed results, and `server.ts` is an adapter that maps
+ * the MCP tool names onto them.
  *
  * Scope is a config, not a process. `loadPharoLauncherConfig` takes an
  * environment object, so a caller that needs a profile passes one rather than
@@ -69,11 +67,8 @@ import { copyImageBetweenProfiles } from "./crossProfileCopy.js";
  * The shapes these functions answer with.
  *
  * They are defined in the modules that produce them, and those modules are not
- * subpaths, so until now a caller could invoke every function here and name
- * none of its results. PLexus copied the template row into a type of its own
- * and `pharo-agent` wrote it inline, and the two disagreed about whether a
- * listed template carries `category` or `templateCategory` — a question no
- * type could settle because none was reachable.
+ * subpaths, so without these a caller could invoke every function here and
+ * name none of its results, and would have to restate their shape.
  *
  * `packageExports.test.ts` names them, so dropping one fails the typecheck.
  */
@@ -348,14 +343,17 @@ function madeImageResult(
   said: string,
   newImageName: string,
 ): MadeImageResult {
-  const { data: _data, diagnostic: _diagnostic, action: _action, ...rest } =
-    normalized;
+  const { data: _data, diagnostic, action, ...rest } = normalized;
   if (made.ok) {
     return { ...rest, ok: true, data: made.image ? { image: made.image } : {} };
   }
 
   return timedOut
-    ? normalized
+    ? {
+        ...rest,
+        ...(diagnostic === undefined ? {} : { diagnostic }),
+        ...(action === undefined ? {} : { action }),
+      }
     : {
         ...rest,
         ok: false,
@@ -759,7 +757,7 @@ export async function imageInfoResult(
 
 /**
  * What every call takes beside its own arguments: whether its result carries
- * what the Launcher wrote, as `raw`. PLexus passes it to `startImage`.
+ * what the Launcher wrote, as `raw`.
  */
 export interface LauncherTableOptions {
   includeRaw?: boolean;
@@ -770,11 +768,6 @@ export interface ImageCreateInput extends LauncherTableOptions {
   newImageName: string;
   templateCategory?: string;
   dev?: boolean;
-  /**
-   * Ignored: a create never starts the image, and `image_start` does. Kept so
-   * a caller that still passes it, as PLexus 0.16.0 does, compiles.
-   */
-  noLaunch?: boolean;
 }
 
 export interface ImageStartInput extends LauncherTableOptions {
@@ -804,8 +797,7 @@ export interface PharoLauncher {
   /**
    * Its `data` is `{ image?: LauncherImage }`, the image when the images
    * directory holds it, and `failure` says why a command that exited 0 made
-   * none. Its `data` is typed as any result's, so a fake written against
-   * 0.4.1, as PLexus 0.16.0's is, still implements it.
+   * none.
    */
   createImage(input: ImageCreateInput): Promise<MadeImageResult>;
   /** Its `data` and `failure` are as `createImage`'s. */
@@ -831,10 +823,10 @@ export interface PharoLauncher {
    * The templates of a category, in the Launcher's order. Those it keeps on
    * disk (`local`) are left out unless `includeLocal` asks for them: the
    * Launcher keeps a copy of every template it downloads under the same name,
-   * in a category of its own (`Templates`), and a caller that takes a name
-   * listed in two categories as ambiguous, as PLexus 0.16.0 does, would then
-   * refuse every template downloaded once. A category named does not change
-   * it, since PLexus names each in turn. The templates the user made from an
+   * in a category of its own (`Templates`), so every template downloaded once
+   * would otherwise be listed under one name in two categories. Naming a
+   * category does not change it, since the copies are in a category too. The
+   * templates the user made from an
    * image are left out too: the Launcher keeps them in the same category, of
    * the same class, so nothing tells them from its copies.
    */

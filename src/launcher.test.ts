@@ -104,7 +104,6 @@ describe("openPharoLauncher", () => {
     await launcher.createImage({
       templateName: "Pharo 13.0 - 64bit",
       newImageName: "Task",
-      noLaunch: true,
     });
 
     expect(calls[0]?.slice(0, 2)).toEqual(["image", "create"]);
@@ -124,7 +123,7 @@ describe("openPharoLauncher", () => {
     const launcher = openPharoLauncher({
       env: {
         PHARO_LAUNCHER_MCP_PROFILE: "isolated",
-        PHARO_LAUNCHER_MCP_STATE_ROOT: "/tmp/plexus-profile",
+        PHARO_LAUNCHER_MCP_STATE_ROOT: "/tmp/isolated-profile",
       },
     });
 
@@ -294,13 +293,13 @@ describe("listImages and imageInfo", () => {
 describe("the process tools", () => {
   const home = path.join(os.tmpdir(), "no-such-home");
   const latestMcp = path.join(home, "Documents", "Pharo", "images", "LatestMCP", "LatestMCP.image");
-  const plexus = path.join(home, ".plexus", "profiles", "images", "x", "x.image");
+  const profiled = path.join(home, ".tool", "profiles", "images", "x", "x.image");
 
   function machine(stuck: string): string[] {
     return [
       `17880 /Applications/PharoLauncher.app/Contents/MacOS/Pharo ${latestMcp}`,
       `71513 /vms/140-x64/Pharo.app/Contents/MacOS/Pharo --headless ${stuck}`,
-      `71600 /plexus/vms/140-x64/Pharo.app/Contents/MacOS/Pharo ${plexus}`,
+      `71600 /tool/vms/140-x64/Pharo.app/Contents/MacOS/Pharo ${profiled}`,
     ];
   }
 
@@ -698,8 +697,8 @@ describe("createImage and copyImage", () => {
 
 describe("listTemplates", () => {
   // Measured: every create from a remote template leaves a PhLLocalTemplate of
-  // the same name in the Launcher's cache category, which PLexus 0.16.0 lists
-  // too, and then refuses as a name in two categories.
+  // the same name in the Launcher's cache category, which would otherwise be
+  // listed as a second template of that name.
   it("leaves out the templates the Launcher keeps on disk, unless asked", async () => {
     const ston =
       "OrderedCollection[" +
@@ -720,7 +719,7 @@ describe("listTemplates", () => {
 });
 
 describe("startImage", () => {
-  // PLexus's contract test drives the real library with a fake runner and no
+  // A caller's test can drive the real library with a fake runner and no
   // profile, for an image on no disk: nothing in the library checks first.
   it("reaches the runner outside a profile, for an image on no disk", async () => {
     const { runner, calls } = recordingRunner(() => exited(0, "launched"));
@@ -729,10 +728,10 @@ describe("startImage", () => {
       runner,
     });
 
-    const result = await launcher.startImage({ imageName: "plexus-build-1" });
+    const result = await launcher.startImage({ imageName: "build-1" });
 
     expect(result.ok).toBe(true);
-    expect(calls).toEqual([["image", "launch", "plexus-build-1"]]);
+    expect(calls).toEqual([["image", "launch", "build-1"]]);
   });
 
   // A VM there could not load its own modules, and would say a symbol is

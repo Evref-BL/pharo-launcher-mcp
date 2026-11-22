@@ -259,7 +259,7 @@ describe("cross-profile image copy", () => {
     try {
       writeImage(
         sourceRoot,
-        "PlexusHomeCache-d58cf946b1bd39a08c35c3ca",
+        "HomeCache-d58cf946b1bd39a08c35c3ca",
         [
           "PhLImage {",
           "\t#originTemplate : PhLRemoteTemplate {",
@@ -279,7 +279,7 @@ describe("cross-profile image copy", () => {
           stateRoot: destinationRoot,
           profileName: "runtime",
         },
-        sourceImageName: "PlexusHomeCache-d58cf946b1bd39a08c35c3ca",
+        sourceImageName: "HomeCache-d58cf946b1bd39a08c35c3ca",
         destinationImageName: "MCPPharo-dev-nexus-mcp-pharo-dev",
       });
       const destinationDirectory = imageDirectory(
@@ -310,7 +310,7 @@ describe("cross-profile image copy", () => {
         fs.existsSync(
           path.join(
             destinationDirectory,
-            "PlexusHomeCache-d58cf946b1bd39a08c35c3ca.image",
+            "HomeCache-d58cf946b1bd39a08c35c3ca.image",
           ),
         ),
       ).toBe(false);
@@ -337,7 +337,7 @@ describe("cross-profile image copy", () => {
           "PhLImage {",
           "\t#vmManager : PhLVirtualMachineManager {",
           "\t\t#imageFile : FileLocator {",
-          "\t\t\t#path : RelativePath [ 'devnexus-plexus-home-cache-run', 'home', 'profiles', 'pharo-launcher-mcp', 'image-cache', 'images', 'Base', 'Base.image' ],",
+          "\t\t\t#path : RelativePath [ 'home-cache-run', 'home', 'profiles', 'pharo-launcher-mcp', 'image-cache', 'images', 'Base', 'Base.image' ],",
           "\t\t\t#origin : #temp",
           "\t\t}",
           "\t}",
@@ -374,7 +374,7 @@ describe("cross-profile image copy", () => {
       );
       expect(repaired).toContain("RelativePath [ 'Task', 'Task.image' ]");
       expect(repaired).toContain("#origin : #launcherImagesLocation");
-      expect(repaired).not.toContain("devnexus-plexus-home-cache-run");
+      expect(repaired).not.toContain("home-cache-run");
       expect(repaired).not.toContain("Base.image");
     } finally {
       removeProfileRoot(sourceRoot);

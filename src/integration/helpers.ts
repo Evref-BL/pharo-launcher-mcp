@@ -92,7 +92,7 @@ export function imagesDirOf(profile: IntegrationProfile): string {
   return path.resolve(profile.stateRoot, "images");
 }
 
-/** The library on the profile, as PLexus opens it: where the data is checked. */
+/** The library on the profile, as a caller opens it: where the data is checked. */
 export function liveLauncher(
   profile: IntegrationProfile,
   options: Omit<PharoLauncherOptions, "config"> = {},

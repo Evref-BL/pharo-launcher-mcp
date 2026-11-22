@@ -153,7 +153,7 @@ async function main() {
   // discovery it actually uses: `defaultLauncherDir` answers
   // ~/Library/Application Support/Pharo Launcher on macOS, where a standard
   // install is /Applications/PharoLauncher.app, and describeConfig is what
-  // resolves that — the same answer PLexus opens images with.
+  // resolves that, for the library's callers too.
   const { openPharoLauncher } = await import(
     path.join(repoRoot, "dist", "launcher.js")
   );

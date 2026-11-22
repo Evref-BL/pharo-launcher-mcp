@@ -44,7 +44,8 @@ describe("launcher command catalog", () => {
   });
 
   // No task drew them, and a model reads a schema as what matters. The
-  // library still takes includeRaw, which PLexus passes to startImage.
+  // library still takes includeRaw, for a caller that wants what the Launcher
+  // wrote.
   it.each(launcherCommandTools.map((tool) => [tool.name, tool] as const))(
     "advertises no table option and no raw output on %s",
     (_name, tool) => {

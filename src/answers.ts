@@ -3,8 +3,8 @@
  * the way MCP's own tools answer. A summary sentence, `Warning: …` lines,
  * `key: value` lines, then indented lists.
  *
- * The library keeps its typed objects, which PLexus reads; nothing here reaches
- * it. So every text that names a `pharo_launcher_*` tool is here, and so is
+ * The library keeps its typed objects for its callers; nothing here reaches
+ * them. So every text that names a `pharo_launcher_*` tool is here, and so is
  * every check made before a call: in profile mode, where this server wrote the
  * images directory itself, a check refuses on its own; outside a profile the
  * directory comes from settings that can be wrong, so a name the reader does
@@ -113,7 +113,7 @@ function alternatives(items: readonly string[]): string {
     : `${items.slice(0, -1).join(", ")} or ${items.at(-1)}`;
 }
 
-/** The last lines a process wrote, under the label PLexus uses for them. */
+/** The last lines a process wrote, under a label. */
 function outputTail(label: string, text: string | undefined): string[] {
   const trimmed = text?.trim();
   if (!trimmed) {
@@ -751,8 +751,7 @@ function sleep(milliseconds: number): Promise<void> {
 }
 
 /**
- * Waits for each pid to exit, polling, as PLexus's stop waits: a delete
- * right after a kill would otherwise meet a VM still exiting. The pids still
+ * Waits for each pid to exit, polling: a delete right after a kill would otherwise meet a VM still exiting. The pids still
  * there when the time is up.
  */
 async function stillRunning(pids: readonly number[], options: CallToolOptions): Promise<number[]> {
@@ -923,7 +922,7 @@ const answerTemplateUpdate: Answer = async (context) => {
   return failure(launcherFailureText("refresh the template list", result, context));
 };
 
-/** The answer of each tool, by name: the table PLexus mirrors with functions. */
+/** The answer of each tool, by name. */
 export const toolAnswers: Readonly<Record<string, Answer>> = {
   pharo_launcher_config: answerConfig,
   pharo_launcher_image_copy_between_profiles: answerCopyBetweenProfiles,
@@ -957,8 +956,8 @@ const retiredArguments = new Set([
 ]);
 
 /**
- * Only the arguments a tool's schema names. One it never took is refused,
- * as MCP and PLexus refuse it; one an earlier release took is dropped.
+ * Only the arguments a tool's schema names. One it never took is refused; one
+ * an earlier release took is dropped.
  */
 export function toolArguments(
   schema: { properties?: Record<string, unknown> },
