@@ -71,7 +71,9 @@ caller that copies one itself: `readImageDirectory(imagesDir, name)` says
 whether a directory is an image, `readLauncherImage(entry)` what its
 `meta-inf.ston`, `pharo.version` and header say, and
 `repairCopiedImageMetadataInDirectory(directory, from, to)` points a copy's
-metadata at its new name.
+metadata at its new name. A caller that deletes an image's directory itself
+calls `deleteLaunchLogs({ imageName })` after, as `deleteImage` does, so the
+logs of its starts go with it.
 
 Scope is a config, not a process. A caller that works inside a profile passes
 the environment that describes it, instead of spawning a process to hold those

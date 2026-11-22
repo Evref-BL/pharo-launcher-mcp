@@ -148,7 +148,7 @@ describe("the server", () => {
       pharo_launcher_image_create:
         "Create an image from a template. It is not started: pharo_launcher_image_start starts it.",
       pharo_launcher_image_delete:
-        "Delete an image and its directory. Nothing asks for a confirmation. A running image is refused: stop it first with pharo_launcher_process_kill.",
+        "Delete an image, its directory and the logs of its starts. Nothing asks for a confirmation. A running image is refused: stop it first with pharo_launcher_process_kill.",
       pharo_launcher_image_start:
         "Start an image, optionally with a script for it to run. Unless detached, the call lasts until the image quits.",
       pharo_launcher_process_list:

@@ -257,8 +257,9 @@ export const launcherCommandTools: LauncherCommandTool[] = [
   {
     name: "pharo_launcher_image_delete",
     description:
-      "Delete an image and its directory. Nothing asks for a confirmation. " +
-      "A running image is refused: stop it first with pharo_launcher_process_kill.",
+      "Delete an image, its directory and the logs of its starts. Nothing " +
+      "asks for a confirmation. A running image is refused: stop it first " +
+      "with pharo_launcher_process_kill.",
     inputSchema: objectSchema({ imageName: stringSchema }, ["imageName"]),
     buildArgs: imageDelete,
   },

@@ -79,7 +79,11 @@ Launcher, whose answer is the answer.
   PharoLauncher's own `image launch` has no display mode, so outside profile
   mode the launch is refused rather than started with the mode dropped.
 - `detached: true` to leave the image running: the answer names its pid and
-  its log files. Otherwise the call lasts until the image quits.
+  its log files. Otherwise the call lasts until the image quits. The logs
+  directory keeps the logs of an image's last three starts, so those a
+  failed start names outlive two more. In profile mode, from a logs directory
+  inside the state root, a detached start also removes the logs of images the
+  profile no longer holds.
 - `script` for a launch script passed to Launcher, or evaluated by the profile
   VM launch path. A relative path is read from the server's working directory,
   not from the image's or Launcher's. A headless image given no script has
@@ -92,7 +96,8 @@ profile roots instead of using Launcher defaults.
 confirmation. Launcher's own `image delete` asks on standard input, where a
 call has nobody to answer. It refuses an image a VM runs, in every mode, and
 refuses when it cannot tell: stop the image with
-`pharo_launcher_process_kill` first.
+`pharo_launcher_process_kill` first. It deletes the logs of the image's
+starts with it.
 
 ## Template Tools
 

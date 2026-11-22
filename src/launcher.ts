@@ -43,6 +43,7 @@ import {
   type RunNativeProcessToolOptions,
 } from "./processTools.js";
 import { repairCopiedImageMetadata } from "./imageMetadata.js";
+import { launchLogsDirectory, removeLaunchLogs } from "./launchLogs.js";
 import {
   filterByName,
   findByName,
@@ -601,6 +602,36 @@ export async function templateUpdateResult(
   };
 }
 
+/** A delete, and once the Launcher deleted the image, the logs of its starts. */
+export async function imageDeleteResult(
+  args: string[],
+  options: PharoLauncherOptions,
+): Promise<LauncherCommandResult> {
+  const runner = options.runner ?? runLauncherCli;
+  const config = options.config ?? loadPharoLauncherConfig();
+  const commandOptions = { ...options, config };
+  const result = await runLauncherToolCommand(runner, args, commandOptions);
+  const normalized = normalizeToolResult(
+    "pharo_launcher_image_delete",
+    args,
+    result,
+    commandOptions,
+  );
+  const imageName = args.at(-1);
+  if (normalized.ok && imageName) {
+    deleteImageLaunchLogs(config, imageName);
+  }
+  return normalized;
+}
+
+function deleteImageLaunchLogs(config: PharoLauncherConfig, imageName: string): void {
+  removeLaunchLogs(
+    launchLogsDirectory(config),
+    resolveImagesDirectory(config).path,
+    imageName,
+  );
+}
+
 export async function runCommand(
   toolName: string,
   args: string[],
@@ -614,6 +645,9 @@ export async function runCommand(
   }
   if (toolName === "pharo_launcher_template_update") {
     return templateUpdateResult(args, options);
+  }
+  if (toolName === "pharo_launcher_image_delete") {
+    return imageDeleteResult(args, options);
   }
 
   if (toolName.startsWith("pharo_launcher_process_")) {
@@ -805,9 +839,16 @@ export interface PharoLauncher {
     input: { imageName: string; newImageName: string } & LauncherTableOptions,
   ): Promise<MadeImageResult>;
   startImage(input: ImageStartInput): Promise<LauncherCommandResult>;
+  /** Deletes the logs of the image's starts too. */
   deleteImage(
     input: { imageName: string } & LauncherTableOptions,
   ): Promise<LauncherCommandResult>;
+  /**
+   * Delete the logs of a deleted image's starts, for a caller that removed
+   * its directory itself. Logs the images directory still has an image for
+   * (one of the same name, or whose name makes the same file name) are kept.
+   */
+  deleteLaunchLogs(input: { imageName: string }): void;
   listProcesses(
     input?: LauncherTableOptions,
   ): Promise<LauncherCommandResult<LauncherProcess[]>>;
@@ -933,6 +974,11 @@ export function openPharoLauncher(
       return command("pharo_launcher_image_start", input);
     },
     deleteImage: (input) => command("pharo_launcher_image_delete", input),
+    deleteLaunchLogs: (input) =>
+      deleteImageLaunchLogs(
+        resolved.config ?? loadPharoLauncherConfig(),
+        requiredString(argumentsObject(input), "imageName"),
+      ),
     listProcesses: (input) => command("pharo_launcher_process_list", input),
     killProcess: (input) => command("pharo_launcher_process_kill", input),
     listTemplateCategories: (input) =>

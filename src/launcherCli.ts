@@ -11,6 +11,13 @@ import {
   readLauncherImage,
   scanImages,
 } from "./imageStore.js";
+import {
+  launchLogPaths,
+  launchLogsDirectory,
+  pruneLaunchLogs,
+  sweepLaunchLogs,
+  type LaunchLogPaths,
+} from "./launchLogs.js";
 import { resolveLauncherScript } from "./launcherScript.js";
 import type {
   LauncherImage,
@@ -116,26 +123,29 @@ function stonFilePath(filePath: string): string {
   return stonPath.replaceAll("'", "''");
 }
 
-function safeFileSegment(value: string): string {
-  const cleaned = value.replaceAll(/[^A-Za-z0-9._-]+/g, "-");
-  return cleaned.length > 0 ? cleaned : "image";
-}
-
-function detachedLaunchLogPaths(
+/**
+ * A detached start of the image, given the logs it writes to, then the logs
+ * it leaves: the image's last starts', and in a profile, whose images
+ * directory is certain, none of an image that is gone. After the spawn, so
+ * this overlaps the VM's boot.
+ *
+ * Only a logs directory inside the profile's state root is swept: one set
+ * elsewhere may be another profile's too, whose images this one cannot see.
+ */
+function launchDetachedWithLogs(
   config: PharoLauncherConfig,
-  args: readonly string[],
+  imageName: string,
   startTime: number,
-): { stdoutPath: string; stderrPath: string } {
-  const logsDir =
-    config.profile?.logsDir ?? path.join(process.cwd(), ".pharo-launcher-mcp", "logs");
-  const imageName = safeFileSegment(args.at(-1) ?? "image");
-  const stamp = new Date(startTime).toISOString().replaceAll(/[:.]/g, "-");
-  const baseName = `${stamp}-${imageName}-launch`;
-
-  return {
-    stdoutPath: path.join(logsDir, `${baseName}.out.log`),
-    stderrPath: path.join(logsDir, `${baseName}.err.log`),
-  };
+  launch: (logPaths: LaunchLogPaths) => LauncherCliResult,
+): LauncherCliResult {
+  const logsDir = launchLogsDirectory(config);
+  const logPaths = launchLogPaths(logsDir, imageName, startTime);
+  const result = launch(logPaths);
+  pruneLaunchLogs(logsDir, imageName, logPaths);
+  if (config.profile && isPathInside(config.profile.stateRoot, logsDir)) {
+    sweepLaunchLogs(logsDir, config.profile.imagesDir);
+  }
+  return result;
 }
 
 function launcherEnvironment(config: PharoLauncherConfig): NodeJS.ProcessEnv {
@@ -889,7 +899,7 @@ async function profileScopedImageLaunchPlan(
 // launch is right after spawn: no pid means nothing is running.
 function spawnDetached(
   invocation: LauncherCliInvocation,
-  logPaths: { stdoutPath: string; stderrPath: string },
+  logPaths: LaunchLogPaths,
   startTime: number,
   describe: (pid: number) => string[],
   report: (
@@ -952,22 +962,23 @@ function spawnDetached(
 function runDetachedProfileImageLaunch(
   plan: ProfileImageLaunchPlan,
   config: PharoLauncherConfig,
-  args: readonly string[],
   startTime: number,
 ): LauncherCliResult {
-  return spawnDetached(
-    plan.invocation,
-    detachedLaunchLogPaths(config, args, startTime),
-    startTime,
-    (pid) => [
-      `Detached profile-scoped Pharo image pid ${pid}.`,
-      `image: ${plan.imagePath}`,
-      `displayMode: ${plan.displayMode}`,
-      `vm: ${plan.vmPath}`,
-      `vmId: ${plan.vmId}`,
-      `vmUpdated: ${plan.vmUpdated}`,
-    ],
-    (pid, logs) => ({ ...vmLaunchReport(plan), pid, logs }),
+  return launchDetachedWithLogs(config, plan.imageName, startTime, (logPaths) =>
+    spawnDetached(
+      plan.invocation,
+      logPaths,
+      startTime,
+      (pid) => [
+        `Detached profile-scoped Pharo image pid ${pid}.`,
+        `image: ${plan.imagePath}`,
+        `displayMode: ${plan.displayMode}`,
+        `vm: ${plan.vmPath}`,
+        `vmId: ${plan.vmId}`,
+        `vmUpdated: ${plan.vmUpdated}`,
+      ],
+      (pid, logs) => ({ ...vmLaunchReport(plan), pid, logs }),
+    ),
   );
 }
 
@@ -1020,7 +1031,7 @@ async function runProfileScopedImageLaunch(
   }
 
   if (detached) {
-    return runDetachedProfileImageLaunch(plan, config, args, startTime);
+    return runDetachedProfileImageLaunch(plan, config, startTime);
   }
 
   const result = await runInvocation(plan.invocation, timeoutMs, startTime);
@@ -1099,12 +1110,14 @@ export function runLauncherCli(
 
   if (detachedImageLaunch) {
     return Promise.resolve(
-      spawnDetached(
-        invocation,
-        detachedLaunchLogPaths(config, args, startTime),
-        startTime,
-        (pid) => [`Detached PharoLauncher CLI pid ${pid}.`],
-        (pid, logs) => ({ by: "launcher", pid, logs }),
+      launchDetachedWithLogs(config, args.at(-1) ?? "image", startTime, (logPaths) =>
+        spawnDetached(
+          invocation,
+          logPaths,
+          startTime,
+          (pid) => [`Detached PharoLauncher CLI pid ${pid}.`],
+          (pid, logs) => ({ by: "launcher", pid, logs }),
+        ),
       ),
     );
   }
