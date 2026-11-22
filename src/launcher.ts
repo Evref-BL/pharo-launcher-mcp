@@ -92,6 +92,16 @@ export type {
   TemplateCategoriesResult,
 } from "./models.js";
 export { ProfileTooDeepError, ToolInputError } from "./commandCatalog.js";
+export {
+  readImageDirectory,
+  readLauncherImage,
+  type ImageDirectory,
+  type ImageEntry,
+} from "./imageStore.js";
+export {
+  repairCopiedImageMetadataInDirectory,
+  type ImageMetadataRepairResult,
+} from "./imageMetadata.js";
 export { sentenceWithMessage } from "./resultNormalizer.js";
 export type { RunNativeProcessToolOptions } from "./processTools.js";
 export type { PharoLauncherConfigReport } from "./discovery.js";

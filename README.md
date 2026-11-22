@@ -66,6 +66,13 @@ import type {
 } from "@evref-bl/pharo-launcher-mcp/launcher";
 ```
 
+An image directory is read and repaired the way the library does it, for a
+caller that copies one itself: `readImageDirectory(imagesDir, name)` says
+whether a directory is an image, `readLauncherImage(entry)` what its
+`meta-inf.ston`, `pharo.version` and header say, and
+`repairCopiedImageMetadataInDirectory(directory, from, to)` points a copy's
+metadata at its new name.
+
 Scope is a config, not a process. A caller that works inside a profile passes
 the environment that describes it, instead of spawning a process to hold those
 variables:

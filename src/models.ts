@@ -42,6 +42,8 @@ export type LauncherLaunchReport =
       displayMode: "headless" | "interactive";
       vmPath: string;
       vmId: string;
+      /** The VM's slot: its directory among the profile's VMs, which holds `vmPath`. */
+      vmDirectory: string;
       /** Whether this start downloaded the VM first. */
       vmUpdated: boolean;
       pid?: number;
