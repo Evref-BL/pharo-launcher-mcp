@@ -18,6 +18,7 @@ import {
   sweepLaunchLogs,
   type LaunchLogPaths,
 } from "./launchLogs.js";
+import { ensureLauncherPatches } from "./launcherPatches.js";
 import { resolveLauncherScript } from "./launcherScript.js";
 import type {
   LauncherImage,
@@ -219,6 +220,11 @@ function ensureProfileLauncherImage(
     changesPathForImage(installationLauncherImage),
     changesPathForImage(profileLauncherImage),
   );
+
+  // Without its VM no command runs, and the command says so itself.
+  if (fs.existsSync(config.launcherVm)) {
+    ensureLauncherPatches(config.launcherVm, profileLauncherImage);
+  }
 }
 
 export function ensureProfileLauncherConfiguration(
