@@ -57,6 +57,15 @@ copies the installation control image into the profile when needed, copies the
 matching `.changes` file when present, and writes the Launcher CLI
 configuration.
 
+It also changes the profile's copy of the control image once, and records it
+in `pharo-launcher-mcp-patches` beside the image, so that the CLI can create
+images from templates hosted on GitHub. github.com answers with header lines
+longer than the 4096 characters the Launcher's Zinc reads, so the copy reads
+longer ones. And the Launcher answers a failed download with a retry dialog,
+which a headless command waits on forever, so the copy fails the download
+instead, writing its reason to standard error. The installation control image
+is never changed.
+
 ## Explicit Profile Paths
 
 Callers can also provide every profile path:
