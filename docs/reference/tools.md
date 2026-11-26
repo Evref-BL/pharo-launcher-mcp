@@ -111,8 +111,9 @@ The categories come in the Launcher's order, with the one it marks as its
 default. A template list names templates only: a name is what
 `pharo_launcher_image_create` takes.
 
-In profile mode, `pharo_launcher_template_update` also verifies that the active
-profile source list is usable and probes `template list`.
+In profile mode, `pharo_launcher_template_update` also downloads the active
+profile's source list, keeping the one there when the download fails, and
+probes `template list`.
 
 ## Process Tools
 

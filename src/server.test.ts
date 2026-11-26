@@ -259,6 +259,7 @@ describe("every answer is text", () => {
       runner,
       imageCopyVerificationTimeoutMs: 0,
       sleep: async () => {},
+      fetchTemplateSources: async () => "sources",
       nativeProcess: processes(ok ? [`71513 /vms/pharo ${base}`] : [], {
         killProcess: () => {},
         isAlive: () => false,
@@ -1724,32 +1725,35 @@ describe("the templates", () => {
     expect(text(timedOut)).toBe("Pharo Launcher did not finish list templates within 30 s.");
   });
 
-  it("refresh the list, and download the profile's sources", async () => {
+  it("refresh the list, and download the profile's sources each time", async () => {
     const { profile, config } = inProfile();
     const { runner, calls } = recording((args) =>
       args[1] === "update" ? exited(0) : exited(0, "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13'}]"),
     );
+    const sources = path.join(profile.templateSourcesDir, "sources.list");
+    const update = (fetched: () => Promise<string>) =>
+      callTool("pharo_launcher_template_update", {}, { config, runner, fetchTemplateSources: fetched });
 
-    const downloaded = await callTool("pharo_launcher_template_update", {}, {
-      config,
-      runner,
-      fetchTemplateSources: async () => "https://files.pharo.org/image/130/latest-64.zip",
+    const downloaded = await update(async () => "Pharo 14.0 - 64bit (next stable)");
+    const refreshed = await update(async () => "Pharo 14.0 - 64bit (next stable)");
+    const updated = await update(async () => "Pharo 14.0 - 64bit (stable)");
+    const kept = await update(async () => {
+      throw new Error("getaddrinfo ENOTFOUND files.pharo.org");
     });
-    const refreshed = await callTool("pharo_launcher_template_update", {}, { config, runner });
 
     expect(text(downloaded)).toBe(
       "Refreshed the template list, and downloaded this profile's sources.list from https://files.pharo.org/pharo-launcher/sources.list.",
     );
-    expect(fs.readFileSync(path.join(profile.templateSourcesDir, "sources.list"), "utf8")).toContain(
-      "latest-64.zip",
-    );
     expect(text(refreshed)).toBe("Refreshed the template list.");
-    expect(calls).toEqual([
-      ["template", "update"],
-      ["template", "list", "--ston"],
-      ["template", "update"],
-      ["template", "list", "--ston"],
-    ]);
+    expect(text(updated)).toBe(
+      "Refreshed the template list, and updated this profile's sources.list from https://files.pharo.org/pharo-launcher/sources.list.",
+    );
+    expect(kept.isError).toBeFalsy();
+    expect(text(kept)).toBe(
+      "Refreshed the template list, but kept this profile's sources.list: downloading https://files.pharo.org/pharo-launcher/sources.list failed (getaddrinfo ENOTFOUND files.pharo.org).",
+    );
+    expect(fs.readFileSync(sources, "utf8")).toBe("Pharo 14.0 - 64bit (stable)");
+    expect(calls).toEqual(Array(4).fill([["template", "update"], ["template", "list", "--ston"]]).flat());
   });
 
   it("say why the refresh is not done", async () => {
@@ -1765,6 +1769,7 @@ describe("the templates", () => {
     fs.writeFileSync(path.join(profile.templateSourcesDir, "sources.list"), "a source");
     const probe = await callTool("pharo_launcher_template_update", {}, {
       config,
+      fetchTemplateSources: async () => "a source",
       runner: recording((args) =>
         args[1] === "update" ? exited(0) : exited(1, "", "Image template category 'x' not found."),
       ).runner,

@@ -431,9 +431,15 @@ export async function imageCreateResult(
   return result;
 }
 
+/**
+ * What a template update did to the profile's sources.list: downloaded it
+ * where there was none (`created`), replaced it with a newer one
+ * (`updated`), found it current (`already_present`), kept it when the
+ * download failed (`kept`), or failed with none to keep (`failed`).
+ */
 interface TemplateSourcesBootstrap {
   ok: boolean;
-  action: "not_applicable" | "already_present" | "created" | "failed";
+  action: "not_applicable" | "already_present" | "created" | "updated" | "kept" | "failed";
   path?: string;
   url?: string;
   bytes?: number;
@@ -467,6 +473,13 @@ async function defaultFetchTemplateSources(url: string): Promise<string> {
   return response.text();
 }
 
+/**
+ * Downloads the template sources list into the profile on every update, as
+ * the Launcher keeps its own up to date: the profile's copy is otherwise the
+ * one its first update fetched, and the official templates' names and labels
+ * move with each Pharo release. A download that fails keeps the copy there
+ * is, which still lists templates offline.
+ */
 async function ensureProfileTemplateSourcesBootstrap(
   config: PharoLauncherConfig | undefined,
   options: PharoLauncherOptions,
@@ -476,15 +489,7 @@ async function ensureProfileTemplateSourcesBootstrap(
     return { ok: true, action: "not_applicable" };
   }
 
-  if (nonEmptyFile(sourcesPath)) {
-    return {
-      ok: true,
-      action: "already_present",
-      path: sourcesPath,
-      bytes: fs.statSync(sourcesPath).size,
-    };
-  }
-
+  const present = nonEmptyFile(sourcesPath);
   const url = options.templateSourcesUrl ?? defaultTemplateSourcesUrl;
   try {
     const fetchTemplateSources =
@@ -493,21 +498,29 @@ async function ensureProfileTemplateSourcesBootstrap(
     if (body.trim().length === 0) {
       throw new Error("downloaded template source list was empty");
     }
+    const bytes = Buffer.byteLength(body, "utf8");
+    if (present && fs.readFileSync(sourcesPath, "utf8") === body) {
+      return { ok: true, action: "already_present", path: sourcesPath, url, bytes };
+    }
 
     fs.mkdirSync(path.dirname(sourcesPath), { recursive: true });
     const tempPath = `${sourcesPath}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tempPath, body, "utf8");
     fs.renameSync(tempPath, sourcesPath);
 
-    return {
-      ok: true,
-      action: "created",
-      path: sourcesPath,
-      url,
-      bytes: Buffer.byteLength(body, "utf8"),
-    };
+    return { ok: true, action: present ? "updated" : "created", path: sourcesPath, url, bytes };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (present) {
+      return {
+        ok: true,
+        action: "kept",
+        path: sourcesPath,
+        url,
+        bytes: fs.statSync(sourcesPath).size,
+        error: message,
+      };
+    }
     return {
       ok: false,
       action: "failed",

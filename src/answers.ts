@@ -903,7 +903,11 @@ const answerTemplateUpdate: Answer = async (context) => {
     return textResult([
       bootstrap?.action === "created"
         ? `Refreshed the template list, and downloaded this profile's sources.list from ${bootstrap.url}.`
-        : "Refreshed the template list.",
+        : bootstrap?.action === "updated"
+          ? `Refreshed the template list, and updated this profile's sources.list from ${bootstrap.url}.`
+          : bootstrap?.action === "kept"
+            ? `Refreshed the template list, but kept this profile's sources.list: downloading ${bootstrap.url} failed (${clause(bootstrap.error ?? "")}).`
+            : "Refreshed the template list.",
     ]);
   }
 
