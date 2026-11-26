@@ -10,21 +10,20 @@ artifact retention, and cleanup orchestration.
 These checks are safe for planning and static verification:
 
 - `npm test`, `npm run typecheck`, and `npm run build`
-- `git status --short --branch`
-- source review of command schemas, parser behavior, the library's results,
-  and timeout handling
+- source review of command schemas, the library's results, and timeout
+  handling
 - `pharo-launcher-mcp --health`, because it reports resolved paths without
   invoking Pharo Launcher
-- `pharo_launcher_config`, because it reports resolved configuration without
+- `config`, because it reports resolved configuration without
   invoking Pharo Launcher
 
 These checks inspect live host state or invoke Pharo Launcher. Run them only
 when the caller has chosen to cross that boundary:
 
 - `pharo-launcher-mcp --version-check` and `--validate-installation`
-- `pharo_launcher_image_list` and `pharo_launcher_image_info`, which read the
+- `image_list` and `image_info`, which read the
   images directory and the host's process list
-- `pharo_launcher_process_list`, which reads the host's process list
+- `process_list`, which reads the host's process list
 
 They are non-mutating, but they still cross the live host boundary.
 
@@ -34,27 +33,26 @@ The tools answer text, for a model. A program reads the library's launcher
 results instead, which carry status data for callers:
 
 - `ok`
-- `parser.status`
-- normalized `data` when parsing is supported
-- raw `stdout` and `stderr`, with `includeRaw`
+- `data`, each call's own
+- `diagnostic`, why it failed
 - command `durationMs`
 - command `exitCode`
 - command `signal`, when one ended the command
 - command `timedOut`
 - optional `timeoutReason`
 
-For cleanup decisions, callers must prefer normalized image and process data.
-Raw output is diagnostic evidence, not ownership proof.
+For cleanup decisions, callers use image and process data. A diagnostic is
+evidence, not ownership proof.
 
 ## Stop And Cleanup Hooks
 
 The mutation hooks that can participate in cleanup are:
 
-- `pharo_launcher_process_kill`
-- `pharo_launcher_image_delete`
+- `process_kill`
+- `image_delete`
 - profile-root cleanup by the caller after logs and diagnostics are retained
 
-The caller must pass either a recorded pid or an owned image name. Ambiguous
+The caller must pass either a recorded pid or an owned image. Ambiguous
 cleanup input is not allowed. It must never use these hooks against the user's
 source image, default profile, unrelated images, unrelated VMs, or a process
 that cannot be tied to the smoke run.

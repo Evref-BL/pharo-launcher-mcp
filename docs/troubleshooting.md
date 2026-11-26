@@ -45,7 +45,7 @@ profile variables.
 
 `pharo-launcher-mcp --validate-installation` runs `--version`. If it fails:
 
-1. Run `pharo_launcher_config` and confirm the VM and control image paths.
+1. Run `config` and confirm the VM and control image paths.
 2. Run `pharo-launcher-mcp --health` and check `launcherScript.exists`.
 3. If using a profile, confirm the installation control image exists. The
    profile control image is copied from that source before live commands.
@@ -77,8 +77,8 @@ Or provide a complete explicit profile without relying on `stateRoot`. See
 Run:
 
 ```text
-pharo_launcher_template_update
-pharo_launcher_template_list
+template_update
+template_list
 ```
 
 `template_update` downloads the active profile's source list, which Launcher
@@ -97,7 +97,7 @@ says which check failed:
   or names the file `<images>/X` lacks: the images directory holds no image
   named exactly `X`, which holds `X.image` and `X.changes`. Check that the
   active profile, or the Launcher's settings outside a profile, point at the
-  images directory `pharo_launcher_config` prints.
+  images directory `config` prints.
 - `Pharo Launcher made X but cannot open it: …`: the Launcher's own
   `image info X` failed, with its message.
 
@@ -136,7 +136,7 @@ process whose command line names `<images>/D/D.image`, the path spelled as the
 images directory is or as its real path. A VM of another Launcher, of another
 profile, or given its image by a relative path is not listed and cannot be
 killed through the server. For cleanup, prefer a PID captured from the detached
-launch result, which stops that process and nothing else. An `imageName` finds
+launch result, which stops that process and nothing else. An `image` finds
 the image as the other tools do, exactly, else ignoring case.
 
 ## Commands Time Out
@@ -146,8 +146,7 @@ Launcher did not finish within it. The library's result says so with:
 
 - `command.timedOut: true`
 - `command.timeoutReason`
-- command args
-- raw stdout/stderr captured before the timeout, with `includeRaw`
+- `diagnostic`, what the command wrote before the timeout
 
 A create or copy that outlived the timeout is still checked: when its image is
 there, the call succeeds with a warning, and the library's `command.timedOut`

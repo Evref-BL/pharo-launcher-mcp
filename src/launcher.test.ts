@@ -4,12 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LauncherCliRunner } from "./discovery.js";
 import type { LauncherCliResult } from "./launcherCli.js";
-import {
-  openPharoLauncher,
-  ProfileTooDeepError,
-  ToolInputError,
-  type PharoLauncher,
-} from "./launcher.js";
+import { ProfileTooDeepError, ToolInputError } from "./commandCatalog.js";
+import { openLauncher as openPharoLauncher, type PharoLauncher } from "./launcher.js";
+import { openPharoLauncher as openLibrary } from "./library.js";
 import { launcherModulePathLimit } from "./platform.js";
 import { toolNames } from "./server.js";
 import {
@@ -37,19 +34,19 @@ function stdout(text: string): LauncherCliRunner {
 // a consumer in the same process does not. Neither list generates the other,
 // so this is what keeps them level.
 const functionForTool: Record<string, keyof PharoLauncher> = {
-  pharo_launcher_config: "describeConfig",
-  pharo_launcher_image_copy_between_profiles: "copyImageBetweenProfiles",
-  pharo_launcher_image_copy: "copyImage",
-  pharo_launcher_image_create: "createImage",
-  pharo_launcher_image_delete: "deleteImage",
-  pharo_launcher_image_info: "imageInfo",
-  pharo_launcher_image_list: "listImages",
-  pharo_launcher_image_start: "startImage",
-  pharo_launcher_process_kill: "killProcess",
-  pharo_launcher_process_list: "listProcesses",
-  pharo_launcher_template_category_list: "listTemplateCategories",
-  pharo_launcher_template_list: "listTemplates",
-  pharo_launcher_template_update: "updateTemplates",
+  config: "describeConfig",
+  image_copy_between_profiles: "copyImageBetweenProfiles",
+  image_copy: "copyImage",
+  image_create: "createImage",
+  image_delete: "deleteImage",
+  image_info: "imageInfo",
+  image_list: "listImages",
+  image_start: "startImage",
+  process_kill: "killProcess",
+  process_list: "listProcesses",
+  template_category_list: "listTemplateCategories",
+  template_list: "listTemplates",
+  template_update: "updateTemplates",
 };
 
 describe("openPharoLauncher", () => {
@@ -102,8 +99,8 @@ describe("openPharoLauncher", () => {
     });
 
     await launcher.createImage({
-      templateName: "Pharo 13.0 - 64bit",
-      newImageName: "Task",
+      template: "Pharo 13.0 - 64bit",
+      image: "Task",
     });
 
     expect(calls[0]?.slice(0, 2)).toEqual(["image", "create"]);
@@ -115,19 +112,34 @@ describe("openPharoLauncher", () => {
     const launcher = openPharoLauncher();
 
     await expect(
-      launcher.killProcess({ pid: 1234, imageName: "Task" } as never),
-    ).rejects.toThrow("Give pid or imageName, not both.");
+      launcher.killProcess({ pid: 1234, image: "Task" } as never),
+    ).rejects.toThrow("Give pid or image, not both.");
   });
 
-  it("scopes to a profile from an environment, with no process of its own", () => {
-    const launcher = openPharoLauncher({
-      env: {
-        PHARO_LAUNCHER_MCP_PROFILE: "isolated",
-        PHARO_LAUNCHER_MCP_STATE_ROOT: "/tmp/isolated-profile",
-      },
-    });
+  it("opens on a profile the program names, with no process of its own", () => {
+    const launcher = openLibrary({ profile: { stateRoot: "/tmp/isolated-profile", name: "isolated" } });
 
-    expect(launcher.describeConfig().profile?.name).toBe("isolated");
+    expect(launcher.describeConfig().profile).toMatchObject({
+      name: "isolated",
+      stateRoot: { path: "/tmp/isolated-profile" },
+    });
+    expect(launcher.describeConfig().imagesDir.path).toBe(path.join("/tmp/isolated-profile", "images"));
+  });
+
+  // They are the command's: a program that runs the library under a
+  // command's environment gets what it asked for, not the command's profile.
+  it("reads none of the command's variables", () => {
+    vi.stubEnv("PHARO_LAUNCHER_MCP_PROFILE", "ambient");
+    vi.stubEnv("PHARO_LAUNCHER_MCP_STATE_ROOT", "/tmp/ambient-profile");
+    try {
+      expect(openLibrary().describeConfig().profile).toBeUndefined();
+      expect(openLibrary({ profile: { stateRoot: "/tmp/mine" } }).describeConfig().profile).toMatchObject({
+        name: "default",
+        stateRoot: { path: "/tmp/mine" },
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -202,7 +214,7 @@ describe("listImages and imageInfo", () => {
         {
           name: "base",
           imagePath: base,
-          pharoVersion: "140",
+          pharoVersion: "14.0",
           architecture: "64",
           template: { name: nextStable, url: nextStableUrl },
           modified: expect.any(String),
@@ -218,17 +230,17 @@ describe("listImages and imageInfo", () => {
         },
       ],
     });
-    expect(await launcher.imageInfo({ imageName: "BASE" })).toEqual({
+    expect(await launcher.imageInfo({ image: "BASE" })).toEqual({
       found: true,
       imagesDir: path.resolve(profile.imagesDir),
       image: list.images[0],
     });
-    expect(await launcher.imageInfo({ imageName: "pricing-backup" })).toEqual({
+    expect(await launcher.imageInfo({ image: "pricing-backup" })).toEqual({
       found: false,
       imagesDir: path.resolve(profile.imagesDir),
       notAnImage: list.notImages[0],
     });
-    expect(await launcher.imageInfo({ imageName: "releasecheck" })).toEqual({
+    expect(await launcher.imageInfo({ image: "releasecheck" })).toEqual({
       found: false,
       imagesDir: path.resolve(profile.imagesDir),
     });
@@ -271,7 +283,7 @@ describe("listImages and imageInfo", () => {
     });
 
     const list = await launcher.listImages();
-    const info = await launcher.imageInfo({ imageName: "stuck" });
+    const info = await launcher.imageInfo({ image: "stuck" });
 
     expect(list.processListFailure).toBe("listing processes is not supported on freebsd");
     expect(list.images[0]).not.toHaveProperty("pids");
@@ -284,9 +296,7 @@ describe("listImages and imageInfo", () => {
   it("refuse a call that names no image", async () => {
     const launcher = openPharoLauncher({ runner: unusedRunner });
 
-    await expect(launcher.imageInfo({} as never)).rejects.toThrow(
-      "imageName is required",
-    );
+    await expect(launcher.imageInfo({} as never)).rejects.toThrow("image is required");
   });
 });
 
@@ -319,7 +329,7 @@ describe("the process tools", () => {
 
     const listed = await launcher.listProcesses();
     const byPid = await launcher.killProcess({ pid: 17880 });
-    const byName = await launcher.killProcess({ imageName: "LatestMCP" });
+    const byName = await launcher.killProcess({ image: "LatestMCP" });
 
     expect(listed.data).toEqual([
       {
@@ -335,7 +345,7 @@ describe("the process tools", () => {
     expect(killed).toEqual([]);
   });
 
-  it("see every Pharo VM outside a profile, as on 0.4.1", async () => {
+  it("see only the VMs of this Launcher's images outside a profile too", async () => {
     const userFilesDir = temporary("pharo-launcher-mcp-user-files-");
     const stuck = writeImage(path.join(userFilesDir, "images"), "stuck");
     const killed: number[] = [];
@@ -349,9 +359,13 @@ describe("the process tools", () => {
       },
     });
 
-    expect(pids((await launcher.listProcesses()).data)).toEqual([17880, 71513, 71600]);
-    expect((await launcher.killProcess({ imageName: "LatestMCP" })).ok).toBe(true);
-    expect(killed).toEqual([17880]);
+    expect(pids((await launcher.listProcesses()).data)).toEqual([71513]);
+    expect((await launcher.killProcess({ image: "LatestMCP" })).ok).toBe(false);
+    expect(await launcher.killProcess({ image: "stuck" })).toMatchObject({
+      ok: true,
+      data: { killed: [71513], failures: [] },
+    });
+    expect(killed).toEqual([71513]);
   });
 
   it("find an image whose name holds a space, by name and by pid", async () => {
@@ -370,7 +384,7 @@ describe("the process tools", () => {
     });
 
     expect((await launcher.listImages()).images[0]?.pids).toEqual([123]);
-    expect((await launcher.killProcess({ imageName: "mcp DEBUG" })).ok).toBe(true);
+    expect((await launcher.killProcess({ image: "mcp DEBUG" })).ok).toBe(true);
     expect((await launcher.killProcess({ pid: 123 })).ok).toBe(true);
     expect(killed).toEqual([123, 123]);
   });
@@ -396,7 +410,7 @@ describe("the process tools", () => {
       ["pricing", []],
       ["pricing-2025", [7]],
     ]);
-    expect((await launcher.killProcess({ imageName: "pricing" })).ok).toBe(false);
+    expect((await launcher.killProcess({ image: "pricing" })).ok).toBe(false);
     expect(killed).toEqual([]);
   });
 
@@ -439,8 +453,8 @@ describe("createImage and copyImage", () => {
     const launcher = openPharoLauncher({ config: testConfig({ profile }), runner });
 
     const result = await launcher.createImage({
-      templateName: "Pharo 13.0 - 64bit (stable)",
-      newImageName: "pricing",
+      template: "Pharo 13.0 - 64bit (stable)",
+      image: "pricing",
     });
 
     expect(result).toMatchObject({
@@ -449,7 +463,7 @@ describe("createImage and copyImage", () => {
         image: {
           name: "pricing",
           imagePath: path.join(profile.imagesDir, "pricing", "pricing.image"),
-          pharoVersion: "130",
+          pharoVersion: "13.0",
           architecture: "64",
           template: { name: "Pharo 13.0 - 64bit (stable)" },
         },
@@ -479,8 +493,8 @@ describe("createImage and copyImage", () => {
     const launcher = openPharoLauncher({ config: testConfig({ profile }), runner });
 
     const result = await launcher.createImage({
-      templateName: "Pharo 13.0 - 64bit (stable)",
-      newImageName: "release-check",
+      template: "Pharo 13.0 - 64bit (stable)",
+      image: "release-check",
     });
 
     expect(result).toMatchObject({
@@ -506,8 +520,8 @@ describe("createImage and copyImage", () => {
     });
 
     const result = await launcher.createImage({
-      templateName: "Pharo 13.0 - 64bit (stable)",
-      newImageName: "release-check",
+      template: "Pharo 13.0 - 64bit (stable)",
+      image: "release-check",
     });
 
     expect(result).toMatchObject({
@@ -533,8 +547,8 @@ describe("createImage and copyImage", () => {
     });
 
     const result = await launcher.createImage({
-      templateName: "Pharo 13.0 - 64bit (stable)",
-      newImageName: "release-check",
+      template: "Pharo 13.0 - 64bit (stable)",
+      image: "release-check",
     });
 
     expect(result).toMatchObject({
@@ -566,8 +580,8 @@ describe("createImage and copyImage", () => {
     });
 
     const result = await launcher.createImage({
-      templateName: "Pharo 13.0 - 64bit (stable)",
-      newImageName: "release-check",
+      template: "Pharo 13.0 - 64bit (stable)",
+      image: "release-check",
     });
 
     expect(result.diagnostic).toBe(
@@ -592,13 +606,14 @@ describe("createImage and copyImage", () => {
     const launcher = openPharoLauncher({ config: testConfig({ userFilesDir }), runner });
 
     const result = await launcher.createImage({
-      templateName: "Pharo 13.0 - 64bit (stable)",
-      newImageName: "Task",
+      template: "Pharo 13.0 - 64bit (stable)",
+      image: "Task",
     });
 
     // The settings name no directory holding it: the Launcher's answer is
     // the answer.
-    expect(result).toMatchObject({ ok: true, data: {} });
+    expect(result.ok).toBe(true);
+    expect(result.data).toBeUndefined();
     expect(calls).toEqual([
       ["image", "create", "--no-launch", "--templateName", "Pharo 13.0 - 64bit (stable)", "Task"],
       ["image", "info", "Task"],
@@ -613,8 +628,8 @@ describe("createImage and copyImage", () => {
     const launcher = openPharoLauncher({ config: testConfig({ profile }), runner });
 
     const result = await launcher.createImage({
-      templateName: "Pharo 99",
-      newImageName: "Task",
+      template: "Pharo 99",
+      image: "Task",
     });
 
     expect(result).toMatchObject({
@@ -657,8 +672,8 @@ describe("createImage and copyImage", () => {
     const launcher = openPharoLauncher({ config: testConfig({ profile }), runner });
 
     const result = await launcher.copyImage({
-      imageName: "pricing",
-      newImageName: "pricing-backup",
+      image: "pricing",
+      newImage: "pricing-backup",
     });
 
     expect(result).toMatchObject({
@@ -685,8 +700,8 @@ describe("createImage and copyImage", () => {
     });
 
     const result = await launcher.copyImage({
-      imageName: "pricing",
-      newImageName: "pricing-backup",
+      image: "pricing",
+      newImage: "pricing-backup",
     });
 
     expect(result.diagnostic).toBe(
@@ -707,10 +722,10 @@ describe("listTemplates", () => {
       "PhLLocalTemplate{#name:'mine'}]";
     const launcher = openPharoLauncher({ config: testConfig({ profile: profileOnDisk() }), runner: stdout(ston) });
 
-    expect((await launcher.listTemplates({ templateCategory: "Templates" })).data).toEqual([
+    expect((await launcher.listTemplates({ category: "Templates" })).data).toEqual([
       { name: "Pharo 13.0 - 64bit (stable)", url: "https://files.pharo.org/image/130/latest-64.zip" },
     ]);
-    expect((await launcher.listTemplates({ templateCategory: "Templates", includeLocal: true })).data).toEqual([
+    expect((await launcher.listTemplates({ category: "Templates", includeLocal: true })).data).toEqual([
       { name: "Pharo 14.0 - 64bit (next stable)", local: true },
       { name: "Pharo 13.0 - 64bit (stable)", url: "https://files.pharo.org/image/130/latest-64.zip" },
       { name: "mine", local: true },
@@ -728,7 +743,7 @@ describe("startImage", () => {
       runner,
     });
 
-    const result = await launcher.startImage({ imageName: "build-1" });
+    const result = await launcher.startImage({ image: "build-1" });
 
     expect(result.ok).toBe(true);
     expect(calls).toEqual([["image", "launch", "build-1"]]);
@@ -748,7 +763,7 @@ describe("startImage", () => {
     });
 
     const refusal = await launcher
-      .startImage({ imageName: "release-check" })
+      .startImage({ image: "release-check" })
       .catch((error: unknown) => error);
 
     expect(refusal).toBeInstanceOf(ProfileTooDeepError);
@@ -782,7 +797,7 @@ describe("deleteImage and deleteLaunchLogs", () => {
     });
     const launcher = openPharoLauncher({ config: testConfig({ profile }), runner });
 
-    const result = await launcher.deleteImage({ imageName: "task" });
+    const result = await launcher.deleteImage({ image: "task" });
 
     expect(result.ok).toBe(true);
     expect(calls).toEqual([["image", "delete", "--force", "task"]]);
@@ -799,7 +814,7 @@ describe("deleteImage and deleteLaunchLogs", () => {
       runner: async () => exited(1, "", "cannot delete"),
     });
 
-    const result = await launcher.deleteImage({ imageName: "task" });
+    const result = await launcher.deleteImage({ image: "task" });
 
     expect(result.ok).toBe(false);
     expect(taskLogs.filter((file) => fs.existsSync(file))).toEqual(taskLogs);
@@ -810,7 +825,7 @@ describe("deleteImage and deleteLaunchLogs", () => {
     const taskLogs = writeLogs(profile.logsDir, "task");
     const launcher = openPharoLauncher({ config: testConfig({ profile }), runner: unusedRunner });
 
-    launcher.deleteLaunchLogs({ imageName: "task" });
+    launcher.deleteLaunchLogs({ image: "task" });
 
     expect(taskLogs.filter((file) => fs.existsSync(file))).toEqual([]);
   });
@@ -821,7 +836,7 @@ describe("deleteImage and deleteLaunchLogs", () => {
     const taskLogs = writeLogs(profile.logsDir, "task");
     const launcher = openPharoLauncher({ config: testConfig({ profile }), runner: unusedRunner });
 
-    launcher.deleteLaunchLogs({ imageName: "task" });
+    launcher.deleteLaunchLogs({ image: "task" });
 
     expect(taskLogs.filter((file) => fs.existsSync(file))).toEqual(taskLogs);
   });
@@ -832,6 +847,6 @@ describe("deleteImage and deleteLaunchLogs", () => {
       runner: unusedRunner,
     });
 
-    expect(() => launcher.deleteLaunchLogs({} as { imageName: string })).toThrow(ToolInputError);
+    expect(() => launcher.deleteLaunchLogs({} as { image: string })).toThrow(ToolInputError);
   });
 });

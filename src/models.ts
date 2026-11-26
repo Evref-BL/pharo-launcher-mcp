@@ -1,31 +1,64 @@
-export type LauncherOutputFormat = "ston" | "text";
+/** How a Launcher command ended. */
+export interface LauncherCommandRun {
+  durationMs: number;
+  exitCode: number | null;
+  /** The signal that ended the command, which then has no exit code. */
+  signal?: NodeJS.Signals;
+  /** Whether it ran past the call's time, and was stopped. */
+  timedOut: boolean;
+  timeoutReason?: string;
+}
 
-export interface LauncherCommandResult<T = unknown> {
+/**
+ * What a call that runs a Launcher command answers: whether it did what it was
+ * asked, what it found, and, when it did not, why and what to do about it.
+ */
+export interface LauncherCommandResult<T = undefined> {
   ok: boolean;
   data?: T;
+  /** Why the call failed, in the Launcher's words or this package's. */
   diagnostic?: string;
+  /** What to do about it, when something can be done. */
   action?: string;
-  parser: {
-    status: "parsed" | "unsupported" | "failed" | "skipped";
-    format: LauncherOutputFormat;
-    message?: string;
-  };
-  raw?: {
-    stdout: string;
-    stderr: string;
-    format: LauncherOutputFormat;
-  };
-  command: {
-    args: string[];
-    durationMs: number;
-    exitCode: number | null;
-    /** The signal that ended the command, which then has no exit code. */
-    signal?: NodeJS.Signals;
-    timedOut: boolean;
-    timeoutReason?: string;
-  };
-  /** What an image start ran, once it ran something. */
+  command: LauncherCommandRun;
+}
+
+/** A start: what it ran, once it ran something. */
+export interface StartImageResult extends LauncherCommandResult {
   launch?: LauncherLaunchReport;
+}
+
+/** A kill: the pids it killed, and those it could not. */
+export type KillProcessResult = LauncherCommandResult<{
+  killed: number[];
+  failures: Array<{ pid: number; message: string }>;
+}>;
+
+/** A template listing; `failure` says when the category does not exist. */
+export type TemplateListResult = LauncherCommandResult<LauncherTemplate[]> & {
+  failure?: { kind: "unknown-category" };
+};
+
+/**
+ * What a template update did to a profile's sources.list: downloaded it where
+ * there was none (`created`), replaced it with a newer one (`updated`), found
+ * it current (`unchanged`), kept it when the download failed (`kept`), or
+ * failed with none to keep (`failed`).
+ */
+export interface TemplateSources {
+  outcome: "created" | "updated" | "unchanged" | "kept" | "failed";
+  path: string;
+  url: string;
+  /** Why the download failed, for `kept` and `failed`. */
+  error?: string;
+}
+
+/**
+ * A template update. In a profile it downloads the profile's sources.list,
+ * which `sources` reports; outside one the Launcher keeps its own.
+ */
+export interface TemplateUpdateResult extends LauncherCommandResult {
+  sources?: TemplateSources;
 }
 
 /**
@@ -50,15 +83,25 @@ export type LauncherLaunchReport =
       logs?: { stdout: string; stderr: string };
       output?: { stdout: string; stderr: string };
     }
-  | { by: "launcher"; pid?: number; logs?: { stdout: string; stderr: string } };
+  | {
+      by: "launcher";
+      pid?: number;
+      logs?: { stdout: string; stderr: string };
+      /** What the Launcher wrote, when the start waited for it. */
+      output?: { stdout: string; stderr: string };
+    };
 
 /**
- * Why a create or copy whose command exited 0 made no image, by the time its
- * check gave up: in profile mode, the images directory never held it under
- * its name (`not-listed`); in any mode, the Launcher's `image info` could not
- * open it (`not-opened`), `message` being what it said.
+ * Why a create or copy made no image. The Launcher knew no such template
+ * (`unknown-template`) or category (`unknown-category`). Or its command exited
+ * 0, and by the time the check gave up the images directory never held the
+ * image under its name, in profile mode (`not-listed`), or in any mode the
+ * Launcher's `image info` could not open it (`not-opened`), `message` being
+ * what it said.
  */
 export type MadeImageFailure =
+  | { kind: "unknown-template" }
+  | { kind: "unknown-category" }
   | {
       kind: "not-listed";
       /** `<images>/<name>`. */
@@ -72,8 +115,8 @@ export type MadeImageFailure =
 
 /**
  * A create or copy. Its `data` is `{ image?: LauncherImage }`, the image when
- * the images directory holds it; `failure` says why a command that exited 0
- * made no image, beside `diagnostic`, so a caller writes its own sentence.
+ * the images directory holds it; `failure` says why it made none, when that is
+ * known, beside `diagnostic`, so a caller writes its own sentence.
  */
 export type MadeImageResult = LauncherCommandResult<{ image?: LauncherImage }> & {
   failure?: MadeImageFailure;
@@ -93,7 +136,10 @@ export interface LauncherImage {
   name: string;
   /** `<images>/D/D.image`, as the images directory is spelled, not real. */
   imagePath: string;
-  /** meta-inf.ston's `#pharoVersion`, else `D/pharo.version`, as written. */
+  /**
+   * The Pharo version as Pharo says it, `13.0`: read from meta-inf.ston's
+   * `#pharoVersion`, else `D/pharo.version`, which write `130`.
+   */
   pharoVersion?: string;
   /** meta-inf.ston's `#architecture`, else the image header's format. */
   architecture?: "64" | "32";

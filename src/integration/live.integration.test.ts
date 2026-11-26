@@ -33,7 +33,7 @@ describe("PharoLauncher live integration", () => {
       source: "profile",
     });
 
-    const text = expectAnswered("config", await callLiveTool(profile, "pharo_launcher_config"));
+    const text = expectAnswered("config", await callLiveTool(profile, "config"));
     expect(text.split("\n")).toEqual([
       expect.stringMatching(/^Pharo Launcher .+, profile integration\.$/),
       `stateRoot: ${profile.stateRoot}`,
@@ -53,7 +53,7 @@ describe("PharoLauncher live integration", () => {
     }
     const categoriesText = expectAnswered(
       "template category list",
-      await callLiveTool(profile, "pharo_launcher_template_category_list", {}, { timeoutMs: liveTimeoutMs }),
+      await callLiveTool(profile, "template_category_list", {}, { timeoutMs: liveTimeoutMs }),
     );
     expect(categoriesText.split("\n").slice(1)).toEqual([
       "categories:",
@@ -66,7 +66,7 @@ describe("PharoLauncher live integration", () => {
     expect(templateNames.every((name) => typeof name === "string" && name.length > 0)).toBe(true);
     const templatesText = expectAnswered(
       "template list",
-      await callLiveTool(profile, "pharo_launcher_template_list", {}, { timeoutMs: liveTimeoutMs }),
+      await callLiveTool(profile, "template_list", {}, { timeoutMs: liveTimeoutMs }),
     );
     expect(templatesText.split("\n")).toEqual([
       `${templateNames.length} template${templateNames.length === 1 ? "" : "s"} in the default category.`,
@@ -78,7 +78,7 @@ describe("PharoLauncher live integration", () => {
   it("refreshes the template list", async () => {
     const text = expectAnswered(
       "template update",
-      await callLiveTool(profile, "pharo_launcher_template_update", {}, { timeoutMs: liveTimeoutMs }),
+      await callLiveTool(profile, "template_update", {}, { timeoutMs: liveTimeoutMs }),
     );
     expect(text).toMatch(/^Refreshed the template list/);
   });
@@ -88,7 +88,7 @@ describe("PharoLauncher live integration", () => {
     expect(list).toMatchObject({ imagesDir: imagesDirOf(profile), images: [], notImages: [] });
     expect(list.processListFailure).toBeUndefined();
 
-    const text = expectAnswered("image list", await callLiveTool(profile, "pharo_launcher_image_list"));
+    const text = expectAnswered("image list", await callLiveTool(profile, "image_list"));
     expect(text).toBe(`No images in ${imagesDirOf(profile)}.`);
   });
 
@@ -106,7 +106,7 @@ describe("PharoLauncher live integration", () => {
     const processes = expectOk("process list", await liveLauncher(profile).listProcesses());
     expect(processes.data).toEqual([]);
 
-    const text = expectAnswered("process list", await callLiveTool(profile, "pharo_launcher_process_list"));
+    const text = expectAnswered("process list", await callLiveTool(profile, "process_list"));
     expect(text).toBe(`No process runs an image in ${imagesDirOf(profile)}.`);
   });
 });

@@ -98,16 +98,16 @@ write them outside that root.
 
 ## Template Sources
 
-In profile mode, `pharo_launcher_template_update` downloads the default Pharo
+In profile mode, `template_update` downloads the default Pharo
 Launcher source list into the active profile after Launcher returns, since
 Launcher does not update a profile's copy and the official templates' names
 change with each Pharo release, then probes `template list`.
 
 Its answer says when the list changed, and when downloading it or the probe
 failed. A failed download keeps the list the profile has. Until the
-profile has a source list, `pharo_launcher_template_list` and
-`pharo_launcher_image_create` answer that there are no templates yet, and to
-call `pharo_launcher_template_update` first.
+profile has a source list, `template_list` and
+`image_create` answer that there are no templates yet, and to
+call `template_update` first.
 
 ## Image Launch In Profile Mode
 
@@ -120,7 +120,7 @@ Launch supports:
 
 ```json
 {
-  "imageName": "sample-130",
+  "image": "sample-130",
   "displayMode": "headless",
   "detached": true
 }
@@ -135,39 +135,31 @@ of images the profile no longer holds; a delete removes the image's.
 
 ## Cross-Profile Image Copy
 
-`pharo_launcher_image_copy_between_profiles` copies an existing image directory
-from one explicit profile to another without relying on the active server
-profile.
+`image_copy_between_profiles` copies an existing image directory from one images
+directory to another, such as from the user's own Launcher into a profile,
+without relying on the active server profile. Nothing runs: the files are
+copied, renamed, and checked.
 
-Both `sourceProfile` and `destinationProfile` must include either:
+`sourceProfile` and `destinationProfile` each give one of:
 
 - `stateRoot`, the directory that holds the profile's `images/` directory, or
-- the complete explicit path set: `launcherConfiguration`, `imagesDir`,
-  `vmsDir`, `templateSourcesDir`, `initScriptsDir`, and `logsDir`.
+- `imagesDir`, an images directory itself, such as the user's own
+  Launcher's.
 
-`pharo_launcher_config` prints the active profile's `stateRoot`. Given a
-`stateRoot`, every other path defaults to its place in the layout above, and is
-given only for a profile that keeps it elsewhere.
-
-All profile paths must be absolute, and must exist: the copy creates none. A
-`stateRoot` that does not exist or holds no `images/` directory, and any path
-given that does not exist, is refused and named. Image names must be launcher
-image names, not paths. Destination collisions are refused.
+`config` prints the active profile's `stateRoot`. Both paths must be absolute,
+and must exist: the copy creates none. A `stateRoot` that does not exist or
+holds no `images/` directory, and an `imagesDir` that does not exist, is refused
+and named. Image names must be launcher image names, not paths. Destination
+collisions are refused.
 
 Example:
 
 ```json
 {
-  "sourceProfile": {
-    "profileName": "source",
-    "stateRoot": "/path/to/source-profile"
-  },
-  "destinationProfile": {
-    "profileName": "destination",
-    "stateRoot": "/path/to/destination-profile"
-  },
-  "sourceImageName": "sample-130",
-  "destinationImageName": "sample-130-copy"
+  "sourceProfile": { "imagesDir": "/Users/me/Documents/Pharo/images" },
+  "destinationProfile": { "stateRoot": "/path/to/destination-profile" },
+  "image": "sample-130",
+  "newImage": "sample-130-copy"
 }
 ```
 
@@ -178,15 +170,14 @@ that already exists is named by its directory: copy under another name, or
 delete it with the destination profile active. An existing image is never
 replaced.
 
-The library's `copyImageBetweenProfiles` answers the full result, as before:
-source and destination image metadata, touched paths, metadata repair,
-verification, and cleanup guidance. A failure adds `failure`, which names what
-went wrong (`profile-path-missing`, `source-missing`, `source-image-missing`,
-`source-metadata-missing`, `destination-exists`, `preflight`, `post-move` or
-`exception`), and `message`, one line naming both images and both profiles,
-next to the `diagnostic` and `action` it is built from. With
-`profile-path-missing`, `missingProfilePaths` names each path that does not
-exist, by profile and field.
+The library's `copyImageBetweenProfiles` answers where the copy is: `source`,
+and `destination` with its directory and image file. A failure adds `failure`,
+which names what went wrong (`profile-path-missing`, `source-missing`,
+`source-image-missing`, `source-metadata-missing`, `destination-exists`,
+`preflight`, `post-move` or `exception`), next to its `diagnostic` and, when
+something can be done, `action`. With `profile-path-missing`,
+`missingProfilePaths` names each path that does not exist, by profile and
+field.
 
 ## Cleanup Rules
 

@@ -384,12 +384,18 @@ function asArchitecture(value: string | undefined): "64" | "32" | undefined {
  * The full pass, for one image: what its meta-inf.ston, its pharo.version and
  * its header say. A missing or unreadable file leaves its fields out.
  */
+/** The Pharo version as Pharo says it: "140" is 14.0 and "61" is 6.1; anything else as it is. */
+export function pharoVersionText(raw: string | undefined): string | undefined {
+  return raw !== undefined && /^\d{2,3}$/.test(raw) ? `${raw.slice(0, -1)}.${raw.slice(-1)}` : raw;
+}
+
 export function readLauncherImage(entry: ImageEntry): LauncherImage {
   const metaInfSource = readTextFile(path.join(entry.directory, "meta-inf.ston"));
   const metaInf = metaInfSource === undefined ? {} : readMetaInf(metaInfSource);
-  const pharoVersion =
+  const pharoVersion = pharoVersionText(
     metaInf.pharoVersion ??
-    nonEmpty(readTextFile(path.join(entry.directory, "pharo.version"))?.trim());
+      nonEmpty(readTextFile(path.join(entry.directory, "pharo.version"))?.trim()),
+  );
   const architecture =
     asArchitecture(metaInf.architecture) ?? headerArchitecture(entry.imagePath);
 

@@ -3,25 +3,42 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type {
-  CrossProfileImageCopyResult,
+  CopyBetweenProfilesInput,
+  CopyBetweenProfilesResult,
+  CopyImageInput,
+  CreateImageInput,
+  CrossProfileCopyFailure,
   ImageDirectory,
   ImageEntry,
   ImageMetadataRepairResult,
+  KillProcessInput,
+  KillProcessResult,
   LauncherCommandResult,
+  LauncherCommandRun,
   LauncherImage,
   LauncherImageInfo,
   LauncherImageList,
   LauncherLaunchReport,
-  LauncherOutputFormat,
   LauncherProcess,
+  LauncherSettings,
   LauncherTemplate,
+  ListTemplatesInput,
   MadeImageFailure,
   MadeImageResult,
+  MissingProfilePath,
   NotAnImage,
+  OpenPharoLauncherOptions,
+  PharoLauncher,
   PharoLauncherConfigReport,
-  RunNativeProcessToolOptions,
+  ProfileLocation,
+  StartImageInput,
+  StartImageResult,
   TemplateCategoriesResult,
-} from "./launcher.js";
+  TemplateListResult,
+  TemplateSources,
+  TemplateUpdateResult,
+} from "./library.js";
+import * as library from "./library.js";
 
 interface PackageManifest {
   bin: Record<string, string>;
@@ -47,35 +64,72 @@ function sourceFor(distPath: string): string {
 }
 
 /**
- * What `./launcher` promises a caller can name.
+ * What the package promises a caller can name.
  *
  * A function is only half usable when its answer has no name: the caller
  * copies the shape into its own type and the two drift. These are type-only,
- * so nothing at runtime can check them — this list is the check, and the
- * typecheck fails if `launcher.ts` stops re-exporting one.
+ * so nothing at runtime can check them; this list is the check, and the
+ * typecheck fails if `library.ts` stops exporting one.
  */
-type LauncherResultTypes = [
+type LibraryTypes = [
+  CopyBetweenProfilesInput,
+  CopyBetweenProfilesResult,
+  CopyImageInput,
+  CreateImageInput,
+  CrossProfileCopyFailure,
   ImageDirectory,
   ImageEntry,
   ImageMetadataRepairResult,
+  KillProcessInput,
+  KillProcessResult,
   LauncherCommandResult,
+  LauncherCommandRun,
   LauncherImage,
   LauncherImageInfo,
   LauncherImageList,
   LauncherLaunchReport,
-  NotAnImage,
-  LauncherOutputFormat,
   LauncherProcess,
+  LauncherSettings,
   LauncherTemplate,
+  ListTemplatesInput,
   MadeImageFailure,
   MadeImageResult,
+  MissingProfilePath,
+  NotAnImage,
+  OpenPharoLauncherOptions,
+  PharoLauncher,
   PharoLauncherConfigReport,
-  CrossProfileImageCopyResult,
-  RunNativeProcessToolOptions,
+  ProfileLocation,
+  StartImageInput,
+  StartImageResult,
   TemplateCategoriesResult,
+  TemplateListResult,
+  TemplateSources,
+  TemplateUpdateResult,
 ];
 
 describe("package exports", () => {
+  it("exports these values, and no other", () => {
+    // Each is a promise after 1.0: a new one is added here on purpose.
+    expect(Object.keys(library).sort()).toEqual([
+      "ProfileTooDeepError",
+      "ToolInputError",
+      "openPharoLauncher",
+      "readImageDirectory",
+      "readLauncherImage",
+      "repairCopiedImageMetadataInDirectory",
+    ]);
+  });
+
+  it("has one entry point, the library", () => {
+    expect(manifest.exports).toEqual({
+      ".": "./dist/library.js",
+      "./package.json": "./package.json",
+    });
+    expect(manifest.main).toBe("./dist/library.js");
+    expect(manifest.types).toBe("./dist/library.d.ts");
+  });
+
   it("exports a subpath for every file a consumer may import", () => {
     for (const [subpath, target] of Object.entries(manifest.exports)) {
       if (subpath === "./package.json") {

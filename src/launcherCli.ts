@@ -51,6 +51,8 @@ export interface LauncherCliResult {
   timeoutReason?: string;
   /** The processes a native process list saw, or a kill aimed at. */
   processes?: LauncherProcess[];
+  /** The pids a kill killed, and those it could not. */
+  kill?: { killed: number[]; failures: Array<{ pid: number; message: string }> };
   /** What an image start ran, once it ran something. */
   launch?: LauncherLaunchReport;
 }
@@ -657,7 +659,9 @@ function imageVmId(image: LauncherImage): string | undefined {
     return image.vmId;
   }
 
-  const pharoVersion = image.pharoVersion ?? pharoVersionFromTemplate(image);
+  // A VM id writes the version without its dot: 13.0 is 130.
+  const pharoVersion =
+    image.pharoVersion?.replace(/^(\d+)\.(\d+)$/, "$1$2") ?? pharoVersionFromTemplate(image);
   return pharoVersion
     ? `${pharoVersion}-${vmArchitectureSegment(image)}`
     : undefined;

@@ -4,7 +4,7 @@
  * `key: value` lines, then indented lists.
  *
  * The library keeps its typed objects for its callers; nothing here reaches
- * them. So every text that names a `pharo_launcher_*` tool is here, and so is
+ * them. So every text that names a tool is here, and so is
  * every check made before a call: in profile mode, where this server wrote the
  * images directory itself, a check refuses on its own; outside a profile the
  * directory comes from settings that can be wrong, so a name the reader does
@@ -13,29 +13,29 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  buildLauncherCommandArgs,
+  commandArgs,
   inputObject,
   optionalString,
   requiredString,
   ToolInputError,
 } from "./commandCatalog.js";
 import type { PharoLauncherConfig } from "./config.js";
-import { profileLabel, type CrossProfileImageCopyResult } from "./crossProfileCopy.js";
 import {
-  findByName,
-  processesOfImages,
-  scanImages,
-  whatItLacks,
-} from "./imageStore.js";
+  profileLabel,
+  type CopyBetweenProfilesInput,
+  type CopyBetweenProfilesResult,
+} from "./crossProfileCopy.js";
+import { findByName, scanImages, whatItLacks } from "./imageStore.js";
 import {
   madeImageFailureText,
-  runCommand,
   type CallToolOptions,
+  type CreateImageInput,
   type PharoLauncher,
-  type TemplateUpdateResult,
+  type StartImageInput,
 } from "./launcher.js";
 import { isLauncherInvocationFailure } from "./launcherCli.js";
 import type {
+  KillProcessResult,
   LauncherCommandResult,
   LauncherImage,
   LauncherProcess,
@@ -189,7 +189,7 @@ function callSeconds(options: CallToolOptions): number {
  */
 function launcherFailureText(
   operation: string,
-  result: LauncherCommandResult,
+  result: LauncherCommandResult<unknown>,
   context: AnswerContext,
 ): string {
   if (result.command.timedOut) {
@@ -217,13 +217,13 @@ function followedBy(text: string, after: string): string {
 function noImageText(imageName: string, imagesDir: string, notAnImage?: NotAnImage): string {
   return notAnImage
     ? `There is no image ${inlineValue(imageName)} in ${imagesDir}: its directory ${whatItLacks(notAnImage)}.`
-    : `There is no image ${inlineValue(imageName)} in ${imagesDir}. pharo_launcher_image_list says which images there are.`;
+    : `There is no image ${inlineValue(imageName)} in ${imagesDir}. image_list says which images there are.`;
 }
 
 function takenNameText(image: { name: string }, imagesDir: string): string {
   return (
     `There is already an image ${inlineValue(image.name)} in ${imagesDir}. ` +
-    "Pick another name, or delete it first with pharo_launcher_image_delete."
+    "Pick another name, or delete it first with image_delete."
   );
 }
 
@@ -242,13 +242,9 @@ function noTemplatesYet(config: PharoLauncherConfig): boolean {
   }
 }
 
-const noTemplatesYetText = "There are no templates yet: call pharo_launcher_template_update first.";
+const noTemplatesYetText = "There are no templates yet: call template_update first.";
 
-function rawOutput(result: LauncherCommandResult): string {
-  return `${result.raw?.stdout ?? ""}\n${result.raw?.stderr ?? ""}\n${result.diagnostic ?? ""}`;
-}
-
-function timedOutWarning(result: LauncherCommandResult, context: AnswerContext): string | undefined {
+function timedOutWarning(result: LauncherCommandResult<unknown>, context: AnswerContext): string | undefined {
   return result.command.timedOut
     ? `Warning: Pharo Launcher needed more than the call's ${callSeconds(context.options)} s, but finished.`
     : undefined;
@@ -268,26 +264,26 @@ function madeImageFailure(
   context: AnswerContext,
 ): ToolResult {
   // Exited 0, but never listed or never opened.
-  if (result.failure) {
-    return failure(madeImageFailureText(result.failure, said, newImageName));
+  const text = result.failure && madeImageFailureText(result.failure, said, newImageName);
+  if (text !== undefined) {
+    return failure(text);
   }
 
-  const output = rawOutput(result);
-  if (/not found, please enter a correct category name/i.test(output)) {
+  if (result.failure?.kind === "unknown-category") {
     return noTemplatesYet(context.config)
       ? failure(noTemplatesYetText)
       : failure(
           followedBy(
             launcherFailureText(operation, result, context),
-            "pharo_launcher_template_category_list says which categories there are.",
+            "template_category_list says which categories there are.",
           ),
         );
   }
-  if (/not found, please enter a correct (?:short )?template name/i.test(output)) {
+  if (result.failure?.kind === "unknown-template") {
     return failure(
       followedBy(
         launcherFailureText(operation, result, context),
-        "pharo_launcher_template_list says which templates there are.",
+        "template_list says which templates there are.",
       ),
     );
   }
@@ -297,14 +293,9 @@ function madeImageFailure(
 
 // --- The images ---------------------------------------------------------
 
-/** The Pharo version as Pharo says it: "140" is 14.0 and "61" is 6.1; anything else as it is. */
-export function pharoVersionText(raw: string | undefined): string | undefined {
-  return raw !== undefined && /^\d{2,3}$/.test(raw) ? `${raw.slice(0, -1)}.${raw.slice(-1)}` : raw;
-}
-
 function imageAttributes(image: LauncherImage): Array<[string, string | undefined]> {
   return [
-    ["pharo", pharoVersionText(image.pharoVersion)],
+    ["pharo", image.pharoVersion],
     ["architecture", image.architecture],
     ["template", image.template?.name],
   ];
@@ -384,8 +375,8 @@ function runsText(image: LauncherImage): string {
 }
 
 const answerImageInfo: Answer = async (context, input) => {
-  const imageName = requiredString(input, "imageName");
-  const info = await context.launcher.imageInfo({ imageName });
+  const imageName = requiredString(input, "image");
+  const info = await context.launcher.imageInfo({ image: imageName });
   if (!info.found) {
     return failure(noImageText(imageName, info.imagesDir, info.notAnImage));
   }
@@ -404,7 +395,7 @@ const answerImageInfo: Answer = async (context, input) => {
     info.processListFailure !== undefined &&
       `Warning: cannot tell whether it runs: ${sentence(info.processListFailure)}`,
     `path: ${image.imagePath}`,
-    image.pharoVersion && `pharo: ${pharoVersionText(image.pharoVersion)}`,
+    image.pharoVersion && `pharo: ${image.pharoVersion}`,
     image.architecture && `architecture: ${image.architecture}`,
     image.template && `template: ${image.template.name}`,
     image.template?.url && `templateUrl: ${image.template.url}`,
@@ -421,7 +412,7 @@ function madeImageLines(image: LauncherImage | undefined, withVersions: boolean)
     `path: ${image.imagePath}`,
     ...(withVersions
       ? [
-          image.pharoVersion && `pharo: ${pharoVersionText(image.pharoVersion)}`,
+          image.pharoVersion && `pharo: ${image.pharoVersion}`,
           image.architecture && `architecture: ${image.architecture}`,
         ].filter((line): line is string => Boolean(line))
       : []),
@@ -429,9 +420,9 @@ function madeImageLines(image: LauncherImage | undefined, withVersions: boolean)
 }
 
 const answerImageCreate: Answer = async (context, input) => {
-  buildLauncherCommandArgs("pharo_launcher_image_create", input);
-  const newImageName = requiredString(input, "newImageName");
-  const templateName = optionalString(input, "templateName");
+  commandArgs.createImage(input);
+  const newImageName = requiredString(input, "image");
+  const templateName = optionalString(input, "template");
   if (context.config.profile) {
     const taken = findByName(scanImages(context.imagesDir).images, newImageName);
     if (taken) {
@@ -439,15 +430,13 @@ const answerImageCreate: Answer = async (context, input) => {
     }
   }
 
-  const result = await context.launcher.createImage(
-    input as unknown as Parameters<PharoLauncher["createImage"]>[0],
-  );
+  const result = await context.launcher.createImage(input as unknown as CreateImageInput);
   if (!result.ok) {
     const name = inlineValue(newImageName);
     return madeImageFailure(`create image ${name}`, `created ${name}`, name, result, context);
   }
 
-  const image = (result.data as { image?: LauncherImage } | undefined)?.image;
+  const image = result.data?.image;
   const template = image?.template?.name ?? templateName;
   const name = inlineValue(image?.name ?? newImageName);
   return textResult([
@@ -458,9 +447,9 @@ const answerImageCreate: Answer = async (context, input) => {
 };
 
 const answerImageCopy: Answer = async (context, input) => {
-  buildLauncherCommandArgs("pharo_launcher_image_copy", input);
-  const imageName = requiredString(input, "imageName");
-  const newImageName = requiredString(input, "newImageName");
+  commandArgs.copyImage(input);
+  const imageName = requiredString(input, "image");
+  const newImageName = requiredString(input, "newImage");
   if (context.config.profile) {
     const scan = scanImages(context.imagesDir);
     if (!findByName(scan.images, imageName)) {
@@ -472,7 +461,7 @@ const answerImageCopy: Answer = async (context, input) => {
     }
   }
 
-  const result = await context.launcher.copyImage({ imageName, newImageName });
+  const result = await context.launcher.copyImage({ image: imageName, newImage: newImageName });
   if (!result.ok) {
     const copied = `${inlineValue(imageName)} to ${inlineValue(newImageName)}`;
     return madeImageFailure(
@@ -484,7 +473,7 @@ const answerImageCopy: Answer = async (context, input) => {
     );
   }
 
-  const image = (result.data as { image?: LauncherImage } | undefined)?.image;
+  const image = result.data?.image;
   return textResult([
     `Copied image ${inlineValue(imageName)} to ${inlineValue(image?.name ?? newImageName)}.`,
     timedOutWarning(result, context),
@@ -493,9 +482,9 @@ const answerImageCopy: Answer = async (context, input) => {
 };
 
 const answerImageDelete: Answer = async (context, input) => {
-  buildLauncherCommandArgs("pharo_launcher_image_delete", input);
-  const imageName = requiredString(input, "imageName");
-  const info = await context.launcher.imageInfo({ imageName });
+  commandArgs.deleteImage(input);
+  const imageName = requiredString(input, "image");
+  const info = await context.launcher.imageInfo({ image: imageName });
   let name = inlineValue(imageName);
   if (info.found) {
     name = inlineValue(info.image.name);
@@ -506,14 +495,14 @@ const answerImageDelete: Answer = async (context, input) => {
     }
     if ((info.image.pids?.length ?? 0) > 0) {
       return failure(
-        `Image ${name} ${runsText(info.image)}: stop it with pharo_launcher_process_kill, then delete it.`,
+        `Image ${name} ${runsText(info.image)}: stop it with process_kill, then delete it.`,
       );
     }
   } else if (context.config.profile) {
     return failure(noImageText(imageName, info.imagesDir, info.notAnImage));
   }
 
-  const result = await context.launcher.deleteImage({ imageName });
+  const result = await context.launcher.deleteImage({ image: imageName });
   return result.ok
     ? textResult([`Deleted image ${name}.`])
     : failure(launcherFailureText(`delete image ${name}`, result, context));
@@ -537,8 +526,8 @@ function endedWell(command: LauncherCommandResult["command"]): boolean {
 }
 
 const answerImageStart: Answer = async (context, input) => {
-  buildLauncherCommandArgs("pharo_launcher_image_start", input);
-  const imageName = requiredString(input, "imageName");
+  commandArgs.startImage(input);
+  const imageName = requiredString(input, "image");
   const detached = input.detached === true;
   const hasScript = input.script !== undefined;
   const scan = scanImages(context.imagesDir);
@@ -547,9 +536,7 @@ const answerImageStart: Answer = async (context, input) => {
     return failure(noImageText(imageName, context.imagesDir, findByName(scan.notImages, imageName)));
   }
 
-  const result = await context.launcher.startImage(
-    input as unknown as Parameters<PharoLauncher["startImage"]>[0],
-  );
+  const result = await context.launcher.startImage(input as unknown as StartImageInput);
   const name = inlineValue(entry?.name ?? imageName);
   // What ran, once something ran: none for a launch refused before it.
   const launch = result.launch;
@@ -581,7 +568,7 @@ const answerImageStart: Answer = async (context, input) => {
   if (launch?.by === "launcher" && detached && result.ok) {
     return textResult([
       `Pharo Launcher is starting ${name} (its own pid ${launch.pid}); ` +
-        "pharo_launcher_process_list shows the image's VM once it runs.",
+        "process_list shows the image's VM once it runs.",
       logs,
     ]);
   }
@@ -590,13 +577,13 @@ const answerImageStart: Answer = async (context, input) => {
   // reader knows the image; a timeout or a signal ended the Launcher.
   if (launch?.by === "launcher" && !detached && entry && !result.command.timedOut && !result.command.signal) {
     return textResult(
-      [`${name} quit with exit code ${result.command.exitCode}.`, ...outputTails(result.raw)],
+      [`${name} quit with exit code ${result.command.exitCode}.`, ...outputTails(launch.output)],
       result.command.exitCode !== 0,
     );
   }
 
   if (result.ok) {
-    return textResult([`${name} quit with exit code 0.`, ...outputTails(result.raw)]);
+    return textResult([`${name} quit with exit code 0.`, ...outputTails(launch?.output)]);
   }
   // A launch the library refused says why itself; the Launcher's refusal is quoted.
   return failure(
@@ -608,86 +595,60 @@ const answerImageStart: Answer = async (context, input) => {
 
 // --- Between profiles ---------------------------------------------------------
 
-function verificationClause(result: CrossProfileImageCopyResult): string {
-  const diagnostic = result.verification?.diagnostic ?? result.diagnostic ?? "";
-  const text = clause(diagnostic);
-  return text.charAt(0).toLowerCase() + text.slice(1);
-}
-
 /**
  * What to give instead of a profile path that does not exist. config prints
  * this server's own stateRoot only, so another's is said by what it holds.
  */
-function profilePathAdvice(result: CrossProfileImageCopyResult): string {
+function profilePathAdvice(result: CopyBetweenProfilesResult): string {
   const missing = result.missingProfilePaths ?? [];
-  const override = (each: (typeof missing)[number]): boolean =>
-    each.given && each.field !== "stateRoot" && result[each.profile].stateRoot !== undefined;
-  return [
-    missing.some((each) => !override(each)) &&
-      " Give as stateRoot the directory that holds the profile's images/ directory; " +
-        "pharo_launcher_config prints this server's own stateRoot.",
-    missing.some(override) &&
-      " Leave out every path but stateRoot unless the profile keeps it elsewhere: " +
-        "each defaults to its place inside stateRoot.",
-  ]
-    .filter(Boolean)
-    .join("");
+  return missing.some((each) => each.field === "stateRoot" || !each.given)
+    ? " Give as stateRoot the directory that holds the profile's images/ directory, " +
+        "or the images directory itself as imagesDir; config prints this server's own stateRoot."
+    : "";
 }
 
 const answerCopyBetweenProfiles: Answer = async (context, input) => {
-  const result = context.launcher.copyImageBetweenProfiles(input);
-  const source = inlineValue(result.sourceImageName);
-  const destination = inlineValue(result.destinationImageName);
+  const result = await context.launcher.copyImageBetweenProfiles(
+    input as unknown as CopyBetweenProfilesInput,
+  );
+  const source = inlineValue(result.image);
+  const destination = inlineValue(result.newImage);
   const from = profileLabel(result.sourceProfile);
   const to = profileLabel(result.destinationProfile);
-  const renamed = result.destinationImageName === result.sourceImageName ? "" : ` as ${destination}`;
+  const renamed = result.newImage === result.image ? "" : ` as ${destination}`;
   if (result.ok) {
     return textResult([
       `Copied image ${source} from ${from} to ${to}${renamed}.`,
-      `path: ${result.destinationImage.imageFile.path}`,
+      `path: ${result.destination.imagePath}`,
     ]);
   }
 
-  const sourceDirectory = result.sourceImage.directory;
+  const diagnostic = clause(result.diagnostic ?? "it failed");
   switch (result.failure) {
     case "profile-path-missing":
       return failure(`Cannot copy image ${source}: ${result.diagnostic}${profilePathAdvice(result)}`);
     case "source-missing":
     case "source-image-missing":
     case "source-metadata-missing":
-      return failure(
-        `Cannot copy image ${source}: ${sourceDirectory} is not a Launcher image ` +
-          `(${clause(result.diagnostic ?? "")}).`,
-      );
+      return failure(`Cannot copy image ${source}: ${diagnostic}.`);
     case "destination-exists":
       return failure(
-        `Cannot copy image ${source} to ${result.destinationImage.directory}: that path ` +
-          "already exists, and a copy never replaces it. Pick another destinationImageName, " +
+        `Cannot copy image ${source} to ${result.destination.directory}: that path ` +
+          "already exists, and a copy never replaces it. Pick another newImage, " +
           "or remove it first.",
       );
     case "preflight":
-      return failure(
-        `Cannot copy image ${source}: the copy did not check out (${verificationClause(result)}), ` +
-          "so it was removed.",
-      );
+      return failure(`Cannot copy image ${source}: the copy did not check out (${diagnostic}), so it was removed.`);
     case "post-move":
       return failure(
-        `Copied image ${source}, but the copy at ${result.destinationImage.directory} is not a ` +
-          `Launcher image (${verificationClause(result)}). It was left in place; delete it ` +
-          "before copying again.",
+        `Copied image ${source}, but the copy at ${result.destination.directory} is not a ` +
+          `Launcher image (${diagnostic}). It was left in place; delete it before copying again.`,
       );
-    case "exception": {
-      const left = result.cleanup.temporaryDirectory;
-      return failure(
-        sentenceWithMessage(
-          `Cannot copy image ${source} to ${to}`,
-          result.error ?? result.diagnostic ?? "it failed",
-        ),
-        left !== undefined && fs.existsSync(left) && `It left ${left} behind.`,
-      );
-    }
     default:
-      return failure(result.message ?? result.diagnostic ?? `Cannot copy image ${source}.`);
+      return failure(
+        sentenceWithMessage(`Cannot copy image ${source} to ${to}`, result.diagnostic ?? "it failed"),
+        result.leftBehind !== undefined && `It left ${result.leftBehind} behind.`,
+      );
   }
 };
 
@@ -695,27 +656,12 @@ const answerCopyBetweenProfiles: Answer = async (context, input) => {
 
 type ScopedProcesses = { processes: LauncherProcess[] } | { failure: string };
 
-/**
- * The processes running an image of the images directory this server reads,
- * in every mode: in profile mode the library's list already is; outside a
- * profile it holds every Pharo VM, and the adapter keeps those.
- */
+/** The processes running an image of the images directory this server reads. */
 async function scopedProcesses(context: AnswerContext): Promise<ScopedProcesses> {
   const result = await context.launcher.listProcesses();
-  if (!result.ok) {
-    return { failure: result.diagnostic ?? "the process list failed" };
-  }
-
-  const processes = result.data ?? [];
-  return {
-    processes: context.config.profile
-      ? processes
-      : processesOfImages(
-          scanImages(context.imagesDir).images,
-          processes,
-          context.options.nativeProcess?.platform,
-        ),
-  };
+  return result.ok
+    ? { processes: result.data ?? [] }
+    : { failure: result.diagnostic ?? "the process list failed" };
 }
 
 function listFailureText(reason: string): string {
@@ -751,8 +697,8 @@ function sleep(milliseconds: number): Promise<void> {
 }
 
 /**
- * Waits for each pid to exit, polling: a delete right after a kill would otherwise meet a VM still exiting. The pids still
- * there when the time is up.
+ * Waits for each pid to exit, polling: a delete right after a kill would
+ * otherwise meet a VM still exiting. The pids still there when the time is up.
  */
 async function stillRunning(pids: readonly number[], options: CallToolOptions): Promise<number[]> {
   const isAlive = options.nativeProcess?.isAlive ?? isPidAlive;
@@ -768,23 +714,16 @@ async function stillRunning(pids: readonly number[], options: CallToolOptions): 
   return alive;
 }
 
-/** What a kill that failed said, without the pid it already names. */
-function killMessage(pid: number, result: LauncherCommandResult): string {
-  const diagnostic = result.diagnostic ?? `it exited with ${result.command.exitCode}`;
-  return clause(diagnostic.replace(new RegExp(`^Could not kill pid ${pid}: `), ""));
+/** What a kill that failed said. */
+function killMessage(pid: number, result: KillProcessResult): string {
+  const failed = result.data?.failures.find((each) => each.pid === pid);
+  return clause(failed?.message ?? result.diagnostic ?? `it exited with ${result.command.exitCode}`);
 }
 
 const answerProcessKill: Answer = async (context, input) => {
-  buildLauncherCommandArgs("pharo_launcher_process_kill", input);
-  const pidInput = input.pid;
-  const imageName = optionalString(input, "imageName");
-  let pid: number | undefined;
-  if (pidInput !== undefined) {
-    pid = Number(pidInput);
-    if (!Number.isSafeInteger(pid) || pid <= 0 || !/^\d+$/.test(String(pidInput).trim())) {
-      throw new ToolInputError("pid must be a process id, a whole number");
-    }
-  }
+  const args = commandArgs.killProcess(input);
+  const pid = args[2] === "--pid" ? Number(args[3]) : undefined;
+  const imageName = args[2] === "--image" ? args[3] : undefined;
 
   const scoped = await scopedProcesses(context);
   if ("failure" in scoped) {
@@ -802,13 +741,12 @@ const answerProcessKill: Answer = async (context, input) => {
   if (targets.length === 0) {
     return failure(
       pid !== undefined
-        ? `No process of an image in ${context.imagesDir} has pid ${pid}. pharo_launcher_process_list says which run.`
-        : `No process runs image ${inlineValue(image?.name ?? imageName!)}. pharo_launcher_process_list says which run.`,
+        ? `No process of an image in ${context.imagesDir} has pid ${pid}. process_list says which run.`
+        : `No process runs image ${inlineValue(image?.name ?? imageName!)}. process_list says which run.`,
     );
   }
 
-  // One pid per call: outside a profile the library sees every Pharo VM, and
-  // would match a name among all of them.
+  // One pid per call, so each is said killed or not on its own.
   const isAlive = context.options.nativeProcess?.isAlive ?? isPidAlive;
   const killed: number[] = [];
   const failures: string[] = [];
@@ -862,21 +800,19 @@ const answerTemplateCategoryList: Answer = async (context) => {
 };
 
 const answerTemplateList: Answer = async (context, input) => {
-  const templateCategory = optionalString(input, "templateCategory");
+  const category = optionalString(input, "category");
   // What the Launcher lists, its copies of downloaded templates and the
   // user's own included.
   const result = await context.launcher.listTemplates({
-    ...(templateCategory === undefined ? {} : { templateCategory }),
+    ...(category === undefined ? {} : { category }),
     includeLocal: true,
   });
   if (!result.ok) {
-    const notFound = /Image template category '(.*?)' not found/.exec(rawOutput(result));
-    if (notFound && !result.command.timedOut) {
+    if (result.failure?.kind === "unknown-category") {
       return noTemplatesYet(context.config)
         ? failure(noTemplatesYetText)
         : failure(
-            `There is no template category ${notFound[1]}. ` +
-              "pharo_launcher_template_category_list lists them.",
+            `There is no template category ${category ?? ""}. template_category_list lists them.`,
           );
     }
 
@@ -884,7 +820,7 @@ const answerTemplateList: Answer = async (context, input) => {
   }
 
   const names = (result.data ?? []).map((template) => template.name ?? "");
-  const where = templateCategory ?? "the default category";
+  const where = category ?? "the default category";
   if (names.length === 0) {
     return textResult([`No templates in ${where}.`]);
   }
@@ -897,29 +833,29 @@ const answerTemplateList: Answer = async (context, input) => {
 };
 
 const answerTemplateUpdate: Answer = async (context) => {
-  const result: TemplateUpdateResult = await context.launcher.updateTemplates();
-  const bootstrap = result.templateSourcesBootstrap;
+  const result = await context.launcher.updateTemplates();
+  const sources = result.sources;
   if (result.ok) {
     return textResult([
-      bootstrap?.action === "created"
-        ? `Refreshed the template list, and downloaded this profile's sources.list from ${bootstrap.url}.`
-        : bootstrap?.action === "updated"
-          ? `Refreshed the template list, and updated this profile's sources.list from ${bootstrap.url}.`
-          : bootstrap?.action === "kept"
-            ? `Refreshed the template list, but kept this profile's sources.list: downloading ${bootstrap.url} failed (${clause(bootstrap.error ?? "")}).`
+      sources?.outcome === "created"
+        ? `Refreshed the template list, and downloaded this profile's sources.list from ${sources.url}.`
+        : sources?.outcome === "updated"
+          ? `Refreshed the template list, and updated this profile's sources.list from ${sources.url}.`
+          : sources?.outcome === "kept"
+            ? `Refreshed the template list, but kept this profile's sources.list: downloading ${sources.url} failed (${clause(sources.error ?? "")}).`
             : "Refreshed the template list.",
     ]);
   }
 
-  if (bootstrap?.action === "failed") {
+  if (sources?.outcome === "failed") {
     return failure(
       "Refreshed the template list, but this profile still has no template sources: " +
-        `downloading ${bootstrap.url} failed (${clause(bootstrap.error ?? "")}). ` +
-        "Call pharo_launcher_template_update again, or put a sources.list in " +
-        `${path.dirname(bootstrap.path ?? "")}.`,
+        `downloading ${sources.url} failed (${clause(sources.error ?? "")}). ` +
+        `Call template_update again, or put a sources.list in ${path.dirname(sources.path)}.`,
     );
   }
-  if (result.templateSourcesProbe && !result.templateSourcesProbe.ok && result.diagnostic) {
+  // The Launcher refreshed it, and then could not list the templates.
+  if (sources !== undefined && result.diagnostic) {
     return failure(result.diagnostic);
   }
 
@@ -928,48 +864,29 @@ const answerTemplateUpdate: Answer = async (context) => {
 
 /** The answer of each tool, by name. */
 export const toolAnswers: Readonly<Record<string, Answer>> = {
-  pharo_launcher_config: answerConfig,
-  pharo_launcher_image_copy_between_profiles: answerCopyBetweenProfiles,
-  pharo_launcher_image_copy: answerImageCopy,
-  pharo_launcher_image_create: answerImageCreate,
-  pharo_launcher_image_delete: answerImageDelete,
-  pharo_launcher_image_info: answerImageInfo,
-  pharo_launcher_image_list: answerImageList,
-  pharo_launcher_image_start: answerImageStart,
-  pharo_launcher_process_kill: answerProcessKill,
-  pharo_launcher_process_list: answerProcessList,
-  pharo_launcher_template_category_list: answerTemplateCategoryList,
-  pharo_launcher_template_list: answerTemplateList,
-  pharo_launcher_template_update: answerTemplateUpdate,
+  config: answerConfig,
+  image_copy_between_profiles: answerCopyBetweenProfiles,
+  image_copy: answerImageCopy,
+  image_create: answerImageCreate,
+  image_delete: answerImageDelete,
+  image_info: answerImageInfo,
+  image_list: answerImageList,
+  image_start: answerImageStart,
+  process_kill: answerProcessKill,
+  process_list: answerProcessList,
+  template_category_list: answerTemplateCategoryList,
+  template_list: answerTemplateList,
+  template_update: answerTemplateUpdate,
 };
 
-/**
- * Arguments an earlier release took and this one does not: an older caller
- * still passes them, and they now change nothing, so they are dropped
- * rather than refused.
- */
-const retiredArguments = new Set([
-  "brief",
-  "confirm",
-  "delimiter",
-  "force",
-  "format",
-  "includeRaw",
-  "noLaunch",
-  "rowMode",
-]);
-
-/**
- * Only the arguments a tool's schema names. One it never took is refused; one
- * an earlier release took is dropped.
- */
+/** Only the arguments a tool's schema names; any other is refused. */
 export function toolArguments(
   schema: { properties?: Record<string, unknown> },
   argumentsValue: unknown,
 ): Record<string, unknown> {
   const given = inputObject(argumentsValue);
   const named = new Set(Object.keys(schema.properties ?? {}));
-  const unknown = Object.keys(given).filter((key) => !named.has(key) && !retiredArguments.has(key));
+  const unknown = Object.keys(given).filter((key) => !named.has(key));
   if (unknown.length > 0) {
     throw new ToolInputError(`${unknown.join(", ")} ${unknown.length === 1 ? "is" : "are"} not accepted here`);
   }

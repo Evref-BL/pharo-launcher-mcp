@@ -4,8 +4,6 @@ export interface LauncherCommandTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
-  /** The Launcher command it runs; none for a tool that reads the disk. */
-  buildArgs?: (input: unknown) => string[];
 }
 
 export class ToolInputError extends Error {
@@ -32,7 +30,9 @@ const booleanSchema = { type: "boolean" } as const;
 const displayModeSchema = {
   type: "string",
   enum: ["headless", "interactive"],
-  default: "headless",
+  description:
+    "In a profile, how the VM shows the image: headless unless interactive. " +
+    "Outside a profile the Launcher decides, and this is refused.",
 } as const;
 
 function objectSchema(
@@ -91,24 +91,19 @@ function optionalPath(input: Record<string, unknown>, key: string): string | und
   return value === undefined ? undefined : path.resolve(value);
 }
 
-function optionalStringOrNumber(
-  input: Record<string, unknown>,
-  key: string,
-): string | undefined {
+/** A pid: a whole number, given as one or as its digits. */
+function optionalPid(input: Record<string, unknown>, key: string): number | undefined {
   const value = input[key];
   if (value === undefined) {
     return undefined;
   }
 
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
+  const pid = typeof value === "string" && /^\s*\d+\s*$/.test(value) ? Number(value) : value;
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0) {
+    throw new ToolInputError(`${key} must be a process id, a whole number`);
   }
 
-  if (typeof value === "string" && value.length > 0) {
-    return value;
-  }
-
-  throw new ToolInputError(`${key} must be a non-empty string or number`);
+  return pid;
 }
 
 function optionalBoolean(input: Record<string, unknown>, key: string): boolean {
@@ -153,125 +148,123 @@ function addFlag(args: string[], flag: string, enabled: boolean): void {
 
 // Without --no-launch PharoLauncher starts the new image and waits for it to
 // quit, so the call would last as long as the image runs. Starting an image is
-// image_start's.
-function imageCreate(input: unknown): string[] {
+// a start's.
+function createImageArgs(input: unknown): string[] {
   const object = inputObject(input);
-  const args = ["image", "create"];
-  addFlag(args, "--dev", optionalBoolean(object, "dev"));
-  args.push("--no-launch");
-  addOption(args, "--templateName", requiredString(object, "templateName"));
-  addOption(args, "--templateCategory", optionalString(object, "templateCategory"));
-  args.push(requiredString(object, "newImageName"));
+  const args = ["image", "create", "--no-launch"];
+  addOption(args, "--templateName", requiredString(object, "template"));
+  addOption(args, "--templateCategory", optionalString(object, "category"));
+  args.push(requiredString(object, "image"));
   return args;
 }
 
 // Without --force PharoLauncher asks on standard input, and keeps asking: a
-// call has nobody there to answer. Calling the tool is the confirmation.
-function imageDelete(input: unknown): string[] {
-  const object = inputObject(input);
-  return ["image", "delete", "--force", requiredString(object, "imageName")];
+// call has nobody there to answer. Calling it is the confirmation.
+function deleteImageArgs(input: unknown): string[] {
+  return ["image", "delete", "--force", requiredString(inputObject(input), "image")];
 }
 
-function imageStart(input: unknown): string[] {
+function startImageArgs(input: unknown): string[] {
   const object = inputObject(input);
-  // PharoLauncher's subcommand is still `launch`; only the tool name moved.
+  // PharoLauncher's subcommand is `launch`.
   const args = ["image", "launch"];
   addOption(args, "--script", optionalPath(object, "script"));
   addOption(args, "--displayMode", optionalDisplayMode(object));
   addFlag(args, "--detached", optionalBoolean(object, "detached"));
-  args.push(requiredString(object, "imageName"));
+  args.push(requiredString(object, "image"));
   return args;
 }
 
-function imageCopy(input: unknown): string[] {
+function copyImageArgs(input: unknown): string[] {
   const object = inputObject(input);
-  return [
-    "image",
-    "copy",
-    requiredString(object, "imageName"),
-    requiredString(object, "newImageName"),
-  ];
+  return ["image", "copy", requiredString(object, "image"), requiredString(object, "newImage")];
 }
 
-function processKill(input: unknown): string[] {
+// Never a Launcher command: the native process tools run it, and the flag
+// says what the target is, since an image may be named with digits.
+function killProcessArgs(input: unknown): string[] {
   const object = inputObject(input);
-  const args = ["process", "kill"];
-  const pid = optionalStringOrNumber(object, "pid");
-  const imageName = optionalString(object, "imageName");
-
-  if (pid && imageName) {
-    throw new ToolInputError("Give pid or imageName, not both.");
+  const pid = optionalPid(object, "pid");
+  const image = optionalString(object, "image");
+  if (pid !== undefined && image !== undefined) {
+    throw new ToolInputError("Give pid or image, not both.");
   }
-
-  const target = pid ?? imageName;
-  if (!target) {
-    throw new ToolInputError("Give the pid or the imageName of the process to kill.");
+  if (pid !== undefined) {
+    return ["process", "kill", "--pid", String(pid)];
   }
-
-  args.push(target);
-  return args;
-}
-
-// One row per category, no header, the default marked: the one listing that
-// names the categories alone (the STON one walks the whole template tree).
-function templateCategoryList(): string[] {
-  return ["template", "categories", "--brief"];
+  if (image !== undefined) {
+    return ["process", "kill", "--image", image];
+  }
+  throw new ToolInputError("Give the pid or the image of the process to kill.");
 }
 
 // STON names every template whole; the table shortens a name past 75
 // characters.
-function templateList(input: unknown): string[] {
-  const object = inputObject(input);
+function listTemplatesArgs(input: unknown): string[] {
   const args = ["template", "list"];
-  addOption(args, "--templateCategory", optionalString(object, "templateCategory"));
+  addOption(args, "--templateCategory", optionalString(inputObject(input), "category"));
   args.push("--ston");
   return args;
 }
 
+/**
+ * The Launcher command each call runs, its arguments read from the call's
+ * input. Each refuses an input it cannot run with a `ToolInputError`.
+ */
+export const commandArgs = {
+  createImage: createImageArgs,
+  copyImage: copyImageArgs,
+  startImage: startImageArgs,
+  deleteImage: deleteImageArgs,
+  killProcess: killProcessArgs,
+  listProcesses: (): string[] => ["process", "list"],
+  // One row per category, no header, the default marked: the one listing that
+  // names the categories alone (the STON one walks the whole template tree).
+  listTemplateCategories: (): string[] => ["template", "categories", "--brief"],
+  listTemplates: listTemplatesArgs,
+  updateTemplates: (): string[] => ["template", "update"],
+} as const;
+
+const imageSchema = { ...stringSchema, description: "The image's name." } as const;
+
 export const launcherCommandTools: LauncherCommandTool[] = [
   {
-    name: "pharo_launcher_image_copy",
-    description: "Copy an existing PharoLauncher image to a new image name.",
-    inputSchema: objectSchema(
-      { imageName: stringSchema, newImageName: stringSchema },
-      ["imageName", "newImageName"],
-    ),
-    buildArgs: imageCopy,
+    name: "image_copy",
+    description: "Copy an image of this Launcher under a new name.",
+    inputSchema: objectSchema({ image: imageSchema, newImage: stringSchema }, ["image", "newImage"]),
   },
   {
-    name: "pharo_launcher_image_create",
-    description:
-      "Create an image from a template. It is not started: " +
-      "pharo_launcher_image_start starts it.",
+    name: "image_create",
+    description: "Create an image from a template. It is not started: image_start starts it.",
     inputSchema: objectSchema(
       {
-        newImageName: stringSchema,
-        dev: booleanSchema,
-        templateName: stringSchema,
-        templateCategory: stringSchema,
+        image: imageSchema,
+        template: { ...stringSchema, description: "A template's name, as template_list lists it." },
+        category: {
+          ...stringSchema,
+          description: "The template's category, when its name is in several.",
+        },
       },
-      ["newImageName", "templateName"],
+      ["image", "template"],
     ),
-    buildArgs: imageCreate,
   },
   {
-    name: "pharo_launcher_image_delete",
+    name: "image_delete",
     description:
       "Delete an image, its directory and the logs of its starts. Nothing " +
       "asks for a confirmation. A running image is refused: stop it first " +
-      "with pharo_launcher_process_kill.",
-    inputSchema: objectSchema({ imageName: stringSchema }, ["imageName"]),
-    buildArgs: imageDelete,
+      "with process_kill.",
+    inputSchema: objectSchema({ image: imageSchema }, ["image"]),
   },
   {
-    name: "pharo_launcher_image_info",
+    name: "image_info",
     description:
       "Describe an image of this Launcher: its path, Pharo version, " +
       "architecture, template and whether it runs.",
-    inputSchema: objectSchema({ imageName: stringSchema }, ["imageName"]),
+    inputSchema: objectSchema({ image: imageSchema }, ["image"]),
   },
   {
-    name: "pharo_launcher_image_list",
+    name: "image_list",
     description:
       "List this Launcher's images, each with its Pharo version, architecture, " +
       "template and whether it runs. nameFilter keeps the images whose name " +
@@ -279,13 +272,14 @@ export const launcherCommandTools: LauncherCommandTool[] = [
     inputSchema: objectSchema({ nameFilter: stringSchema }),
   },
   {
-    name: "pharo_launcher_image_start",
+    name: "image_start",
     description:
       "Start an image, optionally with a script for it to run. Unless " +
-      "detached, the call lasts until the image quits.",
+      "detached, the call waits for the image to quit, and stops it when the " +
+      "call's time is up.",
     inputSchema: objectSchema(
       {
-        imageName: stringSchema,
+        image: imageSchema,
         script: {
           ...stringSchema,
           description:
@@ -295,54 +289,34 @@ export const launcherCommandTools: LauncherCommandTool[] = [
         detached: booleanSchema,
         displayMode: displayModeSchema,
       },
-      ["imageName"],
+      ["image"],
     ),
-    buildArgs: imageStart,
   },
   {
-    name: "pharo_launcher_process_kill",
+    name: "process_kill",
     description:
-      "Kill a process running an image of this Launcher, by pid or by image " +
-      "name. A pid stops that process alone; an image name stops every " +
-      "process running that image.",
-    inputSchema: objectSchema({
-      imageName: stringSchema,
-      pid: { anyOf: [stringSchema, { type: "number" }] },
-    }),
-    buildArgs: processKill,
+      "Kill a process running an image of this Launcher, by pid or by image. " +
+      "A pid stops that process alone; an image stops every process running it.",
+    inputSchema: objectSchema({ image: imageSchema, pid: { type: "integer", minimum: 1 } }),
   },
   {
-    name: "pharo_launcher_process_list",
-    description:
-      "List the Pharo processes running an image of this Launcher, by image " +
-      "name and pid.",
+    name: "process_list",
+    description: "List the Pharo processes running an image of this Launcher, by image and pid.",
     inputSchema: emptyInputSchema,
-    buildArgs: () => ["process", "list"],
   },
   {
-    name: "pharo_launcher_template_category_list",
-    description: "List template categories.",
+    name: "template_category_list",
+    description: "List the template categories.",
     inputSchema: emptyInputSchema,
-    buildArgs: templateCategoryList,
   },
   {
-    name: "pharo_launcher_template_list",
-    description: "List image templates.",
-    inputSchema: objectSchema({ templateCategory: stringSchema }),
-    buildArgs: templateList,
+    name: "template_list",
+    description: "List the templates of a category, by default the Launcher's default one.",
+    inputSchema: objectSchema({ category: stringSchema }),
   },
   {
-    name: "pharo_launcher_template_update",
-    description: "Update the template sources list.",
+    name: "template_update",
+    description: "Refresh the template list from the Pharo Launcher's sources.",
     inputSchema: emptyInputSchema,
-    buildArgs: () => ["template", "update"],
   },
 ];
-
-export const launcherCommandToolByName = new Map(
-  launcherCommandTools.map((tool) => [tool.name, tool]),
-);
-
-export function buildLauncherCommandArgs(name: string, input: unknown): string[] | undefined {
-  return launcherCommandToolByName.get(name)?.buildArgs?.(input);
-}

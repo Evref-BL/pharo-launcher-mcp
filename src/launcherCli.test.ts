@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { buildLauncherCommandArgs } from "./commandCatalog.js";
+import { commandArgs } from "./commandCatalog.js";
 import type { PharoLauncherConfig } from "./config.js";
 import {
   buildLauncherCliInvocation,
@@ -840,8 +840,8 @@ describe("buildLauncherCliInvocation", () => {
     const cwd = vi.spyOn(process, "cwd").mockReturnValue(callerDir);
     try {
       const result = await runLauncherCli(
-        buildLauncherCommandArgs("pharo_launcher_image_start", {
-          imageName,
+        commandArgs.startImage({
+          image: imageName,
           script: "check.st",
         })!,
         {

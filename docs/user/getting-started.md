@@ -120,30 +120,30 @@ npx @evref-bl/pharo-launcher-mcp --validate-installation
 `--health` confirms whether the resolved directory, VM, control image, and
 wrapper exist, without invoking Pharo Launcher. `--validate-installation` runs
 `--version` and verifies that the launcher command can start. Connected,
-`pharo_launcher_config` reports the same resolved configuration.
+`config` reports the same resolved configuration.
 
 After validation, list templates:
 
 ```text
-pharo_launcher_template_update
-pharo_launcher_template_list
+template_update
+template_list
 ```
 
 Then create an image with an explicit name:
 
 ```json
 {
-  "tool": "pharo_launcher_image_create",
+  "tool": "image_create",
   "arguments": {
-    "templateName": "Pharo 13.0 - 64bit",
-    "newImageName": "sample-130"
+    "template": "Pharo 13.0 - 64bit",
+    "image": "sample-130"
   }
 }
 ```
 
 The create answer is only successful when Launcher can list the new image and
 open it after it returns. Creating does not start the image:
-`pharo_launcher_image_start` does.
+`image_start` does.
 
 ## No-Profile Defaults
 

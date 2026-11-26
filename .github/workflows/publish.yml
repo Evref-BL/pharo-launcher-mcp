@@ -57,6 +57,19 @@ jobs:
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Releases are the automation's, never github-actions[bot]'s: without
+      # its credentials nothing is published.
+      - name: Require the automation credentials
+        if: steps.version.outputs.published != 'true'
+        env:
+          APP_ID: ${{ secrets.DEVNEXUS_AUTOMATION_APP_ID }}
+          PRIVATE_KEY: ${{ secrets.DEVNEXUS_AUTOMATION_PRIVATE_KEY }}
+        run: |
+          if [ -z "$APP_ID" ] || [ -z "$PRIVATE_KEY" ]; then
+            echo "::error::DEVNEXUS_AUTOMATION_APP_ID and DEVNEXUS_AUTOMATION_PRIVATE_KEY must be set: a release is the automation's."
+            exit 1
+          fi
+
       - name: Install dependencies
         if: steps.version.outputs.published != 'true'
         run: npm ci
@@ -73,24 +86,9 @@ jobs:
         if: steps.version.outputs.published != 'true'
         run: npm publish --access public --tag latest
 
-      # The automation's token makes the release the bot's, and tells PLexus
-      # about it below. Without the credentials the package is still out, so
-      # the release is still cut, as github-actions[bot].
-      - name: Look for the automation credentials
-        id: automation
-        if: steps.version.outputs.published != 'true'
-        env:
-          APP_ID: ${{ secrets.DEVNEXUS_AUTOMATION_APP_ID }}
-        run: |
-          if [ -n "$APP_ID" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::DEVNEXUS_AUTOMATION_APP_ID and DEVNEXUS_AUTOMATION_PRIVATE_KEY are not set, so the release is github-actions[bot]'s and PLexus was not told about it. Move its @evref-bl/pharo-launcher-mcp pin by hand."
-          fi
-
       - uses: actions/create-github-app-token@v2
         id: app-token
-        if: steps.automation.outputs.available == 'true'
+        if: steps.version.outputs.published != 'true'
         with:
           app-id: ${{ secrets.DEVNEXUS_AUTOMATION_APP_ID }}
           private-key: ${{ secrets.DEVNEXUS_AUTOMATION_PRIVATE_KEY }}
@@ -106,7 +104,7 @@ jobs:
       - name: Create the GitHub release
         if: steps.version.outputs.published != 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TAG: v${{ steps.package.outputs.version }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -123,7 +121,7 @@ jobs:
       # that pin moves. Tell it, the way MCP and PLexus tell their own
       # consumers, instead of leaving one pin in the stack to be hand-edited.
       - name: Notify released consumers
-        if: steps.automation.outputs.available == 'true'
+        if: steps.version.outputs.published != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           VERSION: ${{ steps.package.outputs.version }}

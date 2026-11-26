@@ -7,9 +7,11 @@ focused on installation and first use; user-facing detail lives under `docs/`.
 
 - `src/server.ts`: MCP server surface and tool dispatch.
 - `src/answers.ts`: what each tool answers, as text, and the checks made
-  before a call. Every text naming a `pharo_launcher_*` tool is here.
-- `src/launcher.ts`: the library, `openPharoLauncher`, which the tools are made
-  from and other programs import.
+  before a call. Every text naming a tool is here.
+- `src/library.ts`: the package's entry point, `openPharoLauncher`, and every
+  name it exports: the semver promise.
+- `src/launcher.ts`: what the library and the tools are made from, opened on a
+  config with the hooks tests give.
 - `src/commandCatalog.ts`: Pharo Launcher command definitions and input checks.
 - `src/config.ts`: Pharo Launcher and profile path resolution.
 - `src/platform.ts`: host-specific defaults and wrapper selection.
@@ -106,11 +108,9 @@ where it is stable:
   in its order.
 - Processes come from the native process list.
 
-`src/parser.ts` reads the Launcher's output. Unsupported commands still return
-command metadata and raw output, and failed commands skip parsing so command
-failure is not confused with parser failure. Typed launcher results include
-`parser.status` so result handlers can distinguish normalized model data from
-raw-only output.
+`src/parser.ts` reads the Launcher's listings. A command that lists nothing has
+no data, and a failed command is not read, so a command's failure is never
+taken for a listing's.
 
 Stable model names include:
 
@@ -137,7 +137,7 @@ npm run test:integration
 
 The integration suite prepares an isolated temporary launcher profile by copying
 the Pharo Launcher control image. It calls the tools as a model does and checks
-their text, and checks the data through the library, `openPharoLauncher`:
+their text, and checks the data through the library:
 
 - config
 - template categories, list, and update
@@ -195,7 +195,7 @@ distinguishes read-only planning checks from host inspection and mutation.
 
 Probe the local Pharo Launcher image list without starting MCP stdio. It asks
 the Launcher to list its images, exits with that command's status, and prints
-what `pharo_launcher_image_list` answers:
+what `image_list` answers:
 
 ```powershell
 npm run build

@@ -255,15 +255,6 @@ async function listPosixPharoProcesses(
   return parsePosixProcessTable(stdout);
 }
 
-// A pid names one process, so match one process. The caller spells its target
-// as a pid or an image name and the Launcher CLI takes one positional either
-// way, so the kind is read back off the target: all digits is a pid, anything
-// else is an image. Matching the command line as well used to make a pid kill
-// reach every process whose command line merely contained those digits.
-function isPid(target: string): boolean {
-  return /^\d+$/.test(target);
-}
-
 export function nativeProcessToolCapability(
   platform: NodeJS.Platform = process.platform,
 ): NativeProcessToolCapability {
@@ -395,14 +386,16 @@ export async function runNativeProcessTool(
     }
 
     if (args[0] === "process" && args[1] === "kill") {
-      const target = args[2];
-      if (!target) {
-        return failed("process kill requires a PID or image name");
+      // The target's kind is its flag: an image may be named with digits.
+      const [, , flag, target] = args;
+      if ((flag !== "--pid" && flag !== "--image") || !target) {
+        return failed("process kill requires --pid or --image");
       }
 
-      const targets = isPid(target)
-        ? processes.filter((process) => String(process.pid) === target)
-        : scope.imageTargets(processes, target);
+      const targets =
+        flag === "--pid"
+          ? processes.filter((process) => String(process.pid) === target)
+          : scope.imageTargets(processes, target);
       if (targets.length === 0) {
         return failed(`No matching Pharo process found for ${target}`);
       }
@@ -417,6 +410,7 @@ export async function runNativeProcessTool(
         durationMs: duration(startTime),
         timedOut: false,
         processes: targets,
+        kill: { killed, failures },
       };
     }
 

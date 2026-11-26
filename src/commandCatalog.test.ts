@@ -1,258 +1,125 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  buildLauncherCommandArgs,
-  launcherCommandTools,
-} from "./commandCatalog.js";
+import { commandArgs, launcherCommandTools } from "./commandCatalog.js";
+
+const stable = "Pharo 13.0 - 64bit (stable)";
 
 describe("launcher command catalog", () => {
-  it("registers the actions something asks for", () => {
+  it("registers the tools, named after what they do", () => {
     expect(launcherCommandTools.map((tool) => tool.name)).toEqual([
-      "pharo_launcher_image_copy",
-      "pharo_launcher_image_create",
-      "pharo_launcher_image_delete",
-      "pharo_launcher_image_info",
-      "pharo_launcher_image_list",
-      "pharo_launcher_image_start",
-      "pharo_launcher_process_kill",
-      "pharo_launcher_process_list",
-      "pharo_launcher_template_category_list",
-      "pharo_launcher_template_list",
-      "pharo_launcher_template_update",
+      "image_copy",
+      "image_create",
+      "image_delete",
+      "image_info",
+      "image_list",
+      "image_start",
+      "process_kill",
+      "process_list",
+      "template_category_list",
+      "template_list",
+      "template_update",
     ]);
   });
 
-  it("covers the composable image lifecycle primitives", () => {
-    const registeredToolNames = new Set(
-      launcherCommandTools.map((tool) => tool.name),
-    );
-    const requiredToolNames = [
-      "pharo_launcher_image_list",
-      "pharo_launcher_template_list",
-      "pharo_launcher_image_create",
-      "pharo_launcher_image_copy",
-      "pharo_launcher_image_start",
-      "pharo_launcher_process_list",
-      "pharo_launcher_process_kill",
-      "pharo_launcher_image_info",
-      "pharo_launcher_image_delete",
-    ];
-
-    expect(requiredToolNames.every((name) => registeredToolNames.has(name))).toBe(
-      true,
-    );
-  });
-
-  // No task drew them, and a model reads a schema as what matters. The
-  // library still takes includeRaw, for a caller that wants what the Launcher
-  // wrote.
+  // No task drew them, and a model reads a schema as what matters.
   it.each(launcherCommandTools.map((tool) => [tool.name, tool] as const))(
-    "advertises no table option and no raw output on %s",
+    "advertises no table option, no raw output and no confirmation on %s",
     (_name, tool) => {
       const properties = Object.keys(tool.inputSchema.properties as object);
-      for (const option of ["includeRaw", "format", "brief", "rowMode", "delimiter"]) {
+      for (const option of [
+        "includeRaw",
+        "format",
+        "brief",
+        "rowMode",
+        "delimiter",
+        "noLaunch",
+        "force",
+        "confirm",
+        "dev",
+      ]) {
         expect(properties).not.toContain(option);
       }
     },
   );
 
+  it("names the image `image` in every tool that takes one", () => {
+    for (const tool of launcherCommandTools) {
+      const properties = Object.keys(tool.inputSchema.properties as object);
+      expect(properties).not.toContain("imageName");
+      expect(properties).not.toContain("newImageName");
+    }
+  });
+
   it.each([
+    ["copyImage", { image: "Base", newImage: "Task" }, ["image", "copy", "Base", "Task"]],
     [
-      "pharo_launcher_image_copy",
-      { imageName: "Base", newImageName: "Task" },
-      ["image", "copy", "Base", "Task"],
+      "createImage",
+      { image: "Task", template: stable },
+      ["image", "create", "--no-launch", "--templateName", stable, "Task"],
     ],
     [
-      "pharo_launcher_image_create",
-      {
-        newImageName: "Task",
-        noLaunch: true,
-        templateName: "Pharo 13.0 - 64bit (stable)",
-      },
+      "createImage",
+      { image: "Task", template: stable, category: "Official distributions" },
       [
         "image",
         "create",
         "--no-launch",
         "--templateName",
-        "Pharo 13.0 - 64bit (stable)",
+        stable,
+        "--templateCategory",
+        "Official distributions",
         "Task",
       ],
     ],
     [
-      "pharo_launcher_image_start",
-      { imageName: "Task", script: "bootstrap.st", detached: true },
-      [
-        "image",
-        "launch",
-        "--script",
-        path.resolve("bootstrap.st"),
-        "--detached",
-        "Task",
-      ],
+      "startImage",
+      { image: "Task", script: "bootstrap.st", detached: true },
+      ["image", "launch", "--script", path.resolve("bootstrap.st"), "--detached", "Task"],
     ],
     [
-      "pharo_launcher_image_start",
-      { imageName: "Task", displayMode: "interactive" },
+      "startImage",
+      { image: "Task", displayMode: "interactive" },
       ["image", "launch", "--displayMode", "interactive", "Task"],
     ],
+    ["deleteImage", { image: "Task" }, ["image", "delete", "--force", "Task"]],
+    ["killProcess", { image: "Task" }, ["process", "kill", "--image", "Task"]],
+    ["killProcess", { image: "2025" }, ["process", "kill", "--image", "2025"]],
+    ["killProcess", { pid: 1234 }, ["process", "kill", "--pid", "1234"]],
+    ["killProcess", { pid: "1234" }, ["process", "kill", "--pid", "1234"]],
+    ["listProcesses", {}, ["process", "list"]],
+    ["listTemplateCategories", {}, ["template", "categories", "--brief"]],
     [
-      "pharo_launcher_process_list",
-      {},
-      ["process", "list"],
-    ],
-    [
-      "pharo_launcher_template_category_list",
-      { format: "ston" },
-      ["template", "categories", "--brief"],
-    ],
-    [
-      "pharo_launcher_template_list",
-      { templateCategory: "Official", format: "text", rowMode: true },
+      "listTemplates",
+      { category: "Official" },
       ["template", "list", "--templateCategory", "Official", "--ston"],
     ],
-    [
-      "pharo_launcher_template_list",
-      { brief: true, delimiter: ";" },
-      ["template", "list", "--ston"],
-    ],
-    [
-      "pharo_launcher_template_update",
-      {},
-      ["template", "update"],
-    ],
-  ])("builds args for %s", (name, input, expected) => {
-    expect(buildLauncherCommandArgs(name, input)).toEqual(expected);
+    ["listTemplates", {}, ["template", "list", "--ston"]],
+    ["updateTemplates", {}, ["template", "update"]],
+  ] as const)("builds %s's command from %j", (name, input, expected) => {
+    expect((commandArgs[name] as (input: unknown) => string[])(input)).toEqual(expected);
   });
 
-  it("requires caller-supplied names for template image creation", () => {
-    expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_create", {
-        newImageName: "caller-owned-image",
-      }),
-    ).toThrow("templateName is required");
-    expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_create", {
-        templateName: "Pharo 13.0 - 64bit (stable)",
-      }),
-    ).toThrow("newImageName is required");
-
-    expect(
-      buildLauncherCommandArgs("pharo_launcher_image_create", {
-        templateName: "Pharo 13.0 - 64bit (stable)",
-        newImageName: "caller-owned-image",
-        noLaunch: true,
-      }),
-    ).toEqual([
-      "image",
-      "create",
-      "--no-launch",
-      "--templateName",
-      "Pharo 13.0 - 64bit (stable)",
-      "caller-owned-image",
-    ]);
-  });
-
-  // Both read the images directory: no Launcher call names an image.
-  it("builds no Launcher command for image_list and image_info", () => {
-    expect(
-      buildLauncherCommandArgs("pharo_launcher_image_list", { nameFilter: "Task" }),
-    ).toBeUndefined();
-    expect(
-      buildLauncherCommandArgs("pharo_launcher_image_info", { imageName: "Task" }),
-    ).toBeUndefined();
+  it.each([
+    ["createImage", { image: "Task" }, "template is required"],
+    ["createImage", { template: stable }, "image is required"],
+    ["copyImage", { newImage: "copy" }, "image is required"],
+    ["startImage", { detached: true }, "image is required"],
+    ["startImage", { image: "Task", displayMode: "visible" }, "displayMode must be headless or interactive"],
+    ["deleteImage", {}, "image is required"],
+    ["killProcess", {}, "Give the pid or the image of the process to kill."],
+    ["killProcess", { image: "Task", pid: 1234 }, "Give pid or image, not both."],
+    ["killProcess", { pid: "stuck" }, "pid must be a process id, a whole number"],
+    ["killProcess", { pid: 0 }, "pid must be a process id, a whole number"],
+  ] as const)("refuses %s given %j", (name, input, message) => {
+    expect(() => (commandArgs[name] as (input: unknown) => string[])(input)).toThrow(message);
   });
 
   // Without --no-launch PharoLauncher starts the new image and waits for it to
-  // quit; starting is image_start's.
-  it.each([{}, { noLaunch: false }, { noLaunch: true }])(
-    "never lets image create start the image, given %o",
-    (noLaunch) => {
-      expect(
-        buildLauncherCommandArgs("pharo_launcher_image_create", {
-          templateName: "Pharo 13.0 - 64bit (stable)",
-          newImageName: "Task",
-          ...noLaunch,
-        }),
-      ).toEqual([
-        "image",
-        "create",
-        "--no-launch",
-        "--templateName",
-        "Pharo 13.0 - 64bit (stable)",
-        "Task",
-      ]);
-    },
-  );
-
-  it("advertises no way to launch from image create", () => {
-    const createTool = launcherCommandTools.find(
-      (tool) => tool.name === "pharo_launcher_image_create",
+  // quit; starting is a start's.
+  it("never lets image create start the image", () => {
+    expect(commandArgs.createImage({ image: "Task", template: stable, noLaunch: false })).toContain(
+      "--no-launch",
     );
-
-    expect(createTool?.inputSchema.properties).not.toHaveProperty("noLaunch");
-  });
-
-  it("requires caller-supplied image names for image primitives", () => {
-    expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_copy", {
-        newImageName: "copy",
-      }),
-    ).toThrow("imageName is required");
-    expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_start", {
-        detached: true,
-      }),
-    ).toThrow("imageName is required");
-    expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_start", {
-        imageName: "Task",
-        displayMode: "visible",
-      }),
-    ).toThrow("displayMode must be headless or interactive");
-  });
-
-  it("builds destructive actions from their target alone", () => {
-    expect(
-      buildLauncherCommandArgs("pharo_launcher_image_delete", {
-        imageName: "Task",
-      }),
-    ).toEqual(["image", "delete", "--force", "Task"]);
-
-    expect(
-      buildLauncherCommandArgs("pharo_launcher_process_kill", {
-        imageName: "Task",
-      }),
-    ).toEqual(["process", "kill", "Task"]);
-
-    expect(
-      buildLauncherCommandArgs("pharo_launcher_process_kill", { pid: 1234 }),
-    ).toEqual(["process", "kill", "1234"]);
-  });
-
-  // Callers built against the confirmation gate keep working: the server
-  // validates no schema, so a key nothing reads is a key nothing trips over.
-  it.each([{ confirm: true }, { force: true }, { force: false }])(
-    "ignores %o left over from an older caller",
-    (leftover) => {
-      expect(
-        buildLauncherCommandArgs("pharo_launcher_image_delete", {
-          imageName: "Task",
-          ...leftover,
-        }),
-      ).toEqual(["image", "delete", "--force", "Task"]);
-    },
-  );
-
-  // PharoLauncher asks on standard input before a delete without --force,
-  // and a call has nobody there to answer it.
-  it("advertises no way to ask for a confirmation", () => {
-    const deleteTool = launcherCommandTools.find(
-      (tool) => tool.name === "pharo_launcher_image_delete",
-    );
-
-    expect(
-      Object.keys((deleteTool?.inputSchema.properties ?? {}) as object),
-    ).toEqual(["imageName"]);
   });
 
   // The caller means its own directory. Passed on as it is, the path would be
@@ -261,48 +128,19 @@ describe("launcher command catalog", () => {
   it("reads a relative launch script from the caller's directory", () => {
     const absolute = path.resolve("elsewhere", "check.st");
 
-    expect(
-      buildLauncherCommandArgs("pharo_launcher_image_start", {
-        imageName: "Task",
-        script: "check.st",
-      }),
-    ).toEqual([
+    expect(commandArgs.startImage({ image: "Task", script: "check.st" })).toEqual([
       "image",
       "launch",
       "--script",
       path.join(process.cwd(), "check.st"),
       "Task",
     ]);
-    expect(
-      buildLauncherCommandArgs("pharo_launcher_image_start", {
-        imageName: "Task",
-        script: absolute,
-      }),
-    ).toEqual(["image", "launch", "--script", absolute, "Task"]);
-  });
-
-  it.each([
-    "pharo_launcher_image_delete",
-    "pharo_launcher_process_kill",
-  ])("rejects empty input for destructive tool %s", (toolName) => {
-    expect(() => buildLauncherCommandArgs(toolName, {})).toThrow();
-  });
-
-  it("rejects destructive calls without an explicit target", () => {
-    expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_image_delete", {}),
-    ).toThrow("imageName is required");
-    expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_process_kill", {}),
-    ).toThrow("Give the pid or the imageName of the process to kill.");
-  });
-
-  it("rejects ambiguous process kill targets", () => {
-    expect(() =>
-      buildLauncherCommandArgs("pharo_launcher_process_kill", {
-        imageName: "Task",
-        pid: 1234,
-      }),
-    ).toThrow("Give pid or imageName, not both.");
+    expect(commandArgs.startImage({ image: "Task", script: absolute })).toEqual([
+      "image",
+      "launch",
+      "--script",
+      absolute,
+      "Task",
+    ]);
   });
 });

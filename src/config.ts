@@ -286,3 +286,45 @@ export function loadPharoLauncherConfig(
     discovery,
   };
 }
+
+/**
+ * What a program opening the library says: a profile of its own, and where
+ * the Launcher is installed. The library reads none of the command's
+ * `PHARO_LAUNCHER_*` variables.
+ */
+export interface LauncherSettings {
+  /**
+   * A profile: a Launcher image, images, VMs and templates of its own, each in
+   * its place under `stateRoot`. Without one, the user's own Launcher and its
+   * images.
+   */
+  profile?: { stateRoot: string; name?: string };
+  /** The Launcher's installation directory; where it installs itself when left out. */
+  launcherDir?: string;
+}
+
+/** Where the system keeps a user's files: what the defaults are found from. */
+const systemLocations = ["HOME", "USERPROFILE", "LOCALAPPDATA"] as const;
+
+/** The config of these settings, found as the command finds its variables'. */
+export function configForSettings(
+  settings: LauncherSettings,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): PharoLauncherConfig {
+  const scoped: NodeJS.ProcessEnv = {};
+  for (const name of systemLocations) {
+    if (env[name] !== undefined) {
+      scoped[name] = env[name];
+    }
+  }
+  if (settings.launcherDir !== undefined) {
+    scoped.PHARO_LAUNCHER_DIR = settings.launcherDir;
+  }
+  if (settings.profile) {
+    scoped.PHARO_LAUNCHER_MCP_PROFILE = settings.profile.name ?? "default";
+    scoped.PHARO_LAUNCHER_MCP_STATE_ROOT = settings.profile.stateRoot;
+  }
+
+  return loadPharoLauncherConfig(scoped, platform);
+}
