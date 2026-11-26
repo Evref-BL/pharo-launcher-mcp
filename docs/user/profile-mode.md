@@ -98,12 +98,13 @@ write them outside that root.
 
 ## Template Sources
 
-In profile mode, `pharo_launcher_template_update` checks the active profile
-template source file after Launcher returns. If the source file is missing or
-empty, the server seeds it from the default Pharo Launcher source list and then
-probes `template list`.
+In profile mode, `pharo_launcher_template_update` downloads the default Pharo
+Launcher source list into the active profile after Launcher returns, since
+Launcher does not update a profile's copy and the official templates' names
+change with each Pharo release, then probes `template list`.
 
-Its answer says when downloading the source list or the probe failed. Until the
+Its answer says when the list changed, and when downloading it or the probe
+failed. A failed download keeps the list the profile has. Until the
 profile has a source list, `pharo_launcher_template_list` and
 `pharo_launcher_image_create` answer that there are no templates yet, and to
 call `pharo_launcher_template_update` first.

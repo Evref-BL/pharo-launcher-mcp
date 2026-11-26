@@ -81,10 +81,11 @@ pharo_launcher_template_update
 pharo_launcher_template_list
 ```
 
-`template_update` seeds the active profile source list when Launcher leaves it
-missing or empty, then probes `template list`. Its answer says when the
-download of the source list or the probe failed. Until it ran once, a profile
-has no template sources, and `template_list` and `image_create` say so.
+`template_update` downloads the active profile's source list, which Launcher
+leaves as it is, then probes `template list`. Its answer says when the
+download or the probe failed; a failed download keeps the list the profile
+has. Until it ran once, a profile has no template sources, and
+`template_list` and `image_create` say so.
 
 ## Image Create Or Copy Reports An Error After Launcher Succeeds
 
