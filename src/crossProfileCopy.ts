@@ -487,7 +487,7 @@ export async function copyImageBetweenProfiles(input: unknown): Promise<CopyBetw
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (temporaryDirectory !== undefined) {
-      fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+      removeLeftovers(temporaryDirectory);
     }
     return {
       ...failed("exception", message),
@@ -495,5 +495,18 @@ export async function copyImageBetweenProfiles(input: unknown): Promise<CopyBetw
         ? { leftBehind: temporaryDirectory }
         : {}),
     };
+  }
+}
+
+/**
+ * Removes what a failed copy made, if it can. The copy's own failure is the
+ * answer: a cleanup that fails too leaves the directory, which the answer
+ * names as left behind.
+ */
+function removeLeftovers(directory: string): void {
+  try {
+    fs.rmSync(directory, { recursive: true, force: true });
+  } catch {
+    // Named as leftBehind when it still exists.
   }
 }

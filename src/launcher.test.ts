@@ -123,7 +123,7 @@ describe("openPharoLauncher", () => {
       name: "isolated",
       stateRoot: { path: "/tmp/isolated-profile" },
     });
-    expect(launcher.describeConfig().imagesDir.path).toBe(path.join("/tmp/isolated-profile", "images"));
+    expect(launcher.describeConfig().imagesDir.path).toBe(path.resolve("/tmp/isolated-profile", "images"));
   });
 
   // They are the command's: a program that runs the library under a
