@@ -5,7 +5,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { launcherCommandTools, ProfileTooDeepError, ToolInputError } from "./commandCatalog.js";
+import { launcherCommandTools, ProfileTooDeepError, InvalidInputError } from "./commandCatalog.js";
 import { loadPharoLauncherConfig } from "./config.js";
 import {
   failureResult,
@@ -16,7 +16,7 @@ import {
   type ToolResult,
 } from "./answers.js";
 import { resolveImagesDirectory } from "./imageStore.js";
-import { openPharoLauncher, type CallToolOptions } from "./launcher.js";
+import { openLauncher, type CallToolOptions } from "./launcher.js";
 
 // Read the version, do not keep a copy of it. The copy that used to live here
 // said 0.1.1 while the package was 0.1.4, so every client was told the wrong
@@ -31,64 +31,42 @@ const emptyInputSchema = {
   additionalProperties: false,
 } as const;
 const stringSchema = { type: "string", minLength: 1 } as const;
-/** A path of a profile, where stateRoot puts it. */
-function defaultsTo(place: string) {
-  return { ...stringSchema, description: `Defaults to <stateRoot>/${place}.` } as const;
-}
-// Undescribed, every path reads as one to fill in, and a model guesses each.
-const scopedProfileSchema = {
+// Undescribed, a path reads as one to fill in, and a model guesses it.
+const profileSchema = {
   type: "object",
   description:
-    "A launcher profile, given by its stateRoot. Every other path defaults to its place " +
-    "inside stateRoot: give one only when the profile keeps it elsewhere.",
+    "Where a profile keeps its images: its stateRoot, the directory that holds its " +
+    "images/ directory, or an images directory itself as imagesDir. One of the two.",
   properties: {
-    stateRoot: {
-      ...stringSchema,
-      description: "Absolute path of the directory that holds the profile's images/ directory.",
-    },
-    launcherConfiguration: defaultsTo("launcher/pharo-launcher-cli-config.ston"),
-    imagesDir: defaultsTo("images"),
-    vmsDir: defaultsTo("vms"),
-    templateSourcesDir: defaultsTo("templates"),
-    initScriptsDir: defaultsTo("init-scripts"),
-    logsDir: defaultsTo("logs"),
-    profileName: {
-      ...stringSchema,
-      description: "A label for the profile; the copy does not use it.",
-    },
+    stateRoot: { ...stringSchema, description: "An absolute path." },
+    imagesDir: { ...stringSchema, description: "An absolute path." },
   },
   additionalProperties: false,
 } as const;
 const copyBetweenProfilesInputSchema = {
   type: "object",
   properties: {
-    sourceProfile: scopedProfileSchema,
-    destinationProfile: scopedProfileSchema,
-    sourceImageName: stringSchema,
-    destinationImageName: stringSchema,
+    sourceProfile: profileSchema,
+    destinationProfile: profileSchema,
+    image: { ...stringSchema, description: "The image to copy." },
+    newImage: { ...stringSchema, description: "The copy's name, which may be the image's." },
   },
-  required: [
-    "sourceProfile",
-    "destinationProfile",
-    "sourceImageName",
-    "destinationImageName",
-  ],
+  required: ["sourceProfile", "destinationProfile", "image", "newImage"],
   additionalProperties: false,
 } as const;
 
 const tools = [
   {
-    name: "pharo_launcher_config",
-    description:
-      "Say which Pharo Launcher this server runs, and where its images are.",
+    name: "config",
+    description: "Say which Pharo Launcher this server runs, and where its images are.",
     inputSchema: emptyInputSchema,
   },
   {
-    name: "pharo_launcher_image_copy_between_profiles",
+    name: "image_copy_between_profiles",
     description:
-      "Copy a launcher image from one launcher profile to another. A profile is given by its " +
-      "stateRoot, the directory that holds its images/ directory; pharo_launcher_config prints " +
-      "this server's own stateRoot. Every profile path must exist: the copy creates none.",
+      "Copy an image from one images directory to another, such as from a user's own " +
+      "Launcher into a profile. config prints this server's own stateRoot. Every " +
+      "directory must exist: the copy creates none.",
     inputSchema: copyBetweenProfilesInputSchema,
   },
   ...launcherCommandTools,
@@ -102,11 +80,9 @@ const toolByName = new Map<string, { inputSchema: { properties?: Record<string, 
 );
 
 /**
- * One tool call, answered in plain text. Each call opens the library on the
- * server's scope, asking for what the Launcher wrote, and gives the function
- * its tool maps to only the arguments that tool takes: an older caller's
- * includeRaw, format, brief, rowMode, delimiter, force, confirm or noLaunch is
- * dropped unread. The library's parser, command and raw never reach a model.
+ * One tool call, answered in plain text. Each call opens the launcher on the
+ * server's scope, read from the command's variables, and gives the answer only
+ * the arguments its tool takes; any other is refused.
  */
 export async function callTool(
   name: string,
@@ -123,7 +99,7 @@ export async function callTool(
     const config = options.config ?? loadPharoLauncherConfig();
     return await answer(
       {
-        launcher: openPharoLauncher({ ...options, config, includeRaw: true }),
+        launcher: openLauncher({ ...options, config }),
         config,
         options: { ...options, config },
         imagesDir: resolveImagesDirectory(config).path,
@@ -135,7 +111,7 @@ export async function callTool(
     if (error instanceof ProfileTooDeepError) {
       return failureResult(error.message);
     }
-    if (error instanceof ToolInputError) {
+    if (error instanceof InvalidInputError) {
       return failureResult(invalidArgumentsText(name, tool.inputSchema, error));
     }
 
@@ -173,4 +149,3 @@ export async function startStdioServer(): Promise<void> {
   await server.connect(transport);
 }
 
-export * from "./launcher.js";

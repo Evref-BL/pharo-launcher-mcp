@@ -1,17 +1,8 @@
 import type { LauncherCliResult } from "./launcherCli.js";
-import type { LauncherCommandResult, LauncherOutputFormat } from "./models.js";
-import { parseLauncherOutput, type ParseResult } from "./parser.js";
-
-export interface NormalizeLauncherResultOptions {
-  includeRaw?: boolean;
-  diagnosticTailLength?: number;
-}
+import type { LauncherCommandResult, LauncherCommandRun } from "./models.js";
+import { parseLauncherOutput } from "./parser.js";
 
 const defaultDiagnosticTailLength = 2_000;
-
-function outputFormat(args: readonly string[]): LauncherOutputFormat {
-  return args.includes("--ston") ? "ston" : "text";
-}
 
 function trimmedMessage(source: string): string | undefined {
   const message = source.trim();
@@ -79,64 +70,77 @@ export function launcherMessage(result: LauncherCliResult): string {
   );
 }
 
+/**
+ * A Launcher command's result as a call answers it: whether it did what it
+ * was asked, its records read from what it wrote, and why it failed.
+ */
 export function normalizeLauncherResult(
-  toolName: string,
   args: readonly string[],
   result: LauncherCliResult,
-  options: NormalizeLauncherResultOptions = {},
-): LauncherCommandResult {
-  const ok = result.exitCode === 0 && !result.timedOut;
-  const format = outputFormat(args);
-  // A native process list hands over its records: nothing to parse back.
-  const parseResult: Omit<ParseResult, "status"> & {
-    status: ParseResult["status"] | "skipped";
-  } = !ok
-    ? { status: "skipped" as const, format, message: "Command failed" }
-    : toolName === "pharo_launcher_process_list" && result.processes
-      ? { status: "parsed" as const, format, data: result.processes }
-      : parseLauncherOutput(toolName, format, result.stdout);
-  const data =
-    parseResult.status === "parsed"
-      ? parseResult.data
-      : ok && parseResult.status === "unsupported"
-        ? { message: trimmedMessage(result.stdout) }
-        : undefined;
-  // A command's own output is its diagnostic: nothing here rewrites it.
-  const commandDiagnostic = !ok
-    ? failedOutputDiagnostic(
-        result,
-        options.diagnosticTailLength ?? defaultDiagnosticTailLength,
-      )
-    : undefined;
-  const raw = {
-    stdout: result.stdout,
-    stderr: result.stderr,
-    format,
-  };
+): LauncherCommandResult<unknown> & { defaultCategory?: string } {
+  const command = commandRun(result);
+  if (result.exitCode !== 0 || result.timedOut) {
+    // A command's own output is its diagnostic: nothing here rewrites it. One
+    // that wrote nothing is said by how it ended.
+    return {
+      ok: false,
+      diagnostic:
+        failedOutputDiagnostic(result, defaultDiagnosticTailLength)?.diagnostic ??
+        launcherMessage(result),
+      command,
+    };
+  }
 
+  // A native process list hands over its records: nothing to read back.
+  if (result.processes && args[0] === "process" && args[1] === "list") {
+    return { ok: true, data: result.processes, command };
+  }
+
+  const parsed = parseLauncherOutput(args, result.stdout);
+  if (parsed.status === "failed") {
+    return {
+      ok: false,
+      diagnostic: sentenceWithMessage("Could not read what Pharo Launcher listed", parsed.message),
+      command,
+    };
+  }
+
+  return parsed.status === "parsed"
+    ? {
+        ok: true,
+        data: parsed.data,
+        ...(parsed.defaultCategory ? { defaultCategory: parsed.defaultCategory } : {}),
+        command,
+      }
+    : { ok: true, command };
+}
+
+/** How a command ended. */
+export function commandRun(result: LauncherCliResult): LauncherCommandRun {
   return {
-    ok,
-    ...(ok && data !== undefined ? { data } : {}),
-    ...(commandDiagnostic ?? {}),
-    parser: {
-      status: parseResult.status,
-      format: parseResult.format,
-      ...(parseResult.message ? { message: parseResult.message } : {}),
-    },
-    ...(options.includeRaw ? { raw } : {}),
-    command: {
-      args: [...args],
-      durationMs: result.durationMs,
-      exitCode: result.exitCode,
-      ...(result.signal ? { signal: result.signal } : {}),
-      timedOut: result.timedOut,
-      ...(result.timeoutReason
-        ? { timeoutReason: result.timeoutReason }
-        : {}),
-    },
-    ...(result.launch ? { launch: result.launch } : {}),
-    ...(ok && parseResult.defaultCategory
-      ? { defaultCategory: parseResult.defaultCategory }
-      : {}),
+    durationMs: result.durationMs,
+    exitCode: result.exitCode,
+    ...(result.signal ? { signal: result.signal } : {}),
+    timedOut: result.timedOut,
+    ...(result.timeoutReason ? { timeoutReason: result.timeoutReason } : {}),
   };
+}
+
+/**
+ * What the Launcher refused, read from what it wrote: a template or a
+ * category it does not know.
+ */
+export function launcherRefusal(
+  result: LauncherCliResult,
+): "unknown-template" | "unknown-category" | undefined {
+  const output = `${result.stdout}\n${result.stderr}`;
+  if (
+    /not found, please enter a correct category name/i.test(output) ||
+    /Image template category '.*?' not found/i.test(output)
+  ) {
+    return "unknown-category";
+  }
+  return /not found, please enter a correct (?:short )?template name/i.test(output)
+    ? "unknown-template"
+    : undefined;
 }

@@ -8,7 +8,8 @@ import type { PharoLauncherConfig, PharoLauncherProfileConfig } from "./config.j
 import type { LauncherCliRunner } from "./discovery.js";
 import type { LauncherCliResult } from "./launcherCli.js";
 import type { LauncherLaunchReport } from "./models.js";
-import { callTool, createServer, toolNames, type CallToolOptions } from "./server.js";
+import type { CallToolOptions } from "./launcher.js";
+import { callTool, createServer, toolNames } from "./server.js";
 import {
   cliMetaInf,
   psRunner,
@@ -139,36 +140,36 @@ describe("the server", () => {
       (await client.listTools()).tools.map((tool) => [tool.name, tool.description]),
     );
     expect(descriptions).toMatchObject({
-      pharo_launcher_config:
+      config:
         "Say which Pharo Launcher this server runs, and where its images are.",
-      pharo_launcher_image_list:
+      image_list:
         "List this Launcher's images, each with its Pharo version, architecture, template and whether it runs. nameFilter keeps the images whose name contains it.",
-      pharo_launcher_image_info:
+      image_info:
         "Describe an image of this Launcher: its path, Pharo version, architecture, template and whether it runs.",
-      pharo_launcher_image_create:
-        "Create an image from a template. It is not started: pharo_launcher_image_start starts it.",
-      pharo_launcher_image_delete:
-        "Delete an image, its directory and the logs of its starts. Nothing asks for a confirmation. A running image is refused: stop it first with pharo_launcher_process_kill.",
-      pharo_launcher_image_start:
-        "Start an image, optionally with a script for it to run. Unless detached, the call lasts until the image quits.",
-      pharo_launcher_process_list:
-        "List the Pharo processes running an image of this Launcher, by image name and pid.",
-      pharo_launcher_process_kill:
-        "Kill a process running an image of this Launcher, by pid or by image name. A pid stops that process alone; an image name stops every process running that image.",
+      image_create:
+        "Create an image from a template. It is not started: image_start starts it.",
+      image_delete:
+        "Delete an image, its directory and the logs of its starts. Nothing asks for a confirmation. A running image is refused: stop it first with process_kill.",
+      image_start:
+        "Start an image, optionally with a script for it to run. Unless detached, the call waits for the image to quit. When the call's time is up, a profile's image is stopped; outside a profile the call stops waiting, and the image goes on.",
+      process_list:
+        "List the Pharo processes running an image of this Launcher, by image and pid.",
+      process_kill:
+        "Kill a process running an image of this Launcher, by pid or by image. A pid stops that process alone; an image stops every process running it.",
     });
     await client.close();
   });
 
   // config prints this server's profile only: another's stateRoot has to be
-  // recognizable from the description, and every other path from stateRoot.
-  it("says what another profile's stateRoot is, and where each other path defaults to", async () => {
+  // recognizable from the description.
+  it("says what a profile is: its stateRoot, or its images directory", async () => {
     const client = new Client({ name: "probe", version: "0.0.0" }, {});
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await createServer().connect(serverTransport);
     await client.connect(clientTransport);
 
     const copy = (await client.listTools()).tools.find(
-      (tool) => tool.name === "pharo_launcher_image_copy_between_profiles",
+      (tool) => tool.name === "image_copy_between_profiles",
     );
     const profile = copy?.inputSchema.properties?.destinationProfile as {
       description: string;
@@ -176,26 +177,15 @@ describe("the server", () => {
     };
 
     expect(copy?.description).toBe(
-      "Copy a launcher image from one launcher profile to another. A profile is given by its " +
-        "stateRoot, the directory that holds its images/ directory; pharo_launcher_config prints " +
-        "this server's own stateRoot. Every profile path must exist: the copy creates none.",
+      "Copy an image from one images directory to another, such as from a user's own " +
+        "Launcher into a profile. config prints this server's own stateRoot. Every " +
+        "directory must exist: the copy creates none.",
     );
     expect(profile.description).toBe(
-      "A launcher profile, given by its stateRoot. Every other path defaults to its place " +
-        "inside stateRoot: give one only when the profile keeps it elsewhere.",
+      "Where a profile keeps its images: its stateRoot, the directory that holds its " +
+        "images/ directory, or an images directory itself as imagesDir. One of the two.",
     );
-    expect(
-      Object.fromEntries(Object.entries(profile.properties).map(([name, each]) => [name, each.description])),
-    ).toEqual({
-      stateRoot: "Absolute path of the directory that holds the profile's images/ directory.",
-      launcherConfiguration: "Defaults to <stateRoot>/launcher/pharo-launcher-cli-config.ston.",
-      imagesDir: "Defaults to <stateRoot>/images.",
-      vmsDir: "Defaults to <stateRoot>/vms.",
-      templateSourcesDir: "Defaults to <stateRoot>/templates.",
-      initScriptsDir: "Defaults to <stateRoot>/init-scripts.",
-      logsDir: "Defaults to <stateRoot>/logs.",
-      profileName: "A label for the profile; the copy does not use it.",
-    });
+    expect(Object.keys(profile.properties)).toEqual(["stateRoot", "imagesDir"]);
     await client.close();
   });
 });
@@ -240,17 +230,17 @@ describe("every answer is text", () => {
       return exited(0);
     });
     const argumentsByTool: Record<string, unknown> = {
-      pharo_launcher_image_copy: { imageName: "base", newImageName: "copy" },
-      pharo_launcher_image_create: { templateName: stable, newImageName: "made" },
-      pharo_launcher_image_delete: { imageName: "base" },
-      pharo_launcher_image_info: { imageName: ok ? "base" : "none" },
-      pharo_launcher_image_start: { imageName: "base", script: "x.st" },
-      pharo_launcher_process_kill: { imageName: "base" },
-      pharo_launcher_image_copy_between_profiles: {
+      image_copy: { image: "base", newImage: "copy" },
+      image_create: { template: stable, image: "made" },
+      image_delete: { image: "base" },
+      image_info: { image: ok ? "base" : "none" },
+      image_start: { image: "base", script: "x.st" },
+      process_kill: { image: "base" },
+      image_copy_between_profiles: {
         sourceProfile: { stateRoot: other },
         destinationProfile: { stateRoot: profile.stateRoot },
-        sourceImageName: "base",
-        destinationImageName: ok ? "fresh" : "base",
+        image: "base",
+        newImage: ok ? "fresh" : "base",
       },
     };
     const base = path.join(images, "base", "base.image");
@@ -282,7 +272,7 @@ describe("every answer is text", () => {
   );
 });
 
-describe("pharo_launcher_config", () => {
+describe("config", () => {
   function installation(): Pick<
     PharoLauncherConfig,
     "launcherDir" | "launcherVm" | "installationLauncherImage"
@@ -302,7 +292,7 @@ describe("pharo_launcher_config", () => {
     const launcher = installation();
 
     const result = await callTool(
-      "pharo_launcher_config",
+      "config",
       {},
       { config: { ...config, ...launcher }, runner: unusedRunner },
     );
@@ -323,7 +313,7 @@ describe("pharo_launcher_config", () => {
     const options = { config: { ...config, ...launcher }, runner: unusedRunner };
     const defaultImages = path.join(path.dirname(settings), "images");
 
-    expect(text(await callTool("pharo_launcher_config", {}, options))).toBe(
+    expect(text(await callTool("config", {}, options))).toBe(
       [
         `Pharo Launcher ${launcher.launcherDir}, with the settings in ${settings}.`,
         `images: ${images}`,
@@ -331,7 +321,7 @@ describe("pharo_launcher_config", () => {
     );
 
     fs.writeFileSync(settings, "PharoLauncherCLIConfiguration { }");
-    expect(text(await callTool("pharo_launcher_config", {}, options))).toBe(
+    expect(text(await callTool("config", {}, options))).toBe(
       [
         `Pharo Launcher ${launcher.launcherDir}, with the settings in ${settings}, which name no images directory.`,
         `images: ${defaultImages}`,
@@ -339,7 +329,7 @@ describe("pharo_launcher_config", () => {
     );
 
     fs.rmSync(settings);
-    expect(text(await callTool("pharo_launcher_config", {}, options))).toBe(
+    expect(text(await callTool("config", {}, options))).toBe(
       [
         `Pharo Launcher ${launcher.launcherDir}, with its default settings: ${settings} does not exist yet.`,
         `images: ${defaultImages}`,
@@ -365,7 +355,7 @@ describe("pharo_launcher_config", () => {
     ];
 
     const result = await callTool(
-      "pharo_launcher_config",
+      "config",
       {},
       {
         config: {
@@ -384,7 +374,7 @@ describe("pharo_launcher_config", () => {
   });
 });
 
-describe("pharo_launcher_image_list", () => {
+describe("image_list", () => {
   const nextStableImage = { metaInf: cliMetaInf(nextStable, nextStableUrl), pharoVersion: "140" };
   const shared = 'images (each pharo=14.0 architecture=64 template="Pharo 14.0 - 64bit (next stable)"):';
   const alone = 'pharo=14.0 architecture=64 template="Pharo 14.0 - 64bit (next stable)"';
@@ -398,7 +388,7 @@ describe("pharo_launcher_image_list", () => {
     writeImage(images, "pricing-backup", { image: false, changes: false });
 
     const result = await callTool(
-      "pharo_launcher_image_list",
+      "image_list",
       {},
       {
         config,
@@ -430,32 +420,34 @@ describe("pharo_launcher_image_list", () => {
     const { config, images } = inProfile();
     writeImage(images, "base", nextStableImage);
     const result = await callTool(
-      "pharo_launcher_image_list",
+      "image_list",
       { nameFilter: "base", bogus: 1 },
       { config, runner: unusedRunner, nativeProcess: processes() },
     );
 
     expect(result.isError).toBe(true);
     expect(text(result)).toBe(
-      "Invalid arguments for pharo_launcher_image_list. bogus is not accepted here. It takes nameFilter.",
+      "Invalid arguments for image_list. bogus is not accepted here. It takes nameFilter.",
     );
   });
 
-  it("answers the same text whatever format or includeRaw an older caller passes", async () => {
+  it("takes a null argument as left out", async () => {
     const { config, images } = inProfile();
     writeImage(images, "base", nextStableImage);
-    writeImage(images, "pricing", nextStableImage);
     const options = { config, runner: unusedRunner, nativeProcess: processes() };
 
-    expect(
-      text(
-        await callTool(
-          "pharo_launcher_image_list",
-          { format: "text", includeRaw: true, brief: 1 },
-          options,
-        ),
-      ),
-    ).toBe(text(await callTool("pharo_launcher_image_list", {}, options)));
+    expect(text(await callTool("image_list", { nameFilter: null }, options))).toBe(
+      text(await callTool("image_list", {}, options)),
+    );
+  });
+
+  it("refuses an argument of an earlier release, naming those it takes", async () => {
+    const { config } = inProfile();
+    const options = { config, runner: unusedRunner, nativeProcess: processes() };
+
+    expect(text(await callTool("image_list", { includeRaw: true }, options))).toBe(
+      "Invalid arguments for image_list. includeRaw is not accepted here. It takes nameFilter.",
+    );
   });
 
   it.each<[string, string[], string[], Record<string, unknown>, string[]]>([
@@ -482,7 +474,7 @@ describe("pharo_launcher_image_list", () => {
       return running.includes(name) ? `${index + 1} /vms/pharo ${imagePath}` : "";
     });
 
-    const result = await callTool("pharo_launcher_image_list", input, {
+    const result = await callTool("image_list", input, {
       config,
       runner: unusedRunner,
       nativeProcess: processes(lines.filter(Boolean)),
@@ -497,7 +489,7 @@ describe("pharo_launcher_image_list", () => {
     writeImage(images, "old", { pharoVersion: "90", format: 6521 });
 
     const result = await callTool(
-      "pharo_launcher_image_list",
+      "image_list",
       {},
       { config, runner: unusedRunner, nativeProcess: processes() },
     );
@@ -514,7 +506,7 @@ describe("pharo_launcher_image_list", () => {
     fs.rmSync(profile.imagesDir, { recursive: true });
 
     const result = await callTool(
-      "pharo_launcher_image_list",
+      "image_list",
       {},
       { config, runner: unusedRunner, nativeProcess: processes() },
     );
@@ -528,7 +520,7 @@ describe("pharo_launcher_image_list", () => {
     writeImage(images, "b", { pharoVersion: "140" });
 
     const result = await callTool(
-      "pharo_launcher_image_list",
+      "image_list",
       {},
       { config, runner: unusedRunner, nativeProcess: { platform: "freebsd" } },
     );
@@ -546,7 +538,7 @@ describe("pharo_launcher_image_list", () => {
     writeImage(images, "other-half", { image: false });
 
     const result = await callTool(
-      "pharo_launcher_image_list",
+      "image_list",
       { nameFilter: "tmp-" },
       { config, runner: unusedRunner, nativeProcess: processes() },
     );
@@ -560,7 +552,7 @@ describe("pharo_launcher_image_list", () => {
   });
 });
 
-describe("pharo_launcher_image_info", () => {
+describe("image_info", () => {
   it("describes an image and the VMs running it", async () => {
     const { config, images } = inProfile();
     const stuck = writeImage(images, "stuck", {
@@ -576,16 +568,16 @@ describe("pharo_launcher_image_info", () => {
     });
 
     const one = await callTool(
-      "pharo_launcher_image_info",
-      { imageName: "stuck" },
+      "image_info",
+      { image: "stuck" },
       options([`71513 /vms/pharo ${stuck}`]),
     );
     const two = await callTool(
-      "pharo_launcher_image_info",
-      { imageName: "STUCK" },
+      "image_info",
+      { image: "STUCK" },
       options([`71520 /vms/pharo ${stuck}`, `71513 /vms/pharo ${stuck}`]),
     );
-    const none = await callTool("pharo_launcher_image_info", { imageName: "stuck" }, options([]));
+    const none = await callTool("image_info", { image: "stuck" }, options([]));
 
     expect(one.isError).toBeUndefined();
     expect(text(one)).toBe(
@@ -610,8 +602,8 @@ describe("pharo_launcher_image_info", () => {
     fs.utimesSync(bare, modified, modified);
 
     const result = await callTool(
-      "pharo_launcher_image_info",
-      { imageName: "bare" },
+      "image_info",
+      { image: "bare" },
       { config, runner: unusedRunner, nativeProcess: { platform: "freebsd" } },
     );
 
@@ -629,14 +621,13 @@ describe("pharo_launcher_image_info", () => {
     const { config, images } = inProfile();
     writeImage(images, "pricing-backup", { image: false, changes: false });
     const options = { config, runner: unusedRunner, nativeProcess: processes() };
-    const answer = async (imageName: string) =>
-      callTool("pharo_launcher_image_info", { imageName }, options);
+    const answer = async (image: string) => callTool("image_info", { image }, options);
 
     const missing = await answer("releasecheck");
 
     expect(missing.isError).toBe(true);
     expect(text(missing)).toBe(
-      `There is no image releasecheck in ${images}. pharo_launcher_image_list says which images there are.`,
+      `There is no image releasecheck in ${images}. image_list says which images there are.`,
     );
     expect(text(await answer("pricing-backup"))).toBe(
       `There is no image pricing-backup in ${images}: its directory holds neither pricing-backup.image nor pricing-backup.changes.`,
@@ -644,7 +635,7 @@ describe("pharo_launcher_image_info", () => {
   });
 });
 
-describe("pharo_launcher_image_create", () => {
+describe("image_create", () => {
   const createArgs = ["image", "create", "--no-launch", "--templateName", stable, "release-check"];
 
   function created(images: string, extra: Partial<LauncherCliResult> = {}) {
@@ -662,8 +653,8 @@ describe("pharo_launcher_image_create", () => {
     const { runner, calls } = created(images);
 
     const result = await callTool(
-      "pharo_launcher_image_create",
-      { templateName: stable, newImageName: "release-check", noLaunch: false },
+      "image_create",
+      { template: stable, image: "release-check" },
       { config, runner },
     );
 
@@ -684,8 +675,8 @@ describe("pharo_launcher_image_create", () => {
     const { runner } = created(images, { exitCode: null, timedOut: true });
 
     const result = await callTool(
-      "pharo_launcher_image_create",
-      { templateName: stable, newImageName: "release-check" },
+      "image_create",
+      { template: stable, image: "release-check" },
       { config, runner },
     );
 
@@ -701,8 +692,8 @@ describe("pharo_launcher_image_create", () => {
     const { runner } = recording(() => exited(null, "", "", { timedOut: true }));
 
     const result = await callTool(
-      "pharo_launcher_image_create",
-      { templateName: stable, newImageName: "release-check" },
+      "image_create",
+      { template: stable, image: "release-check" },
       { config, runner, imageCopyVerificationTimeoutMs: 0, sleep: async () => {} },
     );
 
@@ -717,14 +708,14 @@ describe("pharo_launcher_image_create", () => {
     writeImage(images, "Pricing-Backup");
 
     const result = await callTool(
-      "pharo_launcher_image_create",
-      { templateName: stable, newImageName: "pricing-backup" },
+      "image_create",
+      { template: stable, image: "pricing-backup" },
       { config, runner: unusedRunner },
     );
 
     expect(result.isError).toBe(true);
     expect(text(result)).toBe(
-      `There is already an image Pricing-Backup in ${images}. Pick another name, or delete it first with pharo_launcher_image_delete.`,
+      `There is already an image Pricing-Backup in ${images}. Pick another name, or delete it first with image_delete.`,
     );
   });
 
@@ -736,8 +727,8 @@ describe("pharo_launcher_image_create", () => {
     );
 
     const result = await callTool(
-      "pharo_launcher_image_create",
-      { templateName: stable, newImageName: "pricing-backup" },
+      "image_create",
+      { template: stable, image: "pricing-backup" },
       { config, runner },
     );
 
@@ -758,10 +749,10 @@ describe("pharo_launcher_image_create", () => {
       return exited(1, "", "STONReaderError: unexpected token");
     });
     const options = { config, imageCopyVerificationTimeoutMs: 0, sleep: async () => {} };
-    const input = { templateName: stable, newImageName: "release-check" };
+    const input = { template: stable, image: "release-check" };
 
-    const neverListed = await callTool("pharo_launcher_image_create", input, { ...options, runner: never.runner });
-    const neverOpened = await callTool("pharo_launcher_image_create", input, { ...options, runner: unopened.runner });
+    const neverListed = await callTool("image_create", input, { ...options, runner: never.runner });
+    const neverOpened = await callTool("image_create", input, { ...options, runner: unopened.runner });
 
     expect(neverListed.isError).toBe(true);
     expect(text(neverListed)).toBe(
@@ -784,10 +775,10 @@ describe("pharo_launcher_image_create", () => {
       return exited(1, "", "STONReaderError: unexpected token");
     });
     const options = { config, imageCopyVerificationTimeoutMs: 0, sleep: async () => {} };
-    const input = { templateName: stable, newImageName: "MCP debug" };
+    const input = { template: stable, image: "MCP debug" };
 
-    const neverListed = await callTool("pharo_launcher_image_create", input, { ...options, runner: never.runner });
-    const neverOpened = await callTool("pharo_launcher_image_create", input, { ...options, runner: unopened.runner });
+    const neverListed = await callTool("image_create", input, { ...options, runner: never.runner });
+    const neverOpened = await callTool("image_create", input, { ...options, runner: unopened.runner });
 
     expect(text(neverListed)).toBe(
       `Pharo Launcher said it created "MCP debug", but ${path.join(images, "MCP debug")} does not exist after 0 s.`,
@@ -805,26 +796,26 @@ describe("pharo_launcher_image_create", () => {
     const noCategory = recording(() =>
       exited(1, "Nightly not found, please enter a correct category name"),
     );
-    const inNightly = { templateName: stable, templateCategory: "Nightly", newImageName: "x" };
+    const inNightly = { template: stable, category: "Nightly", image: "x" };
 
     const template = await callTool(
-      "pharo_launcher_image_create",
-      { templateName: "Pharo 99", newImageName: "x" },
+      "image_create",
+      { template: "Pharo 99", image: "x" },
       { config, runner: noTemplate.runner },
     );
-    const noSources = await callTool("pharo_launcher_image_create", inNightly, { config, runner: noCategory.runner });
+    const noSources = await callTool("image_create", inNightly, { config, runner: noCategory.runner });
     fs.mkdirSync(profile.templateSourcesDir, { recursive: true });
     fs.writeFileSync(path.join(profile.templateSourcesDir, "sources.list"), "a source");
-    const category = await callTool("pharo_launcher_image_create", inNightly, { config, runner: noCategory.runner });
+    const category = await callTool("image_create", inNightly, { config, runner: noCategory.runner });
 
     expect(text(template)).toBe(
-      "Pharo Launcher could not create image x: Pharo 99 not found, please enter a correct template name. pharo_launcher_template_list says which templates there are.",
+      "Pharo Launcher could not create image x: Pharo 99 not found, please enter a correct template name. template_list says which templates there are.",
     );
     expect(text(noSources)).toBe(
-      "There are no templates yet: call pharo_launcher_template_update first.",
+      "There are no templates yet: call template_update first.",
     );
     expect(text(category)).toBe(
-      "Pharo Launcher could not create image x: Nightly not found, please enter a correct category name. pharo_launcher_template_category_list says which categories there are.",
+      "Pharo Launcher could not create image x: Nightly not found, please enter a correct category name. template_category_list says which categories there are.",
     );
   });
 
@@ -833,8 +824,8 @@ describe("pharo_launcher_image_create", () => {
     const { runner } = recording(() => exited(null, "", "", { signal: "SIGKILL" }));
 
     const result = await callTool(
-      "pharo_launcher_image_create",
-      { templateName: stable, newImageName: "release-check" },
+      "image_create",
+      { template: stable, image: "release-check" },
       { config, runner },
     );
 
@@ -851,8 +842,8 @@ describe("pharo_launcher_image_create", () => {
     };
 
     const result = await callTool(
-      "pharo_launcher_image_create",
-      { templateName: stable, newImageName: "Task" },
+      "image_create",
+      { template: stable, image: "Task" },
       { config, runner },
     );
 
@@ -862,7 +853,7 @@ describe("pharo_launcher_image_create", () => {
   });
 });
 
-describe("pharo_launcher_image_copy", () => {
+describe("image_copy", () => {
   it("says what it copied", async () => {
     const { config, images } = inProfile();
     writeImage(images, "pricing");
@@ -874,8 +865,8 @@ describe("pharo_launcher_image_copy", () => {
     });
 
     const result = await callTool(
-      "pharo_launcher_image_copy",
-      { imageName: "pricing", newImageName: "pricing-backup" },
+      "image_copy",
+      { image: "pricing", newImage: "pricing-backup" },
       { config, runner },
     );
 
@@ -897,18 +888,18 @@ describe("pharo_launcher_image_copy", () => {
     writeImage(images, "pricing-backup");
     const options = { config, runner: unusedRunner };
 
-    const source = await callTool("pharo_launcher_image_copy", { imageName: "pricng", newImageName: "x" }, options);
+    const source = await callTool("image_copy", { image: "pricng", newImage: "x" }, options);
     const target = await callTool(
-      "pharo_launcher_image_copy",
-      { imageName: "pricing", newImageName: "PRICING-BACKUP" },
+      "image_copy",
+      { image: "pricing", newImage: "PRICING-BACKUP" },
       options,
     );
 
     expect(text(source)).toBe(
-      `There is no image pricng in ${images}. pharo_launcher_image_list says which images there are.`,
+      `There is no image pricng in ${images}. image_list says which images there are.`,
     );
     expect(text(target)).toBe(
-      `There is already an image pricing-backup in ${images}. Pick another name, or delete it first with pharo_launcher_image_delete.`,
+      `There is already an image pricing-backup in ${images}. Pick another name, or delete it first with image_delete.`,
     );
   });
 
@@ -917,8 +908,8 @@ describe("pharo_launcher_image_copy", () => {
     const { runner } = recording(() => exited(1, "Target image name 'pricing-backup' already used."));
 
     const result = await callTool(
-      "pharo_launcher_image_copy",
-      { imageName: "pricing", newImageName: "pricing-backup" },
+      "image_copy",
+      { image: "pricing", newImage: "pricing-backup" },
       { config, runner },
     );
 
@@ -934,8 +925,8 @@ describe("pharo_launcher_image_copy", () => {
     const { runner } = recording(() => exited(0));
 
     const result = await callTool(
-      "pharo_launcher_image_copy",
-      { imageName: "pricing", newImageName: "pricing-backup" },
+      "image_copy",
+      { image: "pricing", newImage: "pricing-backup" },
       { config, runner, imageCopyVerificationTimeoutMs: 0, sleep: async () => {} },
     );
 
@@ -950,8 +941,8 @@ describe("pharo_launcher_image_copy", () => {
     const { runner } = recording(() => exited(0));
 
     const result = await callTool(
-      "pharo_launcher_image_copy",
-      { imageName: "MCP debug", newImageName: "MCP debug 2" },
+      "image_copy",
+      { image: "MCP debug", newImage: "MCP debug 2" },
       { config, runner, imageCopyVerificationTimeoutMs: 0, sleep: async () => {} },
     );
 
@@ -962,15 +953,15 @@ describe("pharo_launcher_image_copy", () => {
   });
 });
 
-describe("pharo_launcher_image_delete", () => {
+describe("image_delete", () => {
   it("deletes a stopped image", async () => {
     const { config, images } = inProfile();
     writeImage(images, "tmp-scratch");
     const { runner, calls } = recording();
 
     const result = await callTool(
-      "pharo_launcher_image_delete",
-      { imageName: "tmp-scratch", force: true },
+      "image_delete",
+      { image: "tmp-scratch" },
       { config, runner, nativeProcess: processes() },
     );
 
@@ -985,8 +976,8 @@ describe("pharo_launcher_image_delete", () => {
       const { runner, calls } = recording();
       const answer = async (lines: string[]) =>
         callTool(
-          "pharo_launcher_image_delete",
-          { imageName: "tmp-scratch" },
+          "image_delete",
+          { image: "tmp-scratch" },
           { config, runner, nativeProcess: processes(lines) },
         );
 
@@ -997,10 +988,10 @@ describe("pharo_launcher_image_delete", () => {
 
       expect(one.isError).toBe(true);
       expect(text(one)).toBe(
-        "Image tmp-scratch runs as pid 71513: stop it with pharo_launcher_process_kill, then delete it.",
+        "Image tmp-scratch runs as pid 71513: stop it with process_kill, then delete it.",
       );
       expect(text(two)).toBe(
-        "Image tmp-scratch runs as pids 71513, 71520: stop it with pharo_launcher_process_kill, then delete it.",
+        "Image tmp-scratch runs as pids 71513, 71520: stop it with process_kill, then delete it.",
       );
       expect(refusedCalls).toBe(0);
       expect(gone.isError).toBeUndefined();
@@ -1014,8 +1005,8 @@ describe("pharo_launcher_image_delete", () => {
     writeImage(images, "tmp-scratch");
 
     const result = await callTool(
-      "pharo_launcher_image_delete",
-      { imageName: "tmp-scratch" },
+      "image_delete",
+      { image: "tmp-scratch" },
       {
         config,
         runner: unusedRunner,
@@ -1042,18 +1033,18 @@ describe("pharo_launcher_image_delete", () => {
     );
 
     const refused = await callTool(
-      "pharo_launcher_image_delete",
-      { imageName: "tmp-scratch" },
+      "image_delete",
+      { image: "tmp-scratch" },
       { config: profile.config, runner: unusedRunner, nativeProcess: processes() },
     );
     const asked = await callTool(
-      "pharo_launcher_image_delete",
-      { imageName: "tmp-scratch" },
+      "image_delete",
+      { image: "tmp-scratch" },
       { config: outside.config, runner, nativeProcess: processes() },
     );
 
     expect(text(refused)).toBe(
-      `There is no image tmp-scratch in ${profile.images}. pharo_launcher_image_list says which images there are.`,
+      `There is no image tmp-scratch in ${profile.images}. image_list says which images there are.`,
     );
     expect(calls).toEqual([["image", "delete", "--force", "tmp-scratch"]]);
     expect(text(asked)).toBe(
@@ -1062,7 +1053,7 @@ describe("pharo_launcher_image_delete", () => {
   });
 });
 
-describe("pharo_launcher_image_start", () => {
+describe("image_start", () => {
   function vmLaunch(
     images: string,
     extra: Partial<Extract<LauncherLaunchReport, { by: "vm" }>> = {},
@@ -1084,7 +1075,7 @@ describe("pharo_launcher_image_start", () => {
   }
 
   function start(config: PharoLauncherConfig, input: Record<string, unknown>, runner: LauncherCliRunner) {
-    return callTool("pharo_launcher_image_start", { imageName: "release-check", ...input }, { config, runner });
+    return callTool("image_start", { image: "release-check", ...input }, { config, runner });
   }
 
   const tail = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`);
@@ -1168,7 +1159,7 @@ describe("pharo_launcher_image_start", () => {
 
     expect(text(await start(config, { detached: true }, detached.runner))).toBe(
       [
-        "Pharo Launcher is starting release-check (its own pid 73100); pharo_launcher_process_list shows the image's VM once it runs.",
+        "Pharo Launcher is starting release-check (its own pid 73100); process_list shows the image's VM once it runs.",
         `logs: ${logs.stdout} and ${logs.stderr}`,
       ].join("\n"),
     );
@@ -1188,7 +1179,7 @@ describe("pharo_launcher_image_start", () => {
       launch: { by: "launcher" },
     });
 
-    const result = await callTool("pharo_launcher_image_start", { imageName: "nope" }, { config, runner });
+    const result = await callTool("image_start", { image: "nope" }, { config, runner });
 
     expect(text(result)).toBe(
       "Pharo Launcher could not start image nope: Local image 'nope' not found. Please enter a correct local image.",
@@ -1203,14 +1194,14 @@ describe("pharo_launcher_image_start", () => {
     const { runner } = recording(() => exited(1, "", noVersion));
 
     const missing = await callTool(
-      "pharo_launcher_image_start",
-      { imageName: "releasecheck" },
+      "image_start",
+      { image: "releasecheck" },
       { config, runner: unusedRunner },
     );
     const noVm = await start(config, {}, runner);
 
     expect(text(missing)).toBe(
-      `There is no image releasecheck in ${images}. pharo_launcher_image_list says which images there are.`,
+      `There is no image releasecheck in ${images}. image_list says which images there are.`,
     );
     expect(noVm.isError).toBe(true);
     expect(text(noVm)).toBe(noVersion);
@@ -1233,17 +1224,20 @@ describe("pharo_launcher_image_start", () => {
     writeImage(images, "release-check");
 
     const result = await callTool(
-      "pharo_launcher_image_start",
-      { imageName: "release-check", displayMode: "interactive" },
+      "image_start",
+      { image: "release-check", displayMode: "interactive" },
       { config },
     );
 
     expect(result.isError).toBe(true);
-    expect(text(result)).toMatch(/^displayMode needs a scoped launcher profile\. /);
+    expect(text(result)).toBe(
+      "Invalid arguments for image_start. displayMode applies in a profile only: Pharo " +
+        "Launcher's own image launch has no display mode. It takes image, script, detached, displayMode.",
+    );
   });
 });
 
-describe("pharo_launcher_image_copy_between_profiles", () => {
+describe("image_copy_between_profiles", () => {
   function profiles() {
     const source = temporary("pharo-launcher-mcp-source-profile-");
     const destination = temporary("pharo-launcher-mcp-destination-profile-");
@@ -1252,14 +1246,14 @@ describe("pharo_launcher_image_copy_between_profiles", () => {
     return { source, destination };
   }
 
-  function copy(source: string, destination: string, sourceImageName = "pricing", destinationImageName = sourceImageName) {
+  function copy(source: string, destination: string, image = "pricing", newImage = image) {
     return callTool(
-      "pharo_launcher_image_copy_between_profiles",
+      "image_copy_between_profiles",
       {
         sourceProfile: { stateRoot: source },
         destinationProfile: { stateRoot: destination },
-        sourceImageName,
-        destinationImageName,
+        image,
+        newImage,
       },
       { runner: unusedRunner },
     );
@@ -1289,10 +1283,17 @@ describe("pharo_launcher_image_copy_between_profiles", () => {
     await copy(source, destination);
 
     expect(text(await copy(source, destination, "no-image"))).toBe(
-      `Cannot copy image no-image: ${path.join(source, "images", "no-image")} is not a Launcher image (Source image file is missing).`,
+      `Cannot copy image no-image: ${path.join(source, "images", "no-image")} holds no no-image.image.`,
+    );
+    expect(text(await copy(source, destination, "gone"))).toBe(
+      `Cannot copy image gone: there is no image gone in ${path.join(source, "images")}.`,
     );
     expect(text(await copy(source, destination))).toBe(
-      `Cannot copy image pricing to ${path.join(destination, "images", "pricing")}: that path already exists, and a copy never replaces it. Pick another destinationImageName, or remove it first.`,
+      `Cannot copy image pricing to ${destination}: it has an image pricing already. Pick another newImage, or delete that image first.`,
+    );
+    fs.mkdirSync(path.join(destination, "images", "not-yet"));
+    expect(text(await copy(source, destination, "pricing", "not-yet"))).toBe(
+      `Cannot copy image pricing to ${path.join(destination, "images", "not-yet")}: that path already exists, and a copy never replaces it. Pick another newImage, or remove it first.`,
     );
   });
 
@@ -1301,8 +1302,8 @@ describe("pharo_launcher_image_copy_between_profiles", () => {
     const missing = path.join(destination, "team");
     const empty = temporary("pharo-launcher-mcp-not-a-profile-");
     const advice =
-      "Give as stateRoot the directory that holds the profile's images/ directory; " +
-      "pharo_launcher_config prints this server's own stateRoot.";
+      "Give as stateRoot the directory that holds the profile's images/ directory, " +
+      "or the images directory itself as imagesDir; config prints this server's own stateRoot.";
 
     const notThere = await copy(source, missing);
     const noImages = await copy(source, empty);
@@ -1318,70 +1319,23 @@ describe("pharo_launcher_image_copy_between_profiles", () => {
     expect(fs.existsSync(path.join(empty, "images"))).toBe(false);
   });
 
-  it("names each profile path given that does not exist, and says the others default", async () => {
+  it("copies from an images directory given as it is", async () => {
     const { source, destination } = profiles();
-    // Every path filled in, the configuration's guessed: launcher.json, where
-    // a profile keeps launcher/pharo-launcher-cli-config.ston.
-    const guessed = (root: string, profileName: string) => ({
-      stateRoot: root,
-      imagesDir: path.join(root, "images"),
-      launcherConfiguration: path.join(root, "launcher.json"),
-      profileName,
-    });
 
     const result = await callTool(
-      "pharo_launcher_image_copy_between_profiles",
+      "image_copy_between_profiles",
       {
-        sourceProfile: guessed(source, "profile"),
-        destinationProfile: guessed(destination, "team"),
-        sourceImageName: "pricing",
-        destinationImageName: "pricing",
+        sourceProfile: { imagesDir: path.join(source, "images") },
+        destinationProfile: { stateRoot: destination },
+        image: "pricing",
+        newImage: "pricing",
       },
       { runner: unusedRunner },
     );
 
-    expect(result.isError).toBe(true);
-    expect(text(result)).toBe(
-      `Cannot copy image pricing: sourceProfile.launcherConfiguration ${path.join(source, "launcher.json")} ` +
-        `and destinationProfile.launcherConfiguration ${path.join(destination, "launcher.json")} do not exist. ` +
-        "Leave out every path but stateRoot unless the profile keeps it elsewhere: " +
-        "each defaults to its place inside stateRoot.",
+    expect(text(result).split("\n")[0]).toBe(
+      `Copied image pricing from ${path.join(source, "images")} to ${destination}.`,
     );
-    expect(fs.existsSync(path.join(destination, "images", "pricing"))).toBe(false);
-  });
-
-  it("tells a profile given without a stateRoot to give one", async () => {
-    const { source, destination } = profiles();
-    // The complete explicit set has no stateRoot to fall back on.
-    const at = (place: string) => path.join(destination, place);
-    fs.writeFileSync(at("launcher.ston"), "");
-    for (const place of ["vms", "templates", "init-scripts"]) fs.mkdirSync(at(place));
-
-    const result = await callTool(
-      "pharo_launcher_image_copy_between_profiles",
-      {
-        sourceProfile: { stateRoot: source },
-        destinationProfile: {
-          launcherConfiguration: at("launcher.ston"),
-          imagesDir: at("images"),
-          vmsDir: at("vms"),
-          templateSourcesDir: at("templates"),
-          initScriptsDir: at("init-scripts"),
-          logsDir: at("logs"),
-        },
-        sourceImageName: "pricing",
-        destinationImageName: "pricing",
-      },
-      { runner: unusedRunner },
-    );
-
-    expect(result.isError).toBe(true);
-    expect(text(result)).toBe(
-      `Cannot copy image pricing: destinationProfile.logsDir ${at("logs")} does not exist. ` +
-        "Give as stateRoot the directory that holds the profile's images/ directory; " +
-        "pharo_launcher_config prints this server's own stateRoot.",
-    );
-    expect(fs.existsSync(at("logs"))).toBe(false);
   });
 
   it("says a copy that did not check out was removed", async () => {
@@ -1392,25 +1346,25 @@ describe("pharo_launcher_image_copy_between_profiles", () => {
 
     expect(result.isError).toBe(true);
     expect(text(result)).toBe(
-      "Cannot copy image pricing: the copy did not check out (destination image metadata does not reference the requested image file), so it was removed.",
+      "Cannot copy image pricing: the copy did not check out (its meta-inf.ston does not name task.image), so it was removed.",
     );
   });
 
   it("says what it takes when its arguments are wrong", async () => {
     const result = await callTool(
-      "pharo_launcher_image_copy_between_profiles",
+      "image_copy_between_profiles",
       {
         sourceProfile: {},
         destinationProfile: { stateRoot: "/tmp/x" },
-        sourceImageName: "a",
-        destinationImageName: "b",
+        image: "a",
+        newImage: "b",
       },
       { runner: unusedRunner },
     );
 
     expect(result.isError).toBe(true);
     expect(text(result)).toBe(
-      "Invalid arguments for pharo_launcher_image_copy_between_profiles. sourceProfile must include stateRoot or explicit launcherConfiguration, imagesDir, vmsDir, templateSourcesDir, initScriptsDir, logsDir. It takes sourceProfile, destinationProfile, sourceImageName, destinationImageName.",
+      "Invalid arguments for image_copy_between_profiles. sourceProfile takes stateRoot or imagesDir, one of the two. It takes sourceProfile, destinationProfile, image, newImage.",
     );
   });
 });
@@ -1434,7 +1388,7 @@ describe("the process tools", () => {
       const server = writeImage(images, "server");
 
       const result = await callTool(
-        "pharo_launcher_process_list",
+        "process_list",
         {},
         {
           config,
@@ -1463,7 +1417,7 @@ describe("the process tools", () => {
     const paths = names.map((name) => writeImage(images, name));
 
     const result = await callTool(
-      "pharo_launcher_process_list",
+      "process_list",
       {},
       { config, runner: unusedRunner, nativeProcess: processes(machine(...paths)) },
     );
@@ -1475,8 +1429,8 @@ describe("the process tools", () => {
     const { config } = inProfile();
     const options = { config, runner: unusedRunner, nativeProcess: { platform: "freebsd" as const } };
 
-    const listed = await callTool("pharo_launcher_process_list", {}, options);
-    const killed = await callTool("pharo_launcher_process_kill", { pid: 1 }, options);
+    const listed = await callTool("process_list", {}, options);
+    const killed = await callTool("process_kill", { pid: 1 }, options);
 
     expect(listed.isError).toBe(true);
     expect(text(listed)).toBe(
@@ -1525,11 +1479,11 @@ describe("the process tools", () => {
     const lines = [`71513 /vms/pharo ${stuck}`, `71520 /vms/pharo ${stuck}`];
 
     const one = killing([lines[0]!]);
-    const byName = await callTool("pharo_launcher_process_kill", { imageName: "STUCK" }, { config, ...one.options });
+    const byName = await callTool("process_kill", { image: "STUCK" }, { config, ...one.options });
     const two = killing(lines);
-    const both = await callTool("pharo_launcher_process_kill", { imageName: "stuck" }, { config, ...two.options });
+    const both = await callTool("process_kill", { image: "stuck" }, { config, ...two.options });
     const pid = killing(lines);
-    const byPid = await callTool("pharo_launcher_process_kill", { pid: "71520" }, { config, ...pid.options });
+    const byPid = await callTool("process_kill", { pid: "71520" }, { config, ...pid.options });
 
     expect(text(byName)).toBe("Killed stuck (pid 71513).");
     expect(one.killed).toEqual([71513]);
@@ -1544,15 +1498,15 @@ describe("the process tools", () => {
       const stuck = writeImage(images, "stuck");
       const { killed, options } = killing(machine(stuck));
 
-      const byName = await callTool("pharo_launcher_process_kill", { imageName: "LatestMCP" }, { config, ...options });
-      const byPid = await callTool("pharo_launcher_process_kill", { pid: 17880 }, { config, ...options });
+      const byName = await callTool("process_kill", { image: "LatestMCP" }, { config, ...options });
+      const byPid = await callTool("process_kill", { pid: 17880 }, { config, ...options });
 
       expect(byName.isError).toBe(true);
       expect(text(byName)).toBe(
-        "No process runs image LatestMCP. pharo_launcher_process_list says which run.",
+        "No process runs image LatestMCP. process_list says which run.",
       );
       expect(text(byPid)).toBe(
-        `No process of an image in ${images} has pid 17880. pharo_launcher_process_list says which run.`,
+        `No process of an image in ${images} has pid 17880. process_list says which run.`,
       );
       expect(killed).toEqual([]);
     }
@@ -1565,7 +1519,7 @@ describe("the process tools", () => {
     // 71513 exits after a few polls; 71520 never does.
     const slow = killing(lines, (pid, polls) => pid === 71520 || polls < 4);
 
-    const result = await callTool("pharo_launcher_process_kill", { imageName: "stuck" }, { config, ...slow.options });
+    const result = await callTool("process_kill", { image: "stuck" }, { config, ...slow.options });
 
     expect(result.isError).toBe(true);
     expect(text(result)).toBe(
@@ -1581,8 +1535,8 @@ describe("the process tools", () => {
     const partly = killing(lines, () => false, { 71513: "kill EPERM" });
     const none = killing([lines[0]!], () => false, { 71513: "kill EPERM" });
 
-    const result = await callTool("pharo_launcher_process_kill", { imageName: "stuck" }, { config, ...partly.options });
-    const nothing = await callTool("pharo_launcher_process_kill", { pid: 71513 }, { config, ...none.options });
+    const result = await callTool("process_kill", { image: "stuck" }, { config, ...partly.options });
+    const nothing = await callTool("process_kill", { pid: 71513 }, { config, ...none.options });
 
     expect(result.isError).toBe(true);
     expect(text(result)).toBe("Killed stuck (pid 71520); could not kill pid 71513: kill EPERM.");
@@ -1590,20 +1544,30 @@ describe("the process tools", () => {
     expect(text(nothing)).toBe("Could not kill pid 71513: kill EPERM.");
   });
 
-  it("take one target, and a pid only as a number", async () => {
+  it("take one target, and a pid as a whole number or its digits", async () => {
     const { config } = inProfile();
     const answer = async (input: Record<string, unknown>) =>
-      text(await callTool("pharo_launcher_process_kill", input, { config, runner: unusedRunner }));
+      text(
+        await callTool("process_kill", input, {
+          config,
+          runner: unusedRunner,
+          nativeProcess: processes(),
+        }),
+      );
 
-    expect(await answer({ pid: 1, imageName: "x" })).toBe(
-      "Invalid arguments for pharo_launcher_process_kill. Give pid or imageName, not both. It takes imageName, pid.",
+    expect(await answer({ pid: 1, image: "x" })).toBe(
+      "Invalid arguments for process_kill. Give pid or image, not both. It takes image, pid.",
     );
     expect(await answer({})).toBe(
-      "Invalid arguments for pharo_launcher_process_kill. Give the pid or the imageName of the process to kill. It takes imageName, pid.",
+      "Invalid arguments for process_kill. Give the pid or the image of the process to kill. It takes image, pid.",
     );
     expect(await answer({ pid: "stuck" })).toBe(
-      "Invalid arguments for pharo_launcher_process_kill. pid must be a process id, a whole number. It takes imageName, pid.",
+      "Invalid arguments for process_kill. pid must be a process id, a whole number. It takes image, pid.",
     );
+    expect(await answer({ pid: 1.5 })).toBe(
+      "Invalid arguments for process_kill. pid must be a process id, a whole number. It takes image, pid.",
+    );
+    expect(await answer({ pid: "999999" })).toMatch(/^No process of an image in .+ has pid 999999\./);
   });
 });
 
@@ -1613,8 +1577,8 @@ describe("the templates", () => {
     const answer = async (stdout: string) =>
       text(
         await callTool(
-          "pharo_launcher_template_category_list",
-          { format: "ston" },
+          "template_category_list",
+          {},
           { config, runner: recording(() => exited(0, stdout)).runner },
         ),
       );
@@ -1647,7 +1611,7 @@ describe("the templates", () => {
     const { config } = inProfile();
     const { runner, calls } = recording(() => exited(1, "", "boom"));
 
-    const result = await callTool("pharo_launcher_template_category_list", {}, { config, runner });
+    const result = await callTool("template_category_list", {}, { config, runner });
 
     expect(calls).toEqual([["template", "categories", "--brief"]]);
     expect(result.isError).toBe(true);
@@ -1664,18 +1628,18 @@ describe("the templates", () => {
     const { runner, calls } = recording(() => exited(0, ston));
     const listing = async (input: Record<string, unknown>, stdout: string) =>
       text(
-        await callTool("pharo_launcher_template_list", input, {
+        await callTool("template_list", input, {
           config,
           runner: recording(() => exited(0, stdout)).runner,
         }),
       );
 
     const inCategory = await callTool(
-      "pharo_launcher_template_list",
-      { templateCategory: "Official distributions", rowMode: true },
+      "template_list",
+      { category: "Official distributions" },
       { config, runner },
     );
-    const inDefault = await callTool("pharo_launcher_template_list", {}, { config, runner });
+    const inDefault = await callTool("template_list", {}, { config, runner });
 
     expect(calls).toEqual([
       ["template", "list", "--templateCategory", "Official distributions", "--ston"],
@@ -1691,10 +1655,10 @@ describe("the templates", () => {
       ].join("\n"),
     );
     expect(text(inDefault).split("\n")[0]).toBe("3 templates in the default category.");
-    expect(await listing({ templateCategory: "Moose" }, "OrderedCollection[PhLLocalTemplate{#name:'m'}]")).toBe(
+    expect(await listing({ category: "Moose" }, "OrderedCollection[PhLLocalTemplate{#name:'m'}]")).toBe(
       ["1 template in Moose.", "templates:", "  m"].join("\n"),
     );
-    expect(await listing({ templateCategory: "Moose" }, "OrderedCollection[]")).toBe(
+    expect(await listing({ category: "Moose" }, "OrderedCollection[]")).toBe(
       "No templates in Moose.",
     );
   });
@@ -1705,34 +1669,34 @@ describe("the templates", () => {
       exited(1, "Image template category 'Nightly' not found. Please enter a correct image tamplate category name."),
     );
 
-    const noSources = await callTool("pharo_launcher_template_list", { templateCategory: "Nightly" }, { config, runner: notFound.runner });
-    const defaultNoSources = await callTool("pharo_launcher_template_list", {}, { config, runner: notFound.runner });
+    const noSources = await callTool("template_list", { category: "Nightly" }, { config, runner: notFound.runner });
+    const defaultNoSources = await callTool("template_list", {}, { config, runner: notFound.runner });
     fs.mkdirSync(profile.templateSourcesDir, { recursive: true });
     fs.writeFileSync(path.join(profile.templateSourcesDir, "sources.list"), "a source");
-    const noCategory = await callTool("pharo_launcher_template_list", { templateCategory: "Nightly" }, { config, runner: notFound.runner });
+    const noCategory = await callTool("template_list", { category: "Nightly" }, { config, runner: notFound.runner });
     const timedOut = await callTool(
-      "pharo_launcher_template_list",
+      "template_list",
       {},
       { config, runner: recording(() => exited(null, "", "", { timedOut: true })).runner },
     );
 
     expect(noSources.isError).toBe(true);
-    expect(text(noSources)).toBe("There are no templates yet: call pharo_launcher_template_update first.");
+    expect(text(noSources)).toBe("There are no templates yet: call template_update first.");
     expect(text(defaultNoSources)).toBe(text(noSources));
     expect(text(noCategory)).toBe(
-      "There is no template category Nightly. pharo_launcher_template_category_list lists them.",
+      "There is no template category Nightly. template_category_list lists them.",
     );
     expect(text(timedOut)).toBe("Pharo Launcher did not finish list templates within 30 s.");
   });
 
   it("refresh the list, and download the profile's sources each time", async () => {
     const { profile, config } = inProfile();
-    const { runner, calls } = recording((args) =>
-      args[1] === "update" ? exited(0) : exited(0, "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13'}]"),
+    const { runner, calls } = recording(() =>
+      exited(0, "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13'}]"),
     );
     const sources = path.join(profile.templateSourcesDir, "sources.list");
     const update = (fetched: () => Promise<string>) =>
-      callTool("pharo_launcher_template_update", {}, { config, runner, fetchTemplateSources: fetched });
+      callTool("template_update", {}, { config, runner, fetchTemplateSources: fetched });
 
     const downloaded = await update(async () => "Pharo 14.0 - 64bit (next stable)");
     const refreshed = await update(async () => "Pharo 14.0 - 64bit (next stable)");
@@ -1742,49 +1706,50 @@ describe("the templates", () => {
     });
 
     expect(text(downloaded)).toBe(
-      "Refreshed the template list, and downloaded this profile's sources.list from https://files.pharo.org/pharo-launcher/sources.list.",
+      "Downloaded this profile's sources.list from https://files.pharo.org/pharo-launcher/sources.list.",
     );
-    expect(text(refreshed)).toBe("Refreshed the template list.");
+    expect(text(refreshed)).toBe(
+      "This profile's sources.list is the one at https://files.pharo.org/pharo-launcher/sources.list already.",
+    );
     expect(text(updated)).toBe(
-      "Refreshed the template list, and updated this profile's sources.list from https://files.pharo.org/pharo-launcher/sources.list.",
+      "Updated this profile's sources.list from https://files.pharo.org/pharo-launcher/sources.list.",
     );
     expect(kept.isError).toBeFalsy();
     expect(text(kept)).toBe(
-      "Refreshed the template list, but kept this profile's sources.list: downloading https://files.pharo.org/pharo-launcher/sources.list failed (getaddrinfo ENOTFOUND files.pharo.org).",
+      "Kept this profile's sources.list: downloading https://files.pharo.org/pharo-launcher/sources.list failed (getaddrinfo ENOTFOUND files.pharo.org).",
     );
     expect(fs.readFileSync(sources, "utf8")).toBe("Pharo 14.0 - 64bit (stable)");
-    expect(calls).toEqual(Array(4).fill([["template", "update"], ["template", "list", "--ston"]]).flat());
+    // The Launcher's own update writes among its user files, not the profile's.
+    expect(calls).toEqual(Array(4).fill(["template", "list", "--ston"]));
   });
 
   it("say why the refresh is not done", async () => {
     const { profile, config } = inProfile();
-    const failedDownload = await callTool("pharo_launcher_template_update", {}, {
+    const failedDownload = await callTool("template_update", {}, {
       config,
-      runner: recording().runner,
+      runner: unusedRunner,
       fetchTemplateSources: async () => {
         throw new Error("HTTP 503 Service Unavailable");
       },
     });
     fs.mkdirSync(profile.templateSourcesDir, { recursive: true });
     fs.writeFileSync(path.join(profile.templateSourcesDir, "sources.list"), "a source");
-    const probe = await callTool("pharo_launcher_template_update", {}, {
+    const probe = await callTool("template_update", {}, {
       config,
       fetchTemplateSources: async () => "a source",
-      runner: recording((args) =>
-        args[1] === "update" ? exited(0) : exited(1, "", "Image template category 'x' not found."),
-      ).runner,
+      runner: recording(() => exited(1, "", "Image template category 'x' not found.")).runner,
     });
-    const launcher = await callTool("pharo_launcher_template_update", {}, {
-      config,
+    const launcher = await callTool("template_update", {}, {
+      config: outsideProfile().config,
       runner: recording(() => exited(1, "", "no network")).runner,
     });
 
     expect(failedDownload.isError).toBe(true);
     expect(text(failedDownload)).toBe(
-      `Refreshed the template list, but this profile still has no template sources: downloading https://files.pharo.org/pharo-launcher/sources.list failed (HTTP 503 Service Unavailable). Call pharo_launcher_template_update again, or put a sources.list in ${profile.templateSourcesDir}.`,
+      `This profile has no template sources: downloading https://files.pharo.org/pharo-launcher/sources.list failed (HTTP 503 Service Unavailable). Call template_update again, or put a sources.list in ${profile.templateSourcesDir}.`,
     );
     expect(text(probe)).toBe(
-      "Refreshed the template list, but Pharo Launcher still cannot list templates: Image template category 'x' not found.",
+      "Pharo Launcher cannot list the templates of this profile's sources.list: Image template category 'x' not found.",
     );
     expect(text(launcher)).toBe("Pharo Launcher could not refresh the template list: no network.");
   });
@@ -1792,24 +1757,25 @@ describe("the templates", () => {
 
 describe("arguments", () => {
   it("say which tool refused them and what it takes", async () => {
-    const wrongType = await callTool("pharo_launcher_image_delete", { imageName: 42 }, { runner: unusedRunner });
-    const missing = await callTool("pharo_launcher_image_delete", {}, { runner: unusedRunner });
+    const wrongType = await callTool("image_delete", { image: 42 }, { runner: unusedRunner });
+    const missing = await callTool("image_delete", {}, { runner: unusedRunner });
 
     expect(wrongType.isError).toBe(true);
     expect(text(wrongType)).toBe(
-      "Invalid arguments for pharo_launcher_image_delete. imageName must be a non-empty string. It takes imageName.",
+      "Invalid arguments for image_delete. image must be a non-empty string. It takes image.",
     );
     expect(text(missing)).toBe(
-      "Invalid arguments for pharo_launcher_image_delete. imageName is required. It takes imageName.",
+      "Invalid arguments for image_delete. image is required. It takes image.",
     );
   });
 
   it.each([
     "missing_tool",
-    "pharo_launcher_health",
-    "pharo_launcher_raw_command",
-    "pharo_launcher_vm_list",
-    "pharo_launcher_template_info",
+    "health",
+    "raw_command",
+    "vm_list",
+    "template_info",
+    "pharo_launcher_image_list",
   ])("answer %s as no tool", async (name) => {
     const result = await callTool(name, {});
 

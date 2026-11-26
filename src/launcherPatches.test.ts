@@ -97,6 +97,8 @@ describe("ensureLauncherPatches", () => {
     expect(launcherPatchesScript).toContain("at: #PhLDownloadManager ifAbsent: [ nil ]");
     expect(launcherPatchesScript).toContain("includesSelector: #download:toFile:");
     expect(launcherPatchesScript).toContain("error pass");
+    expect(launcherPatchesScript).toContain("at: #PhLCliTemplateSourcesChecker ifAbsent: [ nil ]");
+    expect(launcherPatchesScript).toContain("includesSelector: #checkForUpdates");
     expect(launcherPatchesScript.trim().endsWith("Smalltalk snapshot: true andQuit: true")).toBe(true);
   });
 });

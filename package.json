@@ -1,7 +1,7 @@
 {
   "name": "@evref-bl/pharo-launcher-mcp",
   "version": "0.7.1",
-  "description": "MCP server for controlling Pharo Launcher images, templates, VMs, and processes.",
+  "description": "Pharo Launcher as a Node library and an MCP server: its images, templates and the processes running them.",
   "license": "MIT",
   "type": "module",
   "keywords": [
@@ -18,13 +18,10 @@
     "type": "git",
     "url": "git+https://github.com/Evref-BL/pharo-launcher-mcp.git"
   },
-  "main": "./dist/server.js",
-  "types": "./dist/server.d.ts",
+  "main": "./dist/library.js",
+  "types": "./dist/library.d.ts",
   "exports": {
-    ".": "./dist/server.js",
-    "./launcher": "./dist/launcher.js",
-    "./config": "./dist/config.js",
-    "./platform": "./dist/platform.js",
+    ".": "./dist/library.js",
     "./package.json": "./package.json"
   },
   "files": [

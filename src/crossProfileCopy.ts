@@ -1,213 +1,164 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ToolInputError } from "./commandCatalog.js";
+import { InvalidInputError, validImageName } from "./commandCatalog.js";
+import { repairCopiedImageMetadataInDirectory } from "./imageMetadata.js";
 import {
-  repairCopiedImageMetadataInDirectory,
-  type ImageMetadataRepairResult,
-} from "./imageMetadata.js";
+  findByName,
+  readImageDirectory,
+  readLauncherImage,
+  scanImages,
+  whatItLacks,
+} from "./imageStore.js";
+import type { LauncherImage, NameTaken, NoSuchImage } from "./models.js";
 
-const profilePathKeys = [
-  "stateRoot",
-  "launcherConfiguration",
-  "imagesDir",
-  "vmsDir",
-  "templateSourcesDir",
-  "initScriptsDir",
-  "logsDir",
-] as const;
+/**
+ * An images directory: the one a profile keeps under its `stateRoot`, or one
+ * given as it is, such as the user's own Launcher's.
+ */
+export type ProfileLocation =
+  | { stateRoot: string; imagesDir?: never }
+  | { imagesDir: string; stateRoot?: never };
 
-const completeExplicitProfileKeys = [
-  "launcherConfiguration",
-  "imagesDir",
-  "vmsDir",
-  "templateSourcesDir",
-  "initScriptsDir",
-  "logsDir",
-] as const;
-
-type ProfilePathKey = (typeof profilePathKeys)[number];
-
-export interface ScopedProfileInput {
-  stateRoot?: string;
-  launcherConfiguration?: string;
-  imagesDir?: string;
-  vmsDir?: string;
-  templateSourcesDir?: string;
-  initScriptsDir?: string;
-  logsDir?: string;
-  profileName?: string;
-}
-
-export interface ResolvedScopedProfile {
-  profileName: string;
-  stateRoot?: string;
-  launcherConfiguration?: string;
-  imagesDir: string;
-  vmsDir?: string;
-  templateSourcesDir?: string;
-  initScriptsDir?: string;
-  logsDir?: string;
-  explicitFields: string[];
-  environment: Record<string, string>;
-}
-
-interface ImagePathMetadata {
-  imageName: string;
-  directory: string;
-  imageFile: PathMetadata;
-  metadataFile: PathMetadata;
-}
-
-interface PathMetadata {
-  path: string;
-  exists: boolean;
-  kind: "missing" | "file" | "directory" | "other";
-  bytes?: number;
-}
-
-interface TouchedPaths {
-  /** Empty: a copy creates no profile directory, and refuses one that does not exist. */
-  createdDirectories: string[];
-  copiedDirectories: Array<{ from: string; to: string }>;
-  renamedFiles: Array<{ from: string; to: string }>;
-  repairedFiles: string[];
-  removedTemporaryPaths: string[];
-}
-
-interface CopyVerification {
-  ok: boolean;
-  destinationDirectoryExists: boolean;
-  destinationImageFileExists: boolean;
-  destinationMetadataFileExists: boolean;
-  destinationMetadataReferencesDestination: boolean;
-  destinationMetadataHasImageReference: boolean;
-  destinationMetadataUsesLauncherDirectoryFallback: boolean;
-  sourceMetadataReferenceAbsent: boolean;
-  sourceBasenameImageFileAbsent: boolean;
-  diagnostic?: string;
-}
-
-interface CleanupGuidance {
-  onSuccess: string;
-  onFailure: string;
-  destinationImageDirectory: string;
-  temporaryDirectory?: string;
+export interface CopyBetweenProfilesInput {
+  sourceProfile: ProfileLocation;
+  destinationProfile: ProfileLocation;
+  /** The image to copy. */
+  image: string;
+  /** The copy's name, which may be the image's. */
+  newImage: string;
 }
 
 /** A profile path that does not exist, which a copy does not create. */
 export interface MissingProfilePath {
   profile: "sourceProfile" | "destinationProfile";
-  field: ProfilePathKey;
+  field: "stateRoot" | "imagesDir";
   path: string;
-  /** False for the images directory taken from stateRoot. */
+  /** False for the images directory a `stateRoot` should hold. */
   given: boolean;
 }
 
-/** Why a copy between profiles failed, so a caller need not read its text. */
-export type CrossProfileCopyFailure =
-  /** A profile path does not exist; `missingProfilePaths` names each. */
-  | "profile-path-missing"
-  /** The source image's directory does not exist. */
-  | "source-missing"
-  /** It holds no `<source>.image`. */
-  | "source-image-missing"
-  /** It holds no meta-inf.ston. */
-  | "source-metadata-missing"
-  /** The destination's directory exists already, and is never replaced. */
-  | "destination-exists"
-  /** The temporary copy did not check out, and was removed. */
-  | "preflight"
-  /** The copy, moved in place, did not check out, and was left there. */
-  | "post-move"
-  /** Copying threw; `error` says what. */
-  | "exception";
+/**
+ * Why a copy between profiles made no copy: a profile path that does not
+ * exist (`profile-path-missing`, each named in `paths`); a source that is not
+ * an image (`no-such-image`) or has no meta-inf.ston (`no-metadata`); a new
+ * name an image of the destination has already, in any case (`name-taken`),
+ * or a directory of that exact name that is not one (`destination-exists`),
+ * which a copy never replaces; a copy that did not check out, removed
+ * (`preflight`) or left in place once moved there (`post-move`); or copying
+ * threw (`exception`), leaving behind a temporary directory it could not
+ * remove (`leftBehind`).
+ */
+export type CopyBetweenProfilesFailure =
+  | { kind: "profile-path-missing"; paths: MissingProfilePath[] }
+  | NoSuchImage
+  | { kind: "no-metadata" }
+  | NameTaken
+  | { kind: "destination-exists" }
+  | { kind: "preflight" }
+  | { kind: "post-move" }
+  | { kind: "exception"; leftBehind?: string };
 
-export interface CrossProfileImageCopyResult {
-  ok: boolean;
-  failure?: CrossProfileCopyFailure;
-  operation: "copy_between_profiles";
-  sourceImageName: string;
-  destinationImageName: string;
-  sourceProfile: ResolvedScopedProfile;
-  destinationProfile: ResolvedScopedProfile;
-  sourceImage: ImagePathMetadata;
-  destinationImage: ImagePathMetadata;
-  touchedPaths: TouchedPaths;
-  cleanup: CleanupGuidance;
-  missingProfilePaths?: MissingProfilePath[];
-  metadataRepair?: ImageMetadataRepairResult;
-  verification?: CopyVerification;
-  message?: string;
-  diagnostic?: string;
-  action?: string;
-  error?: string;
+/** A profile as the copy read it. */
+export interface ResolvedProfile {
+  stateRoot?: string;
+  imagesDir: string;
 }
 
-interface CopyRequest {
-  sourceProfile: ResolvedScopedProfile;
-  destinationProfile: ResolvedScopedProfile;
-  sourceImageName: string;
-  destinationImageName: string;
+/** An image's directory, and its image file. */
+export interface ImageLocation {
+  directory: string;
+  imagePath: string;
+}
+
+/**
+ * A copy between profiles, answered as `copyImage` answers: its `data` is the
+ * copy, read from its new directory.
+ */
+export interface CopyBetweenProfilesResult {
+  ok: boolean;
+  data?: { image: LauncherImage };
+  failure?: CopyBetweenProfilesFailure;
+  /** Why it failed; there whenever `ok` is false. */
+  diagnostic?: string;
+  /** What to do about it. */
+  action?: string;
+  sourceProfile: ResolvedProfile;
+  destinationProfile: ResolvedProfile;
+  /** The source image, where it was found. */
+  source: ImageLocation;
+  /** The copy, where it goes. */
+  destination: ImageLocation;
 }
 
 function inputObject(input: unknown, label: string): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new ToolInputError(`${label} must be an object`);
+    throw new InvalidInputError(`${label} must be an object`);
   }
 
   return input as Record<string, unknown>;
 }
 
-function optionalString(
-  input: Record<string, unknown>,
-  key: string,
-  label: string,
-): string | undefined {
+function requiredString(input: Record<string, unknown>, key: string): string {
   const value = input[key];
-  if (value === undefined) {
-    return undefined;
-  }
-
   if (typeof value !== "string" || value.length === 0) {
-    throw new ToolInputError(`${label}.${key} must be a non-empty string`);
+    throw new InvalidInputError(`${key} is required`);
   }
 
   return value;
 }
 
-function requiredString(
-  input: Record<string, unknown>,
-  key: string,
-): string {
-  const value = input[key];
+function absolutePath(value: unknown, key: string): string {
   if (typeof value !== "string" || value.length === 0) {
-    throw new ToolInputError(`${key} is required`);
+    throw new InvalidInputError(`${key} must be a non-empty string`);
   }
-
-  return value;
-}
-
-function validateImageName(value: string, key: string): void {
-  if (value === "." || value === ".." || /[\\/]/.test(value)) {
-    throw new ToolInputError(`${key} must be a launcher image name, not a path`);
-  }
-}
-
-function requireAbsolutePath(value: string, key: string): string {
-  const resolved = path.resolve(value);
   if (!path.isAbsolute(value)) {
-    throw new ToolInputError(`${key} must be an absolute path`);
+    throw new InvalidInputError(`${key} must be an absolute path`);
   }
 
-  return resolved;
+  return path.resolve(value);
 }
 
-function isPathInside(parent: string, candidate: string): boolean {
-  const relative = path.relative(parent, candidate);
-  return (
-    relative === "" ||
-    (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+/** A profile given by its stateRoot or its imagesDir, one of the two; `null` is left out. */
+export function resolveProfileLocation(
+  input: unknown,
+  label: "sourceProfile" | "destinationProfile",
+): ResolvedProfile {
+  const object = Object.fromEntries(
+    Object.entries(inputObject(input, label)).filter(([, value]) => value !== null),
   );
+  const unknown = Object.keys(object).filter((key) => key !== "stateRoot" && key !== "imagesDir");
+  if (unknown.length > 0) {
+    throw new InvalidInputError(`${label} takes stateRoot or imagesDir, not ${unknown.join(", ")}`);
+  }
+  if ((object.stateRoot === undefined) === (object.imagesDir === undefined)) {
+    throw new InvalidInputError(`${label} takes stateRoot or imagesDir, one of the two`);
+  }
+
+  if (object.stateRoot !== undefined) {
+    const stateRoot = absolutePath(object.stateRoot, `${label}.stateRoot`);
+    return { stateRoot, imagesDir: path.join(stateRoot, "images") };
+  }
+  return { imagesDir: absolutePath(object.imagesDir, `${label}.imagesDir`) };
+}
+
+interface CopyRequest {
+  sourceProfile: ResolvedProfile;
+  destinationProfile: ResolvedProfile;
+  image: string;
+  newImage: string;
+}
+
+function parseCopyRequest(input: unknown): CopyRequest {
+  const object = inputObject(input, "arguments");
+  const image = validImageName(requiredString(object, "image"), "image");
+  const newImage = validImageName(requiredString(object, "newImage"), "newImage");
+
+  return {
+    sourceProfile: resolveProfileLocation(object.sourceProfile, "sourceProfile"),
+    destinationProfile: resolveProfileLocation(object.destinationProfile, "destinationProfile"),
+    image,
+    newImage,
+  };
 }
 
 function stonStringParts(source: string): string[] {
@@ -324,309 +275,41 @@ function metadataSupportsLauncherDirectoryFallback(
   );
 }
 
-function pathMetadata(filePath: string): PathMetadata {
+type PathKind = "missing" | "file" | "directory" | "other";
+
+function pathKind(filePath: string): PathKind {
   try {
     const stat = fs.statSync(filePath);
-    return {
-      path: filePath,
-      exists: true,
-      kind: stat.isFile()
-        ? "file"
-        : stat.isDirectory()
-          ? "directory"
-          : "other",
-      ...(stat.isFile() ? { bytes: stat.size } : {}),
-    };
+    return stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other";
   } catch {
-    return {
-      path: filePath,
-      exists: false,
-      kind: "missing",
-    };
+    return "missing";
   }
 }
 
-function imageMetadata(
-  profile: ResolvedScopedProfile,
-  imageName: string,
-): ImagePathMetadata {
-  const directory = path.join(profile.imagesDir, imageName);
-
-  return {
-    imageName,
-    directory,
-    imageFile: pathMetadata(path.join(directory, `${imageName}.image`)),
-    metadataFile: pathMetadata(path.join(directory, "meta-inf.ston")),
-  };
-}
-
-function environmentForProfile(
-  profile: Omit<ResolvedScopedProfile, "environment">,
-): Record<string, string> {
-  return {
-    PHARO_LAUNCHER_MCP_PROFILE: profile.profileName,
-    ...(profile.stateRoot
-      ? { PHARO_LAUNCHER_MCP_STATE_ROOT: profile.stateRoot }
-      : {}),
-    PHARO_LAUNCHER_MCP_IMAGES_DIR: profile.imagesDir,
-    ...(profile.vmsDir ? { PHARO_LAUNCHER_MCP_VMS_DIR: profile.vmsDir } : {}),
-    ...(profile.templateSourcesDir
-      ? {
-          PHARO_LAUNCHER_MCP_TEMPLATE_SOURCES_DIR:
-            profile.templateSourcesDir,
-        }
-      : {}),
-    ...(profile.initScriptsDir
-      ? { PHARO_LAUNCHER_MCP_INIT_SCRIPTS_DIR: profile.initScriptsDir }
-      : {}),
-    ...(profile.logsDir
-      ? { PHARO_LAUNCHER_MCP_LOGS_DIR: profile.logsDir }
-      : {}),
-    ...(profile.launcherConfiguration
-      ? {
-          PHARO_LAUNCHER_MCP_LAUNCHER_CONFIGURATION:
-            profile.launcherConfiguration,
-        }
-      : {}),
-  };
-}
-
-export function resolveScopedProfileInput(
-  input: unknown,
-  label: "sourceProfile" | "destinationProfile",
-): ResolvedScopedProfile {
-  const object = inputObject(input, label);
-  const supplied = new Map<ProfilePathKey, string>();
-  for (const key of profilePathKeys) {
-    const value = optionalString(object, key, label);
-    if (value !== undefined) {
-      supplied.set(key, requireAbsolutePath(value, `${label}.${key}`));
-    }
-  }
-
-  const profileName = optionalString(object, "profileName", label) ?? "explicit";
-  const stateRoot = supplied.get("stateRoot");
-  const explicitFields = [
-    ...[...supplied.keys()],
-    ...(object.profileName !== undefined ? ["profileName"] : []),
-  ];
-
-  if (!stateRoot) {
-    const missing = completeExplicitProfileKeys.filter(
-      (key) => !supplied.has(key),
-    );
-    if (missing.length > 0) {
-      throw new ToolInputError(
-        `${label} must include stateRoot or explicit ${completeExplicitProfileKeys.join(", ")}`,
-      );
-    }
-  }
-
-  const profileWithoutEnvironment = {
-    profileName,
-    ...(stateRoot ? { stateRoot } : {}),
-    launcherConfiguration:
-      supplied.get("launcherConfiguration") ??
-      path.join(stateRoot ?? "", "launcher", "pharo-launcher-cli-config.ston"),
-    imagesDir: supplied.get("imagesDir") ?? path.join(stateRoot ?? "", "images"),
-    ...(supplied.get("vmsDir") ?? stateRoot
-      ? { vmsDir: supplied.get("vmsDir") ?? path.join(stateRoot ?? "", "vms") }
-      : {}),
-    ...(supplied.get("templateSourcesDir") ?? stateRoot
-      ? {
-          templateSourcesDir:
-            supplied.get("templateSourcesDir") ??
-            path.join(stateRoot ?? "", "templates"),
-        }
-      : {}),
-    ...(supplied.get("initScriptsDir") ?? stateRoot
-      ? {
-          initScriptsDir:
-            supplied.get("initScriptsDir") ??
-            path.join(stateRoot ?? "", "init-scripts"),
-        }
-      : {}),
-    ...(supplied.get("logsDir") ?? stateRoot
-      ? {
-          logsDir:
-            supplied.get("logsDir") ?? path.join(stateRoot ?? "", "logs"),
-        }
-      : {}),
-    explicitFields,
-  };
-  if (
-    stateRoot &&
-    !isPathInside(stateRoot, profileWithoutEnvironment.launcherConfiguration)
-  ) {
-    throw new ToolInputError(
-      `${label}.launcherConfiguration must be inside ${label}.stateRoot`,
-    );
-  }
-
-  return {
-    ...profileWithoutEnvironment,
-    environment: environmentForProfile(profileWithoutEnvironment),
-  };
-}
-
-function parseCopyRequest(input: unknown): CopyRequest {
-  const object = inputObject(input, "arguments");
-  const sourceImageName = requiredString(object, "sourceImageName");
-  const destinationImageName = requiredString(object, "destinationImageName");
-  validateImageName(sourceImageName, "sourceImageName");
-  validateImageName(destinationImageName, "destinationImageName");
-
-  return {
-    sourceProfile: resolveScopedProfileInput(
-      object.sourceProfile,
-      "sourceProfile",
-    ),
-    destinationProfile: resolveScopedProfileInput(
-      object.destinationProfile,
-      "destinationProfile",
-    ),
-    sourceImageName,
-    destinationImageName,
-  };
-}
-
-function emptyTouchedPaths(): TouchedPaths {
-  return {
-    createdDirectories: [],
-    copiedDirectories: [],
-    renamedFiles: [],
-    repairedFiles: [],
-    removedTemporaryPaths: [],
-  };
-}
-
-function cleanupGuidance(
-  destinationImageDirectory: string,
-  temporaryDirectory?: string,
-): CleanupGuidance {
-  return {
-    onSuccess:
-      "If the copied image is no longer needed, delete the destination image with the destination profile active.",
-    onFailure:
-      "Remove any listed temporary path first. If the destination image directory exists after a failed copy, delete only that destination image directory after confirming it is caller-owned.",
-    destinationImageDirectory,
-    ...(temporaryDirectory ? { temporaryDirectory } : {}),
-  };
-}
-
-function resultBase(
-  request: CopyRequest,
-  touchedPaths: TouchedPaths,
-  temporaryDirectory?: string,
-): Omit<
-  CrossProfileImageCopyResult,
-  | "ok"
-  | "metadataRepair"
-  | "verification"
-  | "message"
-  | "diagnostic"
-  | "action"
-  | "error"
-> {
-  const destinationImage = imageMetadata(
-    request.destinationProfile,
-    request.destinationImageName,
-  );
-
-  return {
-    operation: "copy_between_profiles",
-    sourceImageName: request.sourceImageName,
-    destinationImageName: request.destinationImageName,
-    sourceProfile: request.sourceProfile,
-    destinationProfile: request.destinationProfile,
-    sourceImage: imageMetadata(request.sourceProfile, request.sourceImageName),
-    destinationImage,
-    touchedPaths,
-    cleanup: cleanupGuidance(destinationImage.directory, temporaryDirectory),
-  };
-}
-
-/**
- * How a profile is named to a reader: by its state root, or its images
- * directory when it has none. A `profileName` the caller did not give is
- * `explicit`, which names nothing.
- */
-export function profileLabel(
-  profile: Pick<ResolvedScopedProfile, "stateRoot" | "imagesDir">,
-): string {
+/** How a profile is named to a reader: by its state root, else its images directory. */
+export function profileLabel(profile: ResolvedProfile): string {
   return profile.stateRoot ?? profile.imagesDir;
-}
-
-// A caller that reports only the tool name says nothing a reader can act on,
-// and the structure below is only as good as the consumer that walks it. Lead
-// with one line naming both images, both profiles and the way out, so even a
-// consumer that quotes nothing else still says what went wrong.
-function copyFailureMessage(
-  request: CopyRequest,
-  diagnostic: string,
-  action: string,
-  error?: string,
-): string {
-  const renamed =
-    request.destinationImageName === request.sourceImageName
-      ? ""
-      : ` as ${request.destinationImageName}`;
-
-  return [
-    `Cannot copy image ${request.sourceImageName} from ${profileLabel(
-      request.sourceProfile,
-    )} to ${profileLabel(request.destinationProfile)}${renamed}: ${diagnostic}`,
-    error,
-    action,
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
-function failureResult(
-  request: CopyRequest,
-  touchedPaths: TouchedPaths,
-  failure: CrossProfileCopyFailure,
-  diagnostic: string,
-  action: string,
-  temporaryDirectory?: string,
-  error?: string,
-): CrossProfileImageCopyResult {
-  return {
-    ...resultBase(request, touchedPaths, temporaryDirectory),
-    ok: false,
-    failure,
-    message: copyFailureMessage(request, diagnostic, action, error),
-    diagnostic,
-    action,
-    ...(error ? { error } : {}),
-  };
 }
 
 // A copy creates no profile path. One that does not exist was guessed, and an
 // images directory made for it would hold a copy no Launcher reads, under an
-// answer that says it succeeded. A missing stateRoot is named alone: the paths
-// taken from it are missing with it.
+// answer that says it succeeded. A missing stateRoot is named alone: the
+// images directory taken from it is missing with it.
 function missingProfilePaths(
-  profile: ResolvedScopedProfile,
+  profile: ResolvedProfile,
   label: MissingProfilePath["profile"],
 ): MissingProfilePath[] {
-  if (profile.stateRoot !== undefined && !fs.existsSync(profile.stateRoot)) {
-    return [{ profile: label, field: "stateRoot", path: profile.stateRoot, given: true }];
+  if (profile.stateRoot !== undefined) {
+    if (!fs.existsSync(profile.stateRoot)) {
+      return [{ profile: label, field: "stateRoot", path: profile.stateRoot, given: true }];
+    }
+    return fs.existsSync(profile.imagesDir)
+      ? []
+      : [{ profile: label, field: "imagesDir", path: profile.imagesDir, given: false }];
   }
-
-  const missing: MissingProfilePath[] = profilePathKeys
-    .filter((field) => profile.explicitFields.includes(field))
-    .flatMap((field) => {
-      const value = profile[field];
-      return value === undefined || fs.existsSync(value)
-        ? []
-        : [{ profile: label, field, path: value, given: true }];
-    });
-  if (!profile.explicitFields.includes("imagesDir") && !fs.existsSync(profile.imagesDir)) {
-    missing.push({ profile: label, field: "imagesDir", path: profile.imagesDir, given: false });
-  }
-  return missing;
+  return fs.existsSync(profile.imagesDir)
+    ? []
+    : [{ profile: label, field: "imagesDir", path: profile.imagesDir, given: true }];
 }
 
 /** `A, B and C`. */
@@ -657,47 +340,10 @@ function missingProfilePathsText(
     .join(" ");
 }
 
-// Everything the copy touched was touched inside the temporary directory, and
-// the move is what makes the copy real. Say where those paths are now: a
-// caller that walks touchedPaths to clean up can only act on a path that
-// exists, and until the move is recorded every one of them named the
-// temporary directory the copy had just left.
-function recordTemporaryDirectoryMove(
-  touchedPaths: TouchedPaths,
-  from: string,
-  to: string,
-): void {
-  const relocate = (value: string): string =>
-    value === from || isPathInside(from, value)
-      ? path.join(to, path.relative(from, value))
-      : value;
-
-  for (const copied of touchedPaths.copiedDirectories) {
-    copied.to = relocate(copied.to);
-  }
-  for (const renamed of touchedPaths.renamedFiles) {
-    renamed.from = relocate(renamed.from);
-    renamed.to = relocate(renamed.to);
-  }
-  touchedPaths.repairedFiles = touchedPaths.repairedFiles.map(relocate);
-}
-
-function removeTemporaryDirectory(
-  temporaryDirectory: string | undefined,
-  touchedPaths: TouchedPaths,
-): void {
-  if (!temporaryDirectory || !fs.existsSync(temporaryDirectory)) {
-    return;
-  }
-
-  fs.rmSync(temporaryDirectory, { recursive: true, force: true });
-  touchedPaths.removedTemporaryPaths.push(temporaryDirectory);
-}
-
-function uniqueTemporaryDirectory(parent: string, destinationImageName: string): string {
+function uniqueTemporaryDirectory(parent: string, newImage: string): string {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const suffix = `${process.pid}-${Date.now()}-${attempt}`;
-    const candidate = path.join(parent, `.${destinationImageName}.copy-${suffix}.tmp`);
+    const candidate = path.join(parent, `.${newImage}.copy-${suffix}.tmp`);
     if (!fs.existsSync(candidate)) {
       return candidate;
     }
@@ -707,309 +353,203 @@ function uniqueTemporaryDirectory(parent: string, destinationImageName: string):
 }
 
 function renameCopiedCompanionFile(
-  temporaryDirectory: string,
-  sourceImageName: string,
-  destinationImageName: string,
+  directory: string,
+  image: string,
+  newImage: string,
   extension: ".image" | ".changes",
-  touchedPaths: TouchedPaths,
 ): void {
-  if (sourceImageName === destinationImageName) {
+  if (image === newImage) {
     return;
   }
 
-  const sourcePath = path.join(temporaryDirectory, `${sourceImageName}${extension}`);
-  const destinationPath = path.join(
-    temporaryDirectory,
-    `${destinationImageName}${extension}`,
-  );
+  const sourcePath = path.join(directory, `${image}${extension}`);
+  const destinationPath = path.join(directory, `${newImage}${extension}`);
   if (!fs.existsSync(sourcePath)) {
     return;
   }
   if (fs.existsSync(destinationPath)) {
     throw new Error(
-      `Copied image directory contains both ${sourceImageName}${extension} and ${destinationImageName}${extension}`,
+      `Copied image directory contains both ${image}${extension} and ${newImage}${extension}`,
     );
   }
 
   fs.renameSync(sourcePath, destinationPath);
-  touchedPaths.renamedFiles.push({ from: sourcePath, to: destinationPath });
 }
 
-function verifyDestinationImage(
-  destinationDirectory: string,
-  sourceImageName: string,
-  destinationImageName: string,
-): CopyVerification {
-  const destinationImageFile = path.join(
-    destinationDirectory,
-    `${destinationImageName}.image`,
-  );
-  const sourceBasenameImageFile = path.join(
-    destinationDirectory,
-    `${sourceImageName}.image`,
-  );
-  const metadataFile = path.join(destinationDirectory, "meta-inf.ston");
-  const destinationDirectoryExists =
-    pathMetadata(destinationDirectory).kind === "directory";
-  const destinationImageFileExists = pathMetadata(destinationImageFile).kind === "file";
-  const destinationMetadataFileExists = pathMetadata(metadataFile).kind === "file";
-  const sourceBasenameImageFileAbsent =
-    sourceImageName === destinationImageName ||
-    pathMetadata(sourceBasenameImageFile).kind === "missing";
-  const metadataContent = destinationMetadataFileExists
-    ? fs.readFileSync(metadataFile, "utf8")
-    : "";
-  const destinationMetadataHasImageReference =
-    metadataImagePathReferences(metadataContent).length > 0;
-  const destinationMetadataReferencesDestination =
-    destinationMetadataFileExists &&
-    metadataReferencesImagePath(metadataContent, destinationImageName);
-  const destinationMetadataUsesLauncherDirectoryFallback =
-    destinationMetadataFileExists &&
-    !destinationMetadataHasImageReference &&
-    metadataSupportsLauncherDirectoryFallback(metadataContent);
-  const sourceMetadataReferenceAbsent =
-    sourceImageName === destinationImageName ||
-    !metadataReferencesImagePath(metadataContent, sourceImageName);
-  const verificationBase = {
-    destinationDirectoryExists,
-    destinationImageFileExists,
-    destinationMetadataFileExists,
-    destinationMetadataReferencesDestination,
-    destinationMetadataHasImageReference,
-    destinationMetadataUsesLauncherDirectoryFallback,
-    sourceMetadataReferenceAbsent,
-    sourceBasenameImageFileAbsent,
-  };
-
-  if (!destinationDirectoryExists) {
-    return {
-      ...verificationBase,
-      ok: false,
-      diagnostic: "Destination image directory does not exist after copy.",
-    };
+/** Why a copied image directory is not the image asked for, or nothing. */
+function copyProblem(directory: string, image: string, newImage: string): string | undefined {
+  const metadataFile = path.join(directory, "meta-inf.ston");
+  if (pathKind(directory) !== "directory") {
+    return "the image directory does not exist after the copy";
   }
-  if (!destinationImageFileExists) {
-    return {
-      ...verificationBase,
-      ok: false,
-      diagnostic: "Destination image file does not use the requested image name.",
-    };
+  if (pathKind(path.join(directory, `${newImage}.image`)) !== "file") {
+    return `it holds no ${newImage}.image`;
   }
-  if (!destinationMetadataFileExists) {
-    return {
-      ...verificationBase,
-      ok: false,
-      diagnostic: "Destination image metadata file is missing.",
-    };
+  if (pathKind(path.join(directory, `${newImage}.changes`)) !== "file") {
+    return `it holds no ${newImage}.changes`;
   }
-  if (
-    !destinationMetadataReferencesDestination &&
-    !destinationMetadataUsesLauncherDirectoryFallback
-  ) {
-    return {
-      ...verificationBase,
-      ok: false,
-      diagnostic:
-        "Destination image metadata does not reference the requested image file.",
-    };
-  }
-  if (!sourceMetadataReferenceAbsent) {
-    return {
-      ...verificationBase,
-      ok: false,
-      diagnostic:
-        "Destination image metadata still references the source image file.",
-    };
-  }
-  if (!sourceBasenameImageFileAbsent) {
-    return {
-      ...verificationBase,
-      ok: false,
-      diagnostic:
-        "Copied image directory still contains an image file named after the source image.",
-    };
+  if (pathKind(metadataFile) !== "file") {
+    return "it holds no meta-inf.ston";
   }
 
-  return {
-    ...verificationBase,
-    ok: true,
-  };
+  const metadata = fs.readFileSync(metadataFile, "utf8");
+  const referencesNew = metadataReferencesImagePath(metadata, newImage);
+  const fallsBack =
+    metadataImagePathReferences(metadata).length === 0 &&
+    metadataSupportsLauncherDirectoryFallback(metadata);
+  if (!referencesNew && !fallsBack) {
+    return `its meta-inf.ston does not name ${newImage}.image`;
+  }
+  if (image !== newImage && metadataReferencesImagePath(metadata, image)) {
+    return `its meta-inf.ston still names ${image}.image`;
+  }
+  if (image !== newImage && pathKind(path.join(directory, `${image}.image`)) !== "missing") {
+    return `it still holds ${image}.image`;
+  }
+  return undefined;
 }
 
-export function copyImageBetweenProfiles(
-  input: unknown,
-): CrossProfileImageCopyResult {
+/**
+ * Copy an image from one images directory to another, renamed when asked,
+ * such as from the user's own Launcher into a profile. Nothing runs: the
+ * files are copied to a temporary directory beside the destination, checked,
+ * then moved in place and checked again. An existing image is never replaced.
+ * The source is found as every call finds an image: exactly, else ignoring
+ * case.
+ */
+export async function copyImageBetweenProfiles(
+  input: CopyBetweenProfilesInput,
+): Promise<CopyBetweenProfilesResult> {
   const request = parseCopyRequest(input);
-  const touchedPaths = emptyTouchedPaths();
-  const sourceImage = imageMetadata(request.sourceProfile, request.sourceImageName);
-  const destinationImage = imageMetadata(
-    request.destinationProfile,
-    request.destinationImageName,
-  );
-  let temporaryDirectory: string | undefined;
+  const sourceScan = scanImages(request.sourceProfile.imagesDir);
+  const sourceEntry = findByName(sourceScan.images, request.image);
+  const sourceName = sourceEntry?.name ?? request.image;
+  const sourceDirectory = path.join(request.sourceProfile.imagesDir, sourceName);
+  const destinationDirectory = path.join(request.destinationProfile.imagesDir, request.newImage);
+  const base = {
+    sourceProfile: request.sourceProfile,
+    destinationProfile: request.destinationProfile,
+    source: {
+      directory: sourceDirectory,
+      imagePath: path.join(sourceDirectory, `${sourceName}.image`),
+    },
+    destination: {
+      directory: destinationDirectory,
+      imagePath: path.join(destinationDirectory, `${request.newImage}.image`),
+    },
+  };
+  const failed = (
+    failure: CopyBetweenProfilesFailure,
+    diagnostic: string,
+    action?: string,
+  ): CopyBetweenProfilesResult => ({
+    ...base,
+    ok: false,
+    failure,
+    diagnostic,
+    ...(action ? { action } : {}),
+  });
 
   const missing = [
     ...missingProfilePaths(request.sourceProfile, "sourceProfile"),
     ...missingProfilePaths(request.destinationProfile, "destinationProfile"),
   ];
   if (missing.length > 0) {
-    return {
-      ...failureResult(
-        request,
-        touchedPaths,
-        "profile-path-missing",
-        missingProfilePathsText(request, missing),
-        "Give as stateRoot the directory that holds the profile's images/ directory;"
-          + " every other path defaults to its place inside it.",
-      ),
-      missingProfilePaths: missing,
-    };
-  }
-
-  if (pathMetadata(sourceImage.directory).kind !== "directory") {
-    return failureResult(
-      request,
-      touchedPaths,
-      "source-missing",
-      "Source image directory is missing.",
-      "Verify sourceProfile.imagesDir and sourceImageName before copying.",
-    );
-  }
-  if (sourceImage.imageFile.kind !== "file") {
-    return failureResult(
-      request,
-      touchedPaths,
-      "source-image-missing",
-      "Source image file is missing.",
-      "Verify the source image directory contains an image file named after sourceImageName.",
-    );
-  }
-  if (sourceImage.metadataFile.kind !== "file") {
-    return failureResult(
-      request,
-      touchedPaths,
-      "source-metadata-missing",
-      "Source image metadata file is missing.",
-      "Repair or recreate the source image before copying it between explicit profiles.",
-    );
-  }
-  if (pathMetadata(destinationImage.directory).kind !== "missing") {
-    return failureResult(
-      request,
-      touchedPaths,
-      "destination-exists",
-      `Destination image already exists at ${destinationImage.directory}, and an existing image is never replaced.`,
-      "Read destinationImage to see what is already there and adopt it if it fits,"
-        + " copy under a different destinationImageName,"
-        + " or delete that image with the destination profile active and retry.",
+    return failed(
+      { kind: "profile-path-missing", paths: missing },
+      missingProfilePathsText(request, missing),
     );
   }
 
+  if (!sourceEntry) {
+    const notAnImage = findByName(sourceScan.notImages, request.image);
+    return failed(
+      { kind: "no-such-image", image: request.image, ...(notAnImage ? { notAnImage } : {}) },
+      notAnImage
+        ? `${notAnImage.directory} ${whatItLacks(notAnImage)}`
+        : `There is no image ${request.image} in ${request.sourceProfile.imagesDir}`,
+    );
+  }
+  if (pathKind(path.join(sourceDirectory, "meta-inf.ston")) !== "file") {
+    return failed({ kind: "no-metadata" }, `${sourceDirectory} holds no meta-inf.ston`);
+  }
+  const taken = findByName(scanImages(request.destinationProfile.imagesDir).images, request.newImage);
+  if (taken) {
+    return failed(
+      { kind: "name-taken", image: taken.name },
+      `There is already an image ${taken.name} in ${request.destinationProfile.imagesDir}`,
+      "Copy under another newImage, or delete that image first.",
+    );
+  }
+  if (pathKind(destinationDirectory) !== "missing") {
+    return failed(
+      { kind: "destination-exists" },
+      `${destinationDirectory} already exists, and a copy never replaces it`,
+      "Copy under another newImage, or remove that directory first.",
+    );
+  }
+
+  let temporaryDirectory: string | undefined;
   try {
     temporaryDirectory = uniqueTemporaryDirectory(
       request.destinationProfile.imagesDir,
-      request.destinationImageName,
+      request.newImage,
     );
-    fs.cpSync(sourceImage.directory, temporaryDirectory, {
+    fs.cpSync(sourceDirectory, temporaryDirectory, {
       recursive: true,
       errorOnExist: true,
       force: false,
       preserveTimestamps: true,
     });
-    touchedPaths.copiedDirectories.push({
-      from: sourceImage.directory,
-      to: temporaryDirectory,
+    renameCopiedCompanionFile(temporaryDirectory, sourceName, request.newImage, ".image");
+    renameCopiedCompanionFile(temporaryDirectory, sourceName, request.newImage, ".changes");
+    repairCopiedImageMetadataInDirectory({
+      directory: temporaryDirectory,
+      image: sourceName,
+      newImage: request.newImage,
     });
 
-    renameCopiedCompanionFile(
-      temporaryDirectory,
-      request.sourceImageName,
-      request.destinationImageName,
-      ".image",
-      touchedPaths,
-    );
-    renameCopiedCompanionFile(
-      temporaryDirectory,
-      request.sourceImageName,
-      request.destinationImageName,
-      ".changes",
-      touchedPaths,
-    );
-
-    const metadataRepair = repairCopiedImageMetadataInDirectory(
-      temporaryDirectory,
-      request.sourceImageName,
-      request.destinationImageName,
-    );
-    if (metadataRepair.status === "repaired" && metadataRepair.metaInfPath) {
-      touchedPaths.repairedFiles.push(metadataRepair.metaInfPath);
+    const preflight = copyProblem(temporaryDirectory, sourceName, request.newImage);
+    if (preflight !== undefined) {
+      removeLeftovers(temporaryDirectory);
+      return failed({ kind: "preflight" }, preflight);
     }
 
-    const preflightVerification = verifyDestinationImage(
-      temporaryDirectory,
-      request.sourceImageName,
-      request.destinationImageName,
-    );
-    if (!preflightVerification.ok) {
-      removeTemporaryDirectory(temporaryDirectory, touchedPaths);
-      return {
-        ...failureResult(
-          request,
-          touchedPaths,
-          "preflight",
-          `Copied image verification failed: ${preflightVerification.diagnostic}`,
-          "Inspect the source image layout and metadata before retrying the copy.",
-          temporaryDirectory,
-        ),
-        metadataRepair,
-        verification: preflightVerification,
-      };
-    }
-
-    fs.renameSync(temporaryDirectory, destinationImage.directory);
-    recordTemporaryDirectoryMove(
-      touchedPaths,
-      temporaryDirectory,
-      destinationImage.directory,
-    );
+    fs.renameSync(temporaryDirectory, destinationDirectory);
     temporaryDirectory = undefined;
-    const verification = verifyDestinationImage(
-      destinationImage.directory,
-      request.sourceImageName,
-      request.destinationImageName,
-    );
-    if (!verification.ok) {
-      return {
-        ...failureResult(
-          request,
-          touchedPaths,
-          "post-move",
-          `Destination image verification failed: ${verification.diagnostic}`,
-          "Delete the destination image directory if it is caller-owned, then retry from a valid source image.",
-        ),
-        metadataRepair,
-        verification,
-      };
+    const moved = copyProblem(destinationDirectory, sourceName, request.newImage);
+    if (moved !== undefined) {
+      return failed({ kind: "post-move" }, moved, `Delete ${destinationDirectory} before copying again.`);
     }
 
+    const copied = readImageDirectory(request.destinationProfile.imagesDir, request.newImage);
     return {
-      ...resultBase(request, touchedPaths),
+      ...base,
       ok: true,
-      metadataRepair,
-      verification,
+      ...(copied.kind === "image" ? { data: { image: readLauncherImage(copied.image) } } : {}),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    removeTemporaryDirectory(temporaryDirectory, touchedPaths);
-    return failureResult(
-      request,
-      touchedPaths,
-      "exception",
-      "Cross-profile image copy failed.",
-      "Inspect touchedPaths and retry after removing any listed temporary path.",
-      temporaryDirectory,
-      message,
-    );
+    if (temporaryDirectory !== undefined) {
+      removeLeftovers(temporaryDirectory);
+    }
+    const leftBehind =
+      temporaryDirectory !== undefined && fs.existsSync(temporaryDirectory)
+        ? temporaryDirectory
+        : undefined;
+    return failed({ kind: "exception", ...(leftBehind ? { leftBehind } : {}) }, message);
+  }
+}
+
+/**
+ * Removes what a failed copy made, if it can. The copy's own failure is the
+ * answer: a cleanup that fails too leaves the directory, which the answer
+ * names as left behind.
+ */
+function removeLeftovers(directory: string): void {
+  try {
+    fs.rmSync(directory, { recursive: true, force: true });
+  } catch {
+    // Named as leftBehind when it still exists.
   }
 }

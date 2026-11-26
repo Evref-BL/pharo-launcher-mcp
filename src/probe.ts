@@ -15,7 +15,7 @@ export interface ProbeImagesOutcome {
  * its images, which checks that the CLI starts and reads this scope's
  * configuration, and exits with that command's status; what the Launcher
  * wrote goes to standard error only when it failed. Then it prints what
- * `pharo_launcher_image_list` answers, which reads the images directory.
+ * `image_list` answers, which reads the images directory.
  */
 export async function probeImages(options: CallToolOptions = {}): Promise<ProbeImagesOutcome> {
   const config = options.config ?? loadPharoLauncherConfig();
@@ -25,7 +25,7 @@ export async function probeImages(options: CallToolOptions = {}): Promise<ProbeI
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   });
   const exitCode = listed.exitCode === 0 && !listed.timedOut ? 0 : listed.exitCode || 1;
-  const answer = await callTool("pharo_launcher_image_list", {}, { ...options, config });
+  const answer = await callTool("image_list", {}, { ...options, config });
 
   return {
     exitCode,

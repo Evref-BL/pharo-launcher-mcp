@@ -2,10 +2,25 @@ import fs from "node:fs";
 import path from "node:path";
 import type { PharoLauncherConfig } from "./config.js";
 
+/**
+ * What a repair did to a copied image's meta-inf.ston: rewrote the paths that
+ * named the source image (`repaired`), found none (`unchanged`), or left it
+ * alone, `diagnostic` saying why (`skipped`).
+ */
 export interface ImageMetadataRepairResult {
-  status: "skipped" | "unchanged" | "repaired";
+  kind: "skipped" | "unchanged" | "repaired";
   metaInfPath?: string;
-  reason?: string;
+  diagnostic?: string;
+}
+
+/** A copied image's directory, the image it was copied from, and its own name. */
+export interface ImageMetadataRepairInput {
+  /** The copy's directory, holding `<newImage>.image` and meta-inf.ston. */
+  directory: string;
+  /** The image it was copied from. */
+  image: string;
+  /** The copy's name. */
+  newImage: string;
 }
 
 function stonString(value: string): string {
@@ -92,23 +107,27 @@ export function repairCopiedImageMetadata(
 ): ImageMetadataRepairResult {
   if (!config.profile) {
     return {
-      status: "skipped",
-      reason: "No pharo-launcher-mcp profile is active.",
+      kind: "skipped",
+      diagnostic: "No pharo-launcher-mcp profile is active.",
     };
   }
 
-  return repairCopiedImageMetadataInDirectory(
-    path.join(config.profile.imagesDir, targetImageName),
-    sourceImageName,
-    targetImageName,
-  );
+  return repairCopiedImageMetadataInDirectory({
+    directory: path.join(config.profile.imagesDir, targetImageName),
+    image: sourceImageName,
+    newImage: targetImageName,
+  });
 }
 
+/**
+ * Rewrite a copied image's meta-inf.ston so that its paths name the copy, not
+ * the image it was copied from, as the Launcher's own copy does: for a caller
+ * that copied an image directory itself.
+ */
 export function repairCopiedImageMetadataInDirectory(
-  targetDirectory: string,
-  sourceImageName: string,
-  targetImageName: string,
+  input: ImageMetadataRepairInput,
 ): ImageMetadataRepairResult {
+  const { directory: targetDirectory, image: sourceImageName, newImage: targetImageName } = input;
   const metaInfPath = path.join(targetDirectory, "meta-inf.ston");
   const targetImagePath = path.join(
     targetDirectory,
@@ -116,16 +135,16 @@ export function repairCopiedImageMetadataInDirectory(
   );
   if (!fs.existsSync(metaInfPath)) {
     return {
-      status: "skipped",
+      kind: "skipped",
       metaInfPath,
-      reason: "Copied image metadata file does not exist.",
+      diagnostic: "Copied image metadata file does not exist.",
     };
   }
   if (!fs.existsSync(targetImagePath)) {
     return {
-      status: "skipped",
+      kind: "skipped",
       metaInfPath,
-      reason: "Copied image file does not use the requested target name.",
+      diagnostic: "Copied image file does not use the requested target name.",
     };
   }
 
@@ -139,9 +158,9 @@ export function repairCopiedImageMetadataInDirectory(
     imagePathSton(targetImageName),
   );
   if (after === before) {
-    return { status: "unchanged", metaInfPath };
+    return { kind: "unchanged", metaInfPath };
   }
 
   fs.writeFileSync(metaInfPath, after, "utf8");
-  return { status: "repaired", metaInfPath };
+  return { kind: "repaired", metaInfPath };
 }

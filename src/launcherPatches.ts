@@ -4,17 +4,22 @@ import path from "node:path";
 
 /**
  * What the profile's copy of the launcher image is changed with, once, so that
- * its command line can create images from templates hosted on GitHub.
+ * its command line serves the profile:
  *
  * - github.com answers a release asset with a header line longer than the
- *   4096 characters Zinc reads, so the download fails.
+ *   4096 characters Zinc reads, so a template hosted there fails to download.
  * - A failed download opens a retry dialog, which nobody can answer in a
  *   headless command: the command never ends. It now fails, saying why.
+ * - Before creating an image, the Launcher checks its template sources for
+ *   an update, among the user's own Launcher files whatever the profile's
+ *   configuration says: it downloads there, and profiles creating at once
+ *   race on its lock. A profile's sources are its own, which this package
+ *   downloads, so the check does nothing.
  *
  * Each change is skipped when what it changes is missing, so a launcher that
  * fixed or renamed it loads as it is.
  */
-export const launcherPatchesScript = `| zinc downloads |
+export const launcherPatchesScript = `| zinc downloads checker |
 zinc := Smalltalk globals at: #ZnConstants ifAbsent: [ nil ].
 (zinc notNil and: [ (zinc respondsTo: #maximumLineLength) and: [ zinc maximumLineLength < 65536 ] ]) ifTrue: [
 	zinc class
@@ -35,11 +40,17 @@ downloads := Smalltalk globals at: #PhLDownloadManager ifAbsent: [ nil ].
 			Stdio stderr nextPutAll: error longDescription; lf; flush.
 			error pass ]'
 		classified: 'downloading' ].
+checker := Smalltalk globals at: #PhLCliTemplateSourcesChecker ifAbsent: [ nil ].
+(checker notNil and: [ checker includesSelector: #checkForUpdates ]) ifTrue: [
+	checker
+		compile: 'checkForUpdates
+	"A profile''s template sources are its own, which pharo-launcher-mcp downloads. This check would download the user''s, among their own Launcher files."'
+		classified: 'updating' ].
 Smalltalk snapshot: true andQuit: true
 `;
 
 /** Names this set of changes; a profile recorded with another is changed again. */
-export const launcherPatchesName = "github-downloads-1";
+export const launcherPatchesName = "own-template-sources-2";
 
 const recordFileName = "pharo-launcher-mcp-patches";
 const patchTimeoutMs = 120_000;
@@ -121,7 +132,7 @@ export function ensureLauncherPatches(
     if (result.error || result.status !== 0) {
       throw new Error(
         [
-          "Could not prepare the profile's launcher image for downloads from GitHub.",
+          "Could not prepare the profile's launcher image.",
           `image: ${launcherImage}`,
           result.error
             ? `error: ${result.error.message}`

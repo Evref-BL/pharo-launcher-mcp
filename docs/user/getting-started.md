@@ -1,7 +1,7 @@
 # Getting Started
 
 This guide gets pharo-launcher-mcp running as a stdio MCP server and shows the
-first checks to run before mutating any Launcher state.
+first checks to run, which change nothing.
 
 ## Requirements
 
@@ -52,10 +52,10 @@ For macOS app bundles, the control image is
 Override the installation when needed:
 
 ```sh
-PHARO_LAUNCHER_DIR="/path/to/Pharo Launcher"
-PHARO_LAUNCHER_VM="/path/to/pharo"
-PHARO_LAUNCHER_IMAGE="/path/to/PharoLauncher.image"
-PHARO_LAUNCHER_SCRIPT="/path/to/pharo-launcher.sh"
+export PHARO_LAUNCHER_DIR="/path/to/Pharo Launcher"
+export PHARO_LAUNCHER_VM="/path/to/pharo"
+export PHARO_LAUNCHER_IMAGE="/path/to/PharoLauncher.image"
+export PHARO_LAUNCHER_SCRIPT="/path/to/pharo-launcher.sh"
 npx @evref-bl/pharo-launcher-mcp --health
 ```
 
@@ -119,31 +119,33 @@ npx @evref-bl/pharo-launcher-mcp --validate-installation
 
 `--health` confirms whether the resolved directory, VM, control image, and
 wrapper exist, without invoking Pharo Launcher. `--validate-installation` runs
-`--version` and verifies that the launcher command can start. Connected,
-`pharo_launcher_config` reports the same resolved configuration.
+`--version` and verifies that the launcher command can start. Each exits 1 when
+its check fails. Connected, `config` names the Launcher directory, the profile
+and the images directory it uses; `--health` is what reports every path.
 
-After validation, list templates:
+After validation, refresh and list the templates. Outside a profile,
+`template_update` refreshes the template list of the user's own Launcher:
 
 ```text
-pharo_launcher_template_update
-pharo_launcher_template_list
+template_update
+template_list
 ```
 
 Then create an image with an explicit name:
 
 ```json
 {
-  "tool": "pharo_launcher_image_create",
+  "tool": "image_create",
   "arguments": {
-    "templateName": "Pharo 13.0 - 64bit",
-    "newImageName": "sample-130"
+    "template": "<a name template_list gave>",
+    "image": "sample"
   }
 }
 ```
 
 The create answer is only successful when Launcher can list the new image and
 open it after it returns. Creating does not start the image:
-`pharo_launcher_image_start` does.
+`image_start` does.
 
 ## No-Profile Defaults
 
@@ -151,9 +153,12 @@ With no profile variables set, commands operate on the user's normal Pharo
 Launcher state scope. pharo-launcher-mcp does not create a hidden default
 profile or redirect images and VMs into its own cache.
 
-Detached image launches may write log files under `.pharo-launcher-mcp/logs` in
-the server working directory when no profile log directory is active, keeping
-those of each image's last three starts.
+Detached image launches write log files to this package's directory among the
+user's logs when no profile is active (`~/Library/Logs/pharo-launcher-mcp` on
+macOS, `%LOCALAPPDATA%\pharo-launcher-mcp\logs` on Windows, and on Linux
+`$XDG_STATE_HOME/pharo-launcher-mcp/logs`, else
+`~/.local/state/pharo-launcher-mcp/logs`), keeping those of each image's last
+three detached starts.
 
 ## When To Use A Profile
 

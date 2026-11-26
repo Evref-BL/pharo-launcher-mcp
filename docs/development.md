@@ -5,26 +5,12 @@ focused on installation and first use; user-facing detail lives under `docs/`.
 
 ## Source layout
 
-- `src/server.ts`: MCP server surface and tool dispatch.
-- `src/answers.ts`: what each tool answers, as text, and the checks made
-  before a call. Every text naming a `pharo_launcher_*` tool is here.
-- `src/launcher.ts`: the library, `openPharoLauncher`, which the tools are made
-  from and other programs import.
-- `src/commandCatalog.ts`: Pharo Launcher command definitions and input checks.
-- `src/config.ts`: Pharo Launcher and profile path resolution.
-- `src/platform.ts`: host-specific defaults and wrapper selection.
-- `src/launcherScript.ts`: bundled wrapper discovery.
-- `src/launcherCli.ts`: command execution boundary.
-- `src/processTools.ts`: native process list and kill backends.
-- `src/imageStore.ts`: the Launcher's images, read from its images directory,
-  and the VMs running them.
-- `src/ston.ts`: reads fields of the STON Pharo Launcher writes.
-- `src/parser.ts`: Pharo Launcher output parsing.
-- `src/resultNormalizer.ts`: the library's launcher results.
-- `src/probe.ts`: `--probe-images`.
-- `bin/pharo-launcher.cmd`: Windows wrapper.
-- `bin/pharo-launcher.sh`: POSIX wrapper.
-- `scripts/live-smoke.mjs`: local live checks against a real launcher.
+`src/library.ts` is the package's entry point: what it exports is under the
+semantic versioning promise the README states. `src/launcher.ts` is what the
+library and the tools are made from, opened on a config with the hooks tests
+give; it decides, and refuses what it refuses. `src/answers.ts` renders what it
+answers as each tool's text, and `src/server.ts` serves the tools. The other
+modules each name what they do.
 
 ## Local setup
 
@@ -42,8 +28,8 @@ npm test
 npm run test:integration
 ```
 
-`npm run check` runs type checking, build, and unit tests. `npm test` runs unit
-coverage only. It does not invoke a local Pharo Launcher.
+`npm run check` runs type checking, build, and unit tests. `npm test` runs the
+unit tests only. Neither invokes a local Pharo Launcher.
 
 Type checking reads `tsconfig.check.json`, which covers the unit and
 integration tests as well as the production code; the build reads
@@ -88,13 +74,13 @@ Launcher's `process` commands, whose table shortens a long path:
 
 Of those processes, a VM runs image `D` when its command line names
 `<images>/D/D.image`, bounded by whitespace, a quote or the line's ends. The
-tools keep those in every mode; the library's `listProcesses` does in profile
-mode, and lists every Pharo VM outside one.
+library and the tools keep those, and only those, in every mode. `ps` runs
+under `LC_ALL=C.UTF-8` and PowerShell writes UTF-8, so a path that is not
+ASCII matches as it is spelled.
 
 ## Parsing boundary
 
-What the server knows of the Launcher's state comes from four places, each read
-where it is stable:
+What the server knows of the Launcher's state is read where it is stable:
 
 - Images are read from the images directory (`src/imageStore.ts`), never from
   the Launcher's output: its STON names no image file, and its table shifts
@@ -106,26 +92,13 @@ where it is stable:
   in its order.
 - Processes come from the native process list.
 
-`src/parser.ts` reads the Launcher's output. Unsupported commands still return
-command metadata and raw output, and failed commands skip parsing so command
-failure is not confused with parser failure. Typed launcher results include
-`parser.status` so result handlers can distinguish normalized model data from
-raw-only output.
+`src/parser.ts` reads the Launcher's listings. A command that lists nothing has
+no data, and a failed command is not read, so a command's failure is never
+taken for a listing's.
 
-Stable model names include:
-
-```text
-LauncherImage
-NotAnImage
-LauncherImageList
-LauncherImageInfo
-LauncherTemplate
-LauncherProcess
-LauncherCommandResult
-```
-
-The MCP tools render these as text in `src/answers.ts`; the library never
-answers text.
+The library answers these as the types `src/models.ts` declares; the MCP
+tools render them as text in `src/answers.ts`. The library never answers text,
+and every text that names a tool is there.
 
 ## Integration tests
 
@@ -137,18 +110,9 @@ npm run test:integration
 
 The integration suite prepares an isolated temporary launcher profile by copying
 the Pharo Launcher control image. It calls the tools as a model does and checks
-their text, and checks the data through the library, `openPharoLauncher`:
-
-- config
-- template categories, list, and update
-- image list, and `--probe-images`
-- image create, beside an image whose name holds the new one
-- image copy
-- image info
-- image start, detached
-- image delete, refused while the image runs and accepted right after the kill
-- process list
-- process kill
+their text, and checks the data through the library, from an image's create
+to its delete. It was written against Pharo Launcher 3.4.5, and runs before
+each release, not on CI.
 
 External-source image creation variants such as build, pull request,
 repository, SHA, and VM mutation commands should use explicit fixtures because
@@ -164,10 +128,11 @@ npm run live:smoke
 ```
 
 It copies the launcher control image into that profile, then runs `--health`,
-`--version-check`, `--validate-installation` and `--probe-images`. All four are
-read-only.
+`--version-check`, `--validate-installation` and `--probe-images`. None of them
+changes an image or a process; the last three lay the profile out on their
+first run.
 
-Where the image comes from is not guessed: the script asks `describeConfig()`,
+Where the image comes from is not guessed: the script asks the config report,
 the same discovery that answers for the server, so a macOS `.app` bundle, a
 Windows install and a Linux directory each resolve the way they do in use.
 `--source-image`, `PHARO_LAUNCHER_IMAGE` or `PHARO_LAUNCHER_DIR` override it.
@@ -178,7 +143,7 @@ Without `--state-root` the profile lives in:
 <repo-parent>/.pharo-launcher-mcp/profiles/live-test
 ```
 
-and the profile's environment is written beside it as `profile.env`, a plain
+and the profile's environment is written in it as `profile.env`, a plain
 `KEY=value` file (`set -a; . profile.env` in a shell). `--force` refreshes the
 copied control image; `--skip-build` uses `dist` as it is.
 
@@ -195,7 +160,7 @@ distinguishes read-only planning checks from host inspection and mutation.
 
 Probe the local Pharo Launcher image list without starting MCP stdio. It asks
 the Launcher to list its images, exits with that command's status, and prints
-what `pharo_launcher_image_list` answers:
+what `image_list` answers:
 
 ```powershell
 npm run build

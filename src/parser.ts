@@ -1,14 +1,14 @@
-import type { LauncherOutputFormat, LauncherTemplate } from "./models.js";
+import type { LauncherTemplate } from "./models.js";
 import { objectOpenings, stonFields, stringValue, urlValue } from "./ston.js";
 
-export interface ParseResult<T = unknown> {
-  status: "parsed" | "unsupported" | "failed";
-  format: LauncherOutputFormat;
-  data?: T;
-  /** The category the Launcher marks as its default, for a category listing. */
-  defaultCategory?: string;
-  message?: string;
-}
+/**
+ * What a listing said, read: its records, or why they could not be read. A
+ * command that lists nothing has nothing to read.
+ */
+export type ParseResult =
+  | { status: "parsed"; data: unknown; defaultCategory?: string }
+  | { status: "none" }
+  | { status: "failed"; message: string };
 
 /**
  * Every template of `template list --ston`, in the Launcher's order: each
@@ -62,50 +62,24 @@ export function parseTemplateCategoriesFromBrief(source: string): {
   return { categories, ...(defaultCategory ? { defaultCategory } : {}) };
 }
 
-function parseWithStatus<T>(
-  format: LauncherOutputFormat,
-  parser: () => T,
-): ParseResult<T> {
-  try {
-    return {
-      status: "parsed",
-      format,
-      data: parser(),
-    };
-  } catch (error) {
-    return {
-      status: "failed",
-      format,
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
+function isCommand(args: readonly string[], ...command: string[]): boolean {
+  return command.every((word, index) => args[index] === word);
 }
 
-export function parseLauncherOutput(
-  toolName: string,
-  format: LauncherOutputFormat,
-  stdout: string,
-): ParseResult {
-  switch (toolName) {
-    case "pharo_launcher_template_category_list": {
-      const { categories, defaultCategory } =
-        parseTemplateCategoriesFromBrief(stdout);
-      return {
-        status: "parsed",
-        format,
-        data: categories,
-        ...(defaultCategory ? { defaultCategory } : {}),
-      };
-    }
-
-    case "pharo_launcher_template_list":
-      return parseWithStatus(format, () => parseLauncherTemplatesFromSton(stdout));
-
-    default:
-      return {
-        status: "unsupported",
-        format,
-        message: `No parser registered for ${toolName}`,
-      };
+/** The records of a Launcher listing, read from what it wrote. */
+export function parseLauncherOutput(args: readonly string[], stdout: string): ParseResult {
+  if (isCommand(args, "template", "categories")) {
+    const { categories, defaultCategory } = parseTemplateCategoriesFromBrief(stdout);
+    return { status: "parsed", data: categories, ...(defaultCategory ? { defaultCategory } : {}) };
   }
+
+  if (isCommand(args, "template", "list")) {
+    try {
+      return { status: "parsed", data: parseLauncherTemplatesFromSton(stdout) };
+    } catch (error) {
+      return { status: "failed", message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  return { status: "none" };
 }

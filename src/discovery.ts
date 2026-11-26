@@ -181,12 +181,9 @@ export function getPharoLauncherConfigReport(
     installationLauncherImage: pathStatus(config.installationLauncherImage),
     launcherImage: pathStatus(config.launcherImage),
     launcherScript: resolveLauncherScriptDetails({
-      env: {
-        ...process.env,
-        ...(config.launcherScript
-          ? { PHARO_LAUNCHER_SCRIPT: config.launcherScript }
-          : {}),
-      },
+      env: config.launcherScript
+        ? { PHARO_LAUNCHER_SCRIPT: config.launcherScript }
+        : {},
     }),
     ...(config.launcherConfiguration
       ? { launcherConfiguration: config.launcherConfiguration }
@@ -196,17 +193,28 @@ export function getPharoLauncherConfigReport(
   };
 }
 
+/**
+ * Whether a Launcher command can run. A profile's Launcher image is copied
+ * from the installation's by its first command, so until then the
+ * installation's is the one that must exist.
+ */
+function usable(report: PharoLauncherConfigReport, config: PharoLauncherConfig): boolean {
+  return (
+    report.launcherDir.exists &&
+    report.launcherVm.exists &&
+    (report.launcherImage.exists ||
+      (config.profile !== undefined && report.installationLauncherImage.exists)) &&
+    report.launcherScript.exists
+  );
+}
+
 export function getPharoLauncherHealth(
   config: PharoLauncherConfig = loadPharoLauncherConfig(),
 ): PharoLauncherHealthReport {
   const report = getPharoLauncherConfigReport(config);
 
   return {
-    ok:
-      report.launcherDir.exists &&
-      report.launcherVm.exists &&
-      report.launcherImage.exists &&
-      report.launcherScript.exists,
+    ok: usable(report, config),
     service: "pharo-launcher-mcp",
     config: report,
   };
@@ -303,12 +311,7 @@ export async function validatePharoLauncherInstallation(
     };
 
     return {
-      ok:
-        report.launcherDir.exists &&
-        report.launcherVm.exists &&
-        report.launcherImage.exists &&
-        report.launcherScript.exists &&
-        harmlessCliCall.ok,
+      ok: usable(report, config) && harmlessCliCall.ok,
       config: report,
       harmlessCliCall,
     };

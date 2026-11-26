@@ -98,7 +98,7 @@ describe("runNativeProcessTool", () => {
       return "3093 /opt/pharo/pharo --headless /home/ada/images/MCP13/MCP13.image";
     };
 
-    const result = await runNativeProcessTool(["process", "kill", "MCP13"], {
+    const result = await runNativeProcessTool(["process", "kill", "--image", "MCP13"], {
       platform: "linux",
       runCommand,
       killProcess: (pid) => {
@@ -119,7 +119,7 @@ describe("runNativeProcessTool", () => {
         "99 /opt/pharo/pharo --headless /home/ada/images/port-4711/scratch.image",
       ].join("\n");
 
-    const result = await runNativeProcessTool(["process", "kill", "4711"], {
+    const result = await runNativeProcessTool(["process", "kill", "--pid", "4711"], {
       platform: "linux",
       runCommand,
       killProcess: (pid) => {
@@ -131,6 +131,27 @@ describe("runNativeProcessTool", () => {
     expect(result.stdout).toBe("Killed 4711");
   });
 
+  // Read back from the text, an all-digit target used to be a pid.
+  it("kills the image named with digits, and not the pid those digits are", async () => {
+    const killed: number[] = [];
+    const runCommand: NativeProcessCommandRunner = async () =>
+      [
+        "2025 /opt/pharo/pharo --headless /home/ada/images/other/other.image",
+        "3093 /opt/pharo/pharo --headless /home/ada/images/2025/2025.image",
+      ].join("\n");
+
+    const result = await runNativeProcessTool(["process", "kill", "--image", "2025"], {
+      platform: "linux",
+      runCommand,
+      killProcess: (pid) => {
+        killed.push(pid);
+      },
+    });
+
+    expect(killed).toEqual([3093]);
+    expect(result.kill).toEqual({ killed: [3093], failures: [] });
+  });
+
   it("kills images whose name matches, not images whose name starts the same", async () => {
     const killed: number[] = [];
     const runCommand: NativeProcessCommandRunner = async () =>
@@ -139,7 +160,7 @@ describe("runNativeProcessTool", () => {
         "3094 /opt/pharo/pharo --headless /home/ada/images/MCP13-copy/MCP13-copy.image",
       ].join("\n");
 
-    const result = await runNativeProcessTool(["process", "kill", "MCP13"], {
+    const result = await runNativeProcessTool(["process", "kill", "--image", "MCP13"], {
       platform: "linux",
       runCommand,
       killProcess: (pid) => {
@@ -157,7 +178,7 @@ describe("runNativeProcessTool", () => {
       "3093 /opt/pharo/pharo --headless /home/ada/images/MCP13/MCP13.image";
 
     const result = await runNativeProcessTool(
-      ["process", "kill", "/home/ada/images/MCP13/MCP13.image"],
+      ["process", "kill", "--image", "/home/ada/images/MCP13/MCP13.image"],
       {
         platform: "linux",
         runCommand,
@@ -204,7 +225,7 @@ describe("runNativeProcessTool", () => {
     const errno = (code: string) =>
       Object.assign(new Error(`kill ${code}`), { code });
 
-    const result = await runNativeProcessTool(["process", "kill", "MCP13"], {
+    const result = await runNativeProcessTool(["process", "kill", "--image", "MCP13"], {
       platform: "linux",
       runCommand: async () =>
         [
@@ -230,7 +251,7 @@ describe("runNativeProcessTool", () => {
   });
 
   it("succeeds when every target is stopped, gone ones included", async () => {
-    const result = await runNativeProcessTool(["process", "kill", "4711"], {
+    const result = await runNativeProcessTool(["process", "kill", "--pid", "4711"], {
       platform: "linux",
       runCommand: async () =>
         "4711 /opt/pharo/pharo /home/ada/images/MCP13/MCP13.image",

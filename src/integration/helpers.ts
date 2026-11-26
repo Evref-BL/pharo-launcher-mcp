@@ -6,12 +6,13 @@ import {
   type PharoLauncherConfig,
 } from "../config.js";
 import {
-  openPharoLauncher,
+  openLauncher as openPharoLauncher,
+  type CallToolOptions,
   type PharoLauncher,
   type PharoLauncherOptions,
 } from "../launcher.js";
 import type { LauncherTemplate } from "../models.js";
-import { callTool, type CallToolOptions } from "../server.js";
+import { callTool } from "../server.js";
 
 export interface IntegrationProfile {
   config: PharoLauncherConfig;
@@ -142,7 +143,7 @@ export function expectOk<T extends { ok: boolean; diagnostic?: string }>(
 /**
  * The Pharo versions this host already has a VM for.
  *
- * `pharo_launcher_vm_list` used to answer this, and a test picking a template
+ * `vm_list` used to answer this, and a test picking a template
  * it can create without a download is the only thing that ever asked. The VMs
  * are directories named `<version>-<architecture>` under the profile's VM
  * directory, so the answer is a directory listing, not a tool.
@@ -172,7 +173,7 @@ export async function firstTemplate(
   const availableVersions = localPharoVersions(profile);
   expectOk("template update", await launcher.updateTemplates());
 
-  const templates = expectOk("template list", await launcher.listTemplates()).data ?? [];
+  const templates = expectOk("template list", await launcher.listTemplates()).data?.templates ?? [];
   const named = templates.filter(
     (template): template is LauncherTemplate & { name: string } =>
       typeof template.name === "string" && template.name.length > 0,

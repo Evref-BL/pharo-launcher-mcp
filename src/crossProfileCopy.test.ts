@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   copyImageBetweenProfiles,
-  resolveScopedProfileInput,
+  resolveProfileLocation,
 } from "./crossProfileCopy.js";
 
 /** A profile's state root, with the images/ directory every profile has. */
@@ -52,208 +52,144 @@ function writeImage(
 }
 
 describe("cross-profile image copy", () => {
-  it("derives a complete explicit profile from a scoped state root", () => {
-    const stateRoot = tempProfileRoot("source");
-    try {
-      const profile = resolveScopedProfileInput(
-        { stateRoot, profileName: "cache" },
-        "sourceProfile",
-      );
-
-      expect(profile).toMatchObject({
-        profileName: "cache",
-        stateRoot,
-        launcherConfiguration: path.join(
-          stateRoot,
-          "launcher",
-          "pharo-launcher-cli-config.ston",
-        ),
-        imagesDir: path.join(stateRoot, "images"),
-        vmsDir: path.join(stateRoot, "vms"),
-        templateSourcesDir: path.join(stateRoot, "templates"),
-        initScriptsDir: path.join(stateRoot, "init-scripts"),
-        logsDir: path.join(stateRoot, "logs"),
-        environment: {
-          PHARO_LAUNCHER_MCP_PROFILE: "cache",
-          PHARO_LAUNCHER_MCP_STATE_ROOT: stateRoot,
-          PHARO_LAUNCHER_MCP_IMAGES_DIR: path.join(stateRoot, "images"),
-        },
-      });
-    } finally {
-      removeProfileRoot(stateRoot);
-    }
+  it("reads a profile from its stateRoot, or its images directory", () => {
+    expect(resolveProfileLocation({ stateRoot: "/p/cache" }, "sourceProfile")).toEqual({
+      stateRoot: path.resolve("/p/cache"),
+      imagesDir: path.join(path.resolve("/p/cache"), "images"),
+    });
+    expect(resolveProfileLocation({ imagesDir: "/u/Pharo/images" }, "sourceProfile")).toEqual({
+      imagesDir: path.resolve("/u/Pharo/images"),
+    });
   });
 
-  it("rejects ambiguous profile input without scoped roots", () => {
-    expect(() =>
-      resolveScopedProfileInput({ profileName: "default" }, "sourceProfile"),
-    ).toThrow(
-      "sourceProfile must include stateRoot or explicit launcherConfiguration",
-    );
+  it.each([
+    [{}, "sourceProfile takes stateRoot or imagesDir, one of the two"],
+    [{ stateRoot: "/a", imagesDir: "/b" }, "sourceProfile takes stateRoot or imagesDir, one of the two"],
+    [{ stateRoot: "/a", vmsDir: "/v" }, "sourceProfile takes stateRoot or imagesDir, not vmsDir"],
+    [{ stateRoot: "relative" }, "sourceProfile.stateRoot must be an absolute path"],
+  ])("refuses the profile %j", (profile, message) => {
+    expect(() => resolveProfileLocation(profile, "sourceProfile")).toThrow(message);
   });
 
-  it("accepts a complete explicit profile path set without a state root", () => {
-    const root = tempProfileRoot("explicit");
-    try {
-      const profile = resolveScopedProfileInput(
-        {
-          profileName: "explicit-profile",
-          launcherConfiguration: path.join(root, "launcher", "config.ston"),
-          imagesDir: path.join(root, "image-store"),
-          vmsDir: path.join(root, "vm-store"),
-          templateSourcesDir: path.join(root, "template-store"),
-          initScriptsDir: path.join(root, "script-store"),
-          logsDir: path.join(root, "log-store"),
-        },
-        "destinationProfile",
-      );
-
-      expect(profile).toMatchObject({
-        profileName: "explicit-profile",
-        imagesDir: path.join(root, "image-store"),
-        environment: {
-          PHARO_LAUNCHER_MCP_IMAGES_DIR: path.join(root, "image-store"),
-          PHARO_LAUNCHER_MCP_LAUNCHER_CONFIGURATION: path.join(
-            root,
-            "launcher",
-            "config.ston",
-          ),
-        },
-      });
-      expect(profile.stateRoot).toBeUndefined();
-    } finally {
-      removeProfileRoot(root);
-    }
+  it("takes a profile path given as null as left out", () => {
+    expect(resolveProfileLocation({ stateRoot: "/p/cache", imagesDir: null }, "sourceProfile")).toEqual({
+      stateRoot: path.resolve("/p/cache"),
+      imagesDir: path.join(path.resolve("/p/cache"), "images"),
+    });
   });
 
-  it("rejects relative profile paths", () => {
-    expect(() =>
-      resolveScopedProfileInput(
-        { stateRoot: "relative-profile" },
-        "destinationProfile",
-      ),
-    ).toThrow("destinationProfile.stateRoot must be an absolute path");
-  });
-
-  it("rejects launcher configuration paths outside a scoped state root", () => {
-    const stateRoot = tempProfileRoot("state");
-    const otherRoot = tempProfileRoot("other");
-    try {
-      expect(() =>
-        resolveScopedProfileInput(
-          {
-            stateRoot,
-            launcherConfiguration: path.join(otherRoot, "config.ston"),
-          },
-          "sourceProfile",
-        ),
-      ).toThrow("sourceProfile.launcherConfiguration must be inside");
-    } finally {
-      removeProfileRoot(stateRoot);
-      removeProfileRoot(otherRoot);
-    }
-  });
-
-  it("copies an image directory between explicit profiles and repairs metadata", () => {
+  it("copies an image between profiles, renamed, and repairs its metadata", async () => {
     const sourceRoot = tempProfileRoot("source");
     const destinationRoot = tempProfileRoot("destination");
     try {
       writeImage(sourceRoot, "Base");
 
-      const result = copyImageBetweenProfiles({
-        sourceProfile: { stateRoot: sourceRoot, profileName: "cache" },
-        destinationProfile: {
-          stateRoot: destinationRoot,
-          profileName: "runtime",
-        },
-        sourceImageName: "Base",
-        destinationImageName: "Task",
+      const result = await copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot },
+        destinationProfile: { stateRoot: destinationRoot },
+        image: "Base",
+        newImage: "Task",
       });
       const destinationDirectory = imageDirectory(destinationRoot, "Task");
 
-      expect(result).toMatchObject({
+      expect(result).toEqual({
         ok: true,
-        operation: "copy_between_profiles",
-        sourceImageName: "Base",
-        destinationImageName: "Task",
-        sourceProfile: {
-          profileName: "cache",
-          stateRoot: sourceRoot,
-          imagesDir: path.join(sourceRoot, "images"),
+        data: {
+          image: expect.objectContaining({
+            name: "Task",
+            imagePath: path.join(destinationDirectory, "Task.image"),
+          }),
         },
+        sourceProfile: { stateRoot: sourceRoot, imagesDir: path.join(sourceRoot, "images") },
         destinationProfile: {
-          profileName: "runtime",
           stateRoot: destinationRoot,
           imagesDir: path.join(destinationRoot, "images"),
         },
-        sourceImage: {
-          imageName: "Base",
-          imageFile: {
-            exists: true,
-            kind: "file",
-          },
-          metadataFile: {
-            exists: true,
-            kind: "file",
-          },
+        source: {
+          directory: imageDirectory(sourceRoot, "Base"),
+          imagePath: path.join(imageDirectory(sourceRoot, "Base"), "Base.image"),
         },
-        destinationImage: {
-          imageName: "Task",
+        destination: {
           directory: destinationDirectory,
-          imageFile: {
-            exists: true,
-            kind: "file",
-          },
-          metadataFile: {
-            exists: true,
-            kind: "file",
-          },
-        },
-        metadataRepair: {
-          status: "repaired",
-        },
-        verification: {
-          ok: true,
-          destinationDirectoryExists: true,
-          destinationImageFileExists: true,
-          destinationMetadataFileExists: true,
-          destinationMetadataReferencesDestination: true,
-          sourceMetadataReferenceAbsent: true,
-          sourceBasenameImageFileAbsent: true,
+          imagePath: path.join(destinationDirectory, "Task.image"),
         },
       });
-      expect(fs.existsSync(path.join(destinationDirectory, "Task.image"))).toBe(
-        true,
+      expect(fs.existsSync(path.join(destinationDirectory, "Task.image"))).toBe(true);
+      expect(fs.existsSync(path.join(destinationDirectory, "Task.changes"))).toBe(true);
+      expect(fs.existsSync(path.join(destinationDirectory, "Base.image"))).toBe(false);
+      expect(fs.readFileSync(path.join(destinationDirectory, "meta-inf.ston"), "utf8")).toContain(
+        "RelativePath [ 'Task', 'Task.image' ]",
       );
-      expect(fs.existsSync(path.join(destinationDirectory, "Task.changes"))).toBe(
-        true,
-      );
-      expect(fs.existsSync(path.join(destinationDirectory, "Base.image"))).toBe(
-        false,
-      );
-      expect(
-        fs.readFileSync(path.join(destinationDirectory, "meta-inf.ston"), "utf8"),
-      ).toContain("RelativePath [ 'Task', 'Task.image' ]");
-      // Where the copy landed, not where it passed through: every path in
-      // touchedPaths has to exist for a caller to act on it.
-      expect(result.touchedPaths.copiedDirectories[0]).toEqual({
-        from: imageDirectory(sourceRoot, "Base"),
-        to: destinationDirectory,
-      });
-      for (const renamed of result.touchedPaths.renamedFiles) {
-        expect(fs.existsSync(renamed.to)).toBe(true);
-      }
-      for (const repaired of result.touchedPaths.repairedFiles) {
-        expect(fs.existsSync(repaired)).toBe(true);
-      }
-      expect(result.cleanup.destinationImageDirectory).toBe(destinationDirectory);
     } finally {
       removeProfileRoot(sourceRoot);
       removeProfileRoot(destinationRoot);
     }
   });
 
-  it("accepts launcher metadata without an image FileLocator during cross-profile copy", () => {
+  it("copies from an images directory given as it is", async () => {
+    const sourceRoot = tempProfileRoot("user");
+    const destinationRoot = tempProfileRoot("destination");
+    try {
+      writeImage(sourceRoot, "Mine");
+
+      const result = await copyImageBetweenProfiles({
+        sourceProfile: { imagesDir: path.join(sourceRoot, "images") },
+        destinationProfile: { stateRoot: destinationRoot },
+        image: "Mine",
+        newImage: "Mine",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(fs.existsSync(path.join(imageDirectory(destinationRoot, "Mine"), "Mine.image"))).toBe(true);
+    } finally {
+      removeProfileRoot(sourceRoot);
+      removeProfileRoot(destinationRoot);
+    }
+  });
+
+  it("finds the source as every call finds an image, ignoring case", async () => {
+    const sourceRoot = tempProfileRoot("user");
+    const destinationRoot = tempProfileRoot("destination");
+    try {
+      writeImage(sourceRoot, "Mine");
+
+      const result = await copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot },
+        destinationProfile: { stateRoot: destinationRoot },
+        image: "mine",
+        newImage: "Task",
+      });
+
+      expect(result).toMatchObject({ ok: true, source: { directory: imageDirectory(sourceRoot, "Mine") } });
+      expect(fs.readdirSync(imageDirectory(destinationRoot, "Task")).sort()).toEqual([
+        "Task.changes",
+        "Task.image",
+        "meta-inf.ston",
+      ]);
+    } finally {
+      removeProfileRoot(sourceRoot);
+      removeProfileRoot(destinationRoot);
+    }
+  });
+
+  it("refuses an input that is not an object, with a rejected promise", async () => {
+    await expect(
+      copyImageBetweenProfiles(undefined as unknown as Parameters<typeof copyImageBetweenProfiles>[0]),
+    ).rejects.toThrow("arguments must be an object");
+  });
+
+  it.each(["../escape", "a/b", ".."])("refuses %s as a name, which is a path", async (newImage) => {
+    await expect(
+      copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: "/p" },
+        destinationProfile: { stateRoot: "/q" },
+        image: "Base",
+        newImage,
+      }),
+    ).rejects.toThrow("newImage must be an image name, not a path");
+  });
+
+  it("accepts launcher metadata without an image FileLocator during cross-profile copy", async () => {
     const sourceRoot = tempProfileRoot("source");
     const destinationRoot = tempProfileRoot("destination");
     try {
@@ -273,34 +209,18 @@ describe("cross-profile image copy", () => {
         ].join("\n"),
       );
 
-      const result = copyImageBetweenProfiles({
-        sourceProfile: { stateRoot: sourceRoot, profileName: "cache" },
-        destinationProfile: {
-          stateRoot: destinationRoot,
-          profileName: "runtime",
-        },
-        sourceImageName: "HomeCache-d58cf946b1bd39a08c35c3ca",
-        destinationImageName: "MCPPharo-dev-nexus-mcp-pharo-dev",
+      const result = await copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot },
+        destinationProfile: { stateRoot: destinationRoot },
+        image: "HomeCache-d58cf946b1bd39a08c35c3ca",
+        newImage: "MCPPharo-dev-nexus-mcp-pharo-dev",
       });
       const destinationDirectory = imageDirectory(
         destinationRoot,
         "MCPPharo-dev-nexus-mcp-pharo-dev",
       );
 
-      expect(result).toMatchObject({
-        ok: true,
-        metadataRepair: {
-          status: "unchanged",
-        },
-        verification: {
-          ok: true,
-          destinationMetadataReferencesDestination: false,
-          destinationMetadataHasImageReference: false,
-          destinationMetadataUsesLauncherDirectoryFallback: true,
-          sourceMetadataReferenceAbsent: true,
-          sourceBasenameImageFileAbsent: true,
-        },
-      });
+      expect(result.ok).toBe(true);
       expect(
         fs.existsSync(
           path.join(destinationDirectory, "MCPPharo-dev-nexus-mcp-pharo-dev.image"),
@@ -326,7 +246,7 @@ describe("cross-profile image copy", () => {
     }
   });
 
-  it("repairs prefixed temp FileLocator metadata during cross-profile copy", () => {
+  it("repairs prefixed temp FileLocator metadata during cross-profile copy", async () => {
     const sourceRoot = tempProfileRoot("source");
     const destinationRoot = tempProfileRoot("destination");
     try {
@@ -346,28 +266,15 @@ describe("cross-profile image copy", () => {
         ].join("\n"),
       );
 
-      const result = copyImageBetweenProfiles({
-        sourceProfile: { stateRoot: sourceRoot, profileName: "cache" },
-        destinationProfile: {
-          stateRoot: destinationRoot,
-          profileName: "runtime",
-        },
-        sourceImageName: "Base",
-        destinationImageName: "Task",
+      const result = await copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot },
+        destinationProfile: { stateRoot: destinationRoot },
+        image: "Base",
+        newImage: "Task",
       });
       const destinationDirectory = imageDirectory(destinationRoot, "Task");
 
-      expect(result).toMatchObject({
-        ok: true,
-        metadataRepair: {
-          status: "repaired",
-        },
-        verification: {
-          ok: true,
-          destinationMetadataReferencesDestination: true,
-          sourceMetadataReferenceAbsent: true,
-        },
-      });
+      expect(result.ok).toBe(true);
       const repaired = fs.readFileSync(
         path.join(destinationDirectory, "meta-inf.ston"),
         "utf8",
@@ -382,7 +289,7 @@ describe("cross-profile image copy", () => {
     }
   });
 
-  it("rejects copied metadata that still references a prefixed source image path", () => {
+  it("rejects copied metadata that still references a prefixed source image path", async () => {
     const sourceRoot = tempProfileRoot("source");
     const destinationRoot = tempProfileRoot("destination");
     try {
@@ -403,23 +310,17 @@ describe("cross-profile image copy", () => {
         ].join("\n"),
       );
 
-      const result = copyImageBetweenProfiles({
+      const result = await copyImageBetweenProfiles({
         sourceProfile: { stateRoot: sourceRoot },
         destinationProfile: { stateRoot: destinationRoot },
-        sourceImageName: "Base",
-        destinationImageName: "Task",
+        image: "Base",
+        newImage: "Task",
       });
 
       expect(result).toMatchObject({
         ok: false,
-        verification: {
-          ok: false,
-          destinationMetadataReferencesDestination: true,
-          sourceMetadataReferenceAbsent: false,
-        },
-        diagnostic: expect.stringContaining(
-          "Destination image metadata still references the source image file",
-        ),
+        failure: { kind: "preflight" },
+        diagnostic: "its meta-inf.ston still names Base.image",
       });
       expect(fs.existsSync(imageDirectory(destinationRoot, "Task"))).toBe(false);
     } finally {
@@ -428,21 +329,21 @@ describe("cross-profile image copy", () => {
     }
   });
 
-  it("fails before mutation when the source image is missing", () => {
+  it("fails before copying when the source image is missing", async () => {
     const sourceRoot = tempProfileRoot("source");
     const destinationRoot = tempProfileRoot("destination");
     try {
-      const result = copyImageBetweenProfiles({
+      const result = await copyImageBetweenProfiles({
         sourceProfile: { stateRoot: sourceRoot },
         destinationProfile: { stateRoot: destinationRoot },
-        sourceImageName: "Missing",
-        destinationImageName: "Task",
+        image: "Missing",
+        newImage: "Task",
       });
 
       expect(result).toMatchObject({
         ok: false,
-        failure: "source-missing",
-        diagnostic: "Source image directory is missing.",
+        failure: { kind: "no-such-image", image: "Missing" },
+        diagnostic: `There is no image Missing in ${path.join(sourceRoot, "images")}`,
       });
       expect(fs.existsSync(imageDirectory(destinationRoot, "Task"))).toBe(false);
     } finally {
@@ -451,83 +352,81 @@ describe("cross-profile image copy", () => {
     }
   });
 
-  it("fails before mutation when the destination image already exists", () => {
+  it("never replaces an image the destination has, in any case", async () => {
     const sourceRoot = tempProfileRoot("source");
     const destinationRoot = tempProfileRoot("destination");
     try {
       writeImage(sourceRoot, "Base");
       writeImage(destinationRoot, "Task");
 
-      const result = copyImageBetweenProfiles({
+      const result = await copyImageBetweenProfiles({
         sourceProfile: { stateRoot: sourceRoot },
         destinationProfile: { stateRoot: destinationRoot },
-        sourceImageName: "Base",
-        destinationImageName: "Task",
+        image: "Base",
+        newImage: "task",
       });
 
       expect(result).toMatchObject({
         ok: false,
-        diagnostic: `Destination image already exists at ${path.join(
-          destinationRoot,
-          "images",
-          "Task",
-        )}, and an existing image is never replaced.`,
-        touchedPaths: {
-          copiedDirectories: [],
-        },
+        failure: { kind: "name-taken", image: "Task" },
+        diagnostic: `There is already an image Task in ${path.join(destinationRoot, "images")}`,
+        action: "Copy under another newImage, or delete that image first.",
       });
-      expect(result.failure).toBe("destination-exists");
-      // One line says it all, for a caller that reports nothing else, and
-      // names each profile by its state root, not by an "explicit" no one gave.
-      expect(result.message).toContain(
-        `Cannot copy image Base from ${sourceRoot} to ${destinationRoot} as Task:`,
-      );
-      expect(result.message).not.toContain("explicit");
-      expect(result.message).toContain(
-        path.join(destinationRoot, "images", "Task"),
-      );
-      expect(result.message).toContain("different destinationImageName");
     } finally {
       removeProfileRoot(sourceRoot);
       removeProfileRoot(destinationRoot);
     }
   });
 
-  it("cleans the temporary copy when destination metadata verification fails", () => {
+  it("never replaces a directory the destination has", async () => {
+    const sourceRoot = tempProfileRoot("source");
+    const destinationRoot = tempProfileRoot("destination");
+    try {
+      writeImage(sourceRoot, "Base");
+      fs.mkdirSync(imageDirectory(destinationRoot, "Task"));
+
+      const result = await copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot },
+        destinationProfile: { stateRoot: destinationRoot },
+        image: "Base",
+        newImage: "Task",
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        failure: { kind: "destination-exists" },
+        diagnostic: `${imageDirectory(destinationRoot, "Task")} already exists, and a copy never replaces it`,
+        action: "Copy under another newImage, or remove that directory first.",
+      });
+    } finally {
+      removeProfileRoot(sourceRoot);
+      removeProfileRoot(destinationRoot);
+    }
+  });
+
+  it("removes the temporary copy when it does not check out", async () => {
     const sourceRoot = tempProfileRoot("source");
     const destinationRoot = tempProfileRoot("destination");
     try {
       const sourceDirectory = imageDirectory(sourceRoot, "Base");
       fs.mkdirSync(sourceDirectory, { recursive: true });
       fs.writeFileSync(path.join(sourceDirectory, "Base.image"), "");
+      fs.writeFileSync(path.join(sourceDirectory, "Base.changes"), "");
       fs.writeFileSync(path.join(sourceDirectory, "meta-inf.ston"), "PhLImage {}");
 
-      const result = copyImageBetweenProfiles({
+      const result = await copyImageBetweenProfiles({
         sourceProfile: { stateRoot: sourceRoot },
         destinationProfile: { stateRoot: destinationRoot },
-        sourceImageName: "Base",
-        destinationImageName: "Task",
+        image: "Base",
+        newImage: "Task",
       });
 
       expect(result).toMatchObject({
         ok: false,
-        failure: "preflight",
-        diagnostic: expect.stringContaining(
-          "Copied image verification failed",
-        ),
-        metadataRepair: {
-          status: "unchanged",
-        },
-        verification: {
-          ok: false,
-          destinationMetadataReferencesDestination: false,
-        },
+        failure: { kind: "preflight" },
+        diagnostic: "its meta-inf.ston does not name Task.image",
       });
-      expect(fs.existsSync(imageDirectory(destinationRoot, "Task"))).toBe(false);
-      expect(result.touchedPaths.removedTemporaryPaths).toHaveLength(1);
-      expect(fs.existsSync(result.touchedPaths.removedTemporaryPaths[0] ?? "")).toBe(
-        false,
-      );
+      expect(fs.readdirSync(path.join(destinationRoot, "images"))).toEqual([]);
     } finally {
       removeProfileRoot(sourceRoot);
       removeProfileRoot(destinationRoot);
@@ -535,98 +434,76 @@ describe("cross-profile image copy", () => {
   });
 
   it.each([
-    ["source-image-missing", "Base.image"],
-    ["source-metadata-missing", "meta-inf.ston"],
-  ])("says %s when the source lacks %s", (failure, missing) => {
+    [{ kind: "no-such-image", notAnImage: { hasImage: false, hasChanges: true } }, "Base.image"],
+    [{ kind: "no-such-image", notAnImage: { hasImage: true, hasChanges: false } }, "Base.changes"],
+    [{ kind: "no-metadata" }, "meta-inf.ston"],
+  ])("says %j when the source lacks %s", async (failure, missing) => {
     const sourceRoot = tempProfileRoot("source");
     const destinationRoot = tempProfileRoot("destination");
     try {
       fs.rmSync(path.join(writeImage(sourceRoot, "Base"), missing));
 
-      const result = copyImageBetweenProfiles({
+      const result = await copyImageBetweenProfiles({
         sourceProfile: { stateRoot: sourceRoot },
         destinationProfile: { stateRoot: destinationRoot },
-        sourceImageName: "Base",
-        destinationImageName: "Base",
+        image: "Base",
+        newImage: "Base",
       });
 
       expect(result).toMatchObject({ ok: false, failure });
-      expect(result.message).toContain(
-        `Cannot copy image Base from ${sourceRoot} to ${destinationRoot}:`,
-      );
     } finally {
       removeProfileRoot(sourceRoot);
       removeProfileRoot(destinationRoot);
     }
   });
 
-  it("says a copy that threw is an exception, and names an images directory alone", () => {
+  it("says a copy that threw is an exception", async () => {
     const sourceRoot = tempProfileRoot("source");
     const destinationRoot = tempProfileRoot("destination");
     const destinationImages = path.join(destinationRoot, "not-a-directory");
     try {
       writeImage(sourceRoot, "Base");
       fs.writeFileSync(destinationImages, "");
-      fs.writeFileSync(path.join(destinationRoot, "launcher.ston"), "");
-      for (const directory of ["vms", "templates", "init-scripts", "logs"]) {
-        fs.mkdirSync(path.join(destinationRoot, directory));
-      }
 
-      const result = copyImageBetweenProfiles({
+      const result = await copyImageBetweenProfiles({
         sourceProfile: { stateRoot: sourceRoot },
-        destinationProfile: {
-          launcherConfiguration: path.join(destinationRoot, "launcher.ston"),
-          imagesDir: destinationImages,
-          vmsDir: path.join(destinationRoot, "vms"),
-          templateSourcesDir: path.join(destinationRoot, "templates"),
-          initScriptsDir: path.join(destinationRoot, "init-scripts"),
-          logsDir: path.join(destinationRoot, "logs"),
-        },
-        sourceImageName: "Base",
-        destinationImageName: "Task",
+        destinationProfile: { imagesDir: destinationImages },
+        image: "Base",
+        newImage: "Task",
       });
 
-      expect(result).toMatchObject({ ok: false, failure: "exception" });
-      expect(result.error).toBeDefined();
-      expect(result.message).toContain(
-        `Cannot copy image Base from ${sourceRoot} to ${destinationImages} as Task:`,
-      );
+      expect(result).toMatchObject({ ok: false, failure: { kind: "exception" } });
+      expect(result.diagnostic).toBeDefined();
     } finally {
       removeProfileRoot(sourceRoot);
       removeProfileRoot(destinationRoot);
     }
   });
 
-  it("refuses a stateRoot that does not exist, and creates nothing", () => {
+  it("refuses a stateRoot that does not exist, and creates nothing", async () => {
     const sourceRoot = tempProfileRoot("source");
     const parent = tempProfileRoot("parent");
     const destinationRoot = path.join(parent, "team");
     try {
       writeImage(sourceRoot, "Base");
 
-      const result = copyImageBetweenProfiles({
+      const result = await copyImageBetweenProfiles({
         sourceProfile: { stateRoot: sourceRoot },
         destinationProfile: { stateRoot: destinationRoot },
-        sourceImageName: "Base",
-        destinationImageName: "Base",
+        image: "Base",
+        newImage: "Base",
       });
 
       expect(result).toMatchObject({
         ok: false,
-        failure: "profile-path-missing",
-        missingProfilePaths: [
-          {
-            profile: "destinationProfile",
-            field: "stateRoot",
-            path: destinationRoot,
-            given: true,
-          },
-        ],
+        failure: {
+          kind: "profile-path-missing",
+          paths: [
+            { profile: "destinationProfile", field: "stateRoot", path: destinationRoot, given: true },
+          ],
+        },
         diagnostic: `destinationProfile.stateRoot ${destinationRoot} does not exist.`,
       });
-      expect(result.message).toContain(
-        `Cannot copy image Base from ${sourceRoot} to ${destinationRoot}: destinationProfile.stateRoot`,
-      );
       expect(fs.existsSync(destinationRoot)).toBe(false);
     } finally {
       removeProfileRoot(sourceRoot);
@@ -634,31 +511,33 @@ describe("cross-profile image copy", () => {
     }
   });
 
-  it("refuses a stateRoot that holds no images/ directory, and creates none", () => {
+  it("refuses a stateRoot that holds no images/ directory, and creates none", async () => {
     // The directory that holds the profiles, given as one of them.
     const parent = fs.mkdtempSync(path.join(os.tmpdir(), "pharo-launcher-mcp-profiles-"));
     const sourceRoot = path.join(parent, "profile");
     try {
       writeImage(sourceRoot, "Base");
 
-      const result = copyImageBetweenProfiles({
+      const result = await copyImageBetweenProfiles({
         sourceProfile: { stateRoot: sourceRoot },
         destinationProfile: { stateRoot: parent },
-        sourceImageName: "Base",
-        destinationImageName: "Base",
+        image: "Base",
+        newImage: "Base",
       });
 
       expect(result).toMatchObject({
         ok: false,
-        failure: "profile-path-missing",
-        missingProfilePaths: [
-          {
-            profile: "destinationProfile",
-            field: "imagesDir",
-            path: path.join(parent, "images"),
-            given: false,
-          },
-        ],
+        failure: {
+          kind: "profile-path-missing",
+          paths: [
+            {
+              profile: "destinationProfile",
+              field: "imagesDir",
+              path: path.join(parent, "images"),
+              given: false,
+            },
+          ],
+        },
         diagnostic: `destinationProfile.stateRoot ${parent} holds no images/ directory.`,
       });
       expect(fs.existsSync(path.join(parent, "images"))).toBe(false);
@@ -667,50 +546,26 @@ describe("cross-profile image copy", () => {
     }
   });
 
-  it("refuses every profile path given that does not exist", () => {
+  it("refuses an images directory that does not exist", async () => {
     const sourceRoot = tempProfileRoot("source");
-    const destinationRoot = tempProfileRoot("destination");
-    // Every path filled in, the configuration's guessed.
-    const guessed = (root: string) => ({
-      stateRoot: root,
-      imagesDir: path.join(root, "images"),
-      launcherConfiguration: path.join(root, "launcher.json"),
-    });
+    const missing = path.join(sourceRoot, "nowhere");
     try {
       writeImage(sourceRoot, "Base");
 
-      const result = copyImageBetweenProfiles({
-        sourceProfile: guessed(sourceRoot),
-        destinationProfile: guessed(destinationRoot),
-        sourceImageName: "Base",
-        destinationImageName: "Base",
+      const result = await copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot },
+        destinationProfile: { imagesDir: missing },
+        image: "Base",
+        newImage: "Base",
       });
 
       expect(result).toMatchObject({
         ok: false,
-        failure: "profile-path-missing",
-        missingProfilePaths: [
-          {
-            profile: "sourceProfile",
-            field: "launcherConfiguration",
-            path: path.join(sourceRoot, "launcher.json"),
-            given: true,
-          },
-          {
-            profile: "destinationProfile",
-            field: "launcherConfiguration",
-            path: path.join(destinationRoot, "launcher.json"),
-            given: true,
-          },
-        ],
-        diagnostic:
-          `sourceProfile.launcherConfiguration ${path.join(sourceRoot, "launcher.json")} and ` +
-          `destinationProfile.launcherConfiguration ${path.join(destinationRoot, "launcher.json")} do not exist.`,
+        failure: { kind: "profile-path-missing" },
+        diagnostic: `destinationProfile.imagesDir ${missing} does not exist.`,
       });
-      expect(fs.existsSync(imageDirectory(destinationRoot, "Base"))).toBe(false);
     } finally {
       removeProfileRoot(sourceRoot);
-      removeProfileRoot(destinationRoot);
     }
   });
 });

@@ -1,13 +1,10 @@
 /**
- * What this package knows how to do, as functions.
+ * What this package knows how to do, as functions: the implementation behind
+ * the library (`library.ts`) and the MCP server (`server.ts`).
  *
- * The functions are the surface: a Node program that depends on this package
- * calls them and gets typed results, and `server.ts` is an adapter that maps
- * the MCP tool names onto them.
- *
- * Scope is a config, not a process. `loadPharoLauncherConfig` takes an
- * environment object, so a caller that needs a profile passes one rather than
- * spawning a process to hold `PHARO_LAUNCHER_*` variables.
+ * `openLauncher` takes a resolved config and the hooks tests give; the
+ * library's `openPharoLauncher` takes what a program says, and the server's
+ * calls take the command's variables.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -16,26 +13,20 @@ import {
   launcherModulePathBudgetMessage,
 } from "./platform.js";
 import {
-  buildLauncherCommandArgs,
-  inputObject as argumentsObject,
+  commandArgs,
+  inputObject,
+  InvalidInputError,
   optionalString,
   ProfileTooDeepError,
-  requiredString,
-  ToolInputError,
+  requiredImageName,
 } from "./commandCatalog.js";
-import {
-  loadPharoLauncherConfig,
-  type PharoLauncherConfig,
-} from "./config.js";
-import {
-  getPharoLauncherConfigReport,
-  type LauncherCliRunner,
-  type PharoLauncherConfigReport,
-} from "./discovery.js";
+import { loadPharoLauncherConfig, type PharoLauncherConfig } from "./config.js";
+import type { LauncherCliRunner } from "./discovery.js";
 import {
   buildLauncherCliInvocation,
   launcherInvocationFailureDiagnostic,
   runLauncherCli,
+  type LauncherCliResult,
 } from "./launcherCli.js";
 import {
   listNativeProcesses,
@@ -58,51 +49,13 @@ import {
 } from "./imageStore.js";
 import {
   launcherMessage,
+  launcherRefusal,
   normalizeLauncherResult,
   sentenceWithMessage,
 } from "./resultNormalizer.js";
-import type { LauncherCliResult } from "./launcherCli.js";
-import { copyImageBetweenProfiles } from "./crossProfileCopy.js";
-
-/**
- * The shapes these functions answer with.
- *
- * They are defined in the modules that produce them, and those modules are not
- * subpaths, so without these a caller could invoke every function here and
- * name none of its results, and would have to restate their shape.
- *
- * `packageExports.test.ts` names them, so dropping one fails the typecheck.
- */
-export type {
-  LauncherCommandResult,
-  LauncherImage,
-  LauncherImageInfo,
-  LauncherImageList,
-  LauncherLaunchReport,
-  LauncherOutputFormat,
-  LauncherProcess,
-  LauncherTemplate,
-  MadeImageFailure,
-  MadeImageResult,
-  NotAnImage,
-  TemplateCategoriesResult,
-} from "./models.js";
-export { ProfileTooDeepError, ToolInputError } from "./commandCatalog.js";
-export {
-  readImageDirectory,
-  readLauncherImage,
-  type ImageDirectory,
-  type ImageEntry,
-} from "./imageStore.js";
-export {
-  repairCopiedImageMetadataInDirectory,
-  type ImageMetadataRepairResult,
-} from "./imageMetadata.js";
-export { sentenceWithMessage } from "./resultNormalizer.js";
-export type { RunNativeProcessToolOptions } from "./processTools.js";
-export type { PharoLauncherConfigReport } from "./discovery.js";
-export type { CrossProfileImageCopyResult } from "./crossProfileCopy.js";
 import type {
+  DeleteImageResult,
+  KillProcessResult,
   LauncherCommandResult,
   LauncherImage,
   LauncherImageInfo,
@@ -111,7 +64,15 @@ import type {
   LauncherTemplate,
   MadeImageFailure,
   MadeImageResult,
+  NameTaken,
+  NoSuchImage,
+  NotAnImage,
+  ProcessListResult,
+  StartImageResult,
   TemplateCategoriesResult,
+  TemplateListResult,
+  TemplateSources,
+  TemplateUpdateResult,
 } from "./models.js";
 
 const defaultTemplateSourcesUrl =
@@ -120,12 +81,11 @@ const templateSourcesFileName = "sources.list";
 const imageCopyVerificationTimeoutMs = 30_000;
 const imageCopyVerificationPollMs = 1_000;
 
-/** How a call reaches PharoLauncher, and what it is allowed to take. */
+/** A config, how long a command may take, and the hooks tests give. */
 export interface PharoLauncherOptions {
   config?: PharoLauncherConfig;
-  runner?: LauncherCliRunner;
   timeoutMs?: number;
-  includeRaw?: boolean;
+  runner?: LauncherCliRunner;
   imageCopyVerificationTimeoutMs?: number;
   imageCopyVerificationPollMs?: number;
   sleep?: (milliseconds: number) => Promise<void>;
@@ -143,66 +103,117 @@ export interface CallToolOptions extends PharoLauncherOptions {
   processExitPollMs?: number;
 }
 
-function runnerOptions(
-  options: PharoLauncherOptions,
-): { config?: PharoLauncherConfig; timeoutMs?: number } {
-  return {
-    ...(options.config ? { config: options.config } : {}),
-    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-  };
+// --- What a call takes --------------------------------------------------
+
+export interface CreateImageInput {
+  /** The new image's name. */
+  image: string;
+  /** A template's name, as `listTemplates` lists it. */
+  template: string;
+  /** The template's category, when its name is in several. */
+  category?: string;
 }
 
-function inputObject(input: unknown): Record<string, unknown> {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    return {};
-  }
-
-  return input as Record<string, unknown>;
+export interface CopyImageInput {
+  image: string;
+  newImage: string;
 }
 
-function optionalBoolean(
-  input: Record<string, unknown>,
-  key: string,
-): boolean | undefined {
-  const value = input[key];
-  if (value === undefined) {
-    return undefined;
-  }
-
-  if (typeof value !== "boolean") {
-    throw new ToolInputError(`${key} must be a boolean`);
-  }
-
-  return value;
+export interface StartImageInput {
+  image: string;
+  /** A script for the image to run; relative to the calling process's working directory. */
+  script?: string;
+  /** Leave the image running rather than wait for it to quit. */
+  detached?: boolean;
+  /** Profile mode only: PharoLauncher's own image launch has no display mode. */
+  displayMode?: "headless" | "interactive";
 }
 
-export function commandResultOptions(
-  argumentsValue: unknown,
-  options: PharoLauncherOptions,
-): PharoLauncherOptions {
-  const includeRaw = optionalBoolean(inputObject(argumentsValue), "includeRaw");
-  return includeRaw === undefined ? options : { ...options, includeRaw };
+/** A pid stops that process alone; an image stops every process running it. */
+export type KillProcessInput = { pid: number; image?: never } | { image: string; pid?: never };
+
+export interface ListTemplatesInput {
+  /** The Launcher's default category when left out. */
+  category?: string;
+  /**
+   * Also the templates the Launcher keeps on disk: its copies of the remote
+   * ones it downloaded, and those the user made from an image.
+   */
+  includeLocal?: boolean;
 }
 
-function normalizeToolResult(
-  toolName: string,
-  args: readonly string[],
-  result: LauncherCliResult,
-  options: PharoLauncherOptions,
-): LauncherCommandResult {
-  return normalizeLauncherResult(toolName, args, result, {
-    includeRaw: options.includeRaw,
-  });
+/**
+ * What this package does, named as what it does. The types are what a caller
+ * gets here and does not get over a protocol.
+ *
+ * Its methods may grow in a minor release: a program that implements it, as
+ * a test double does, implements the `Pick` of the methods it calls.
+ */
+export interface PharoLauncher {
+  /** The images, each with whether it runs; `nameFilter` keeps the names containing it. */
+  listImages(input?: { nameFilter?: string }): Promise<LauncherImageList>;
+  /** One image, found as every call finds it: exactly, else ignoring case. */
+  imageInfo(input: { image: string }): Promise<LauncherImageInfo>;
+  /**
+   * Its `data` is the image, when the images directory holds it. In a
+   * profile, a name an image has already is refused (`name-taken`).
+   */
+  createImage(input: CreateImageInput): Promise<MadeImageResult>;
+  /**
+   * Its `data` and `failure` are as `createImage`'s. In a profile, a source
+   * that does not exist is refused (`no-such-image`).
+   */
+  copyImage(input: CopyImageInput): Promise<MadeImageResult>;
+  /** In a profile, an image that does not exist is refused (`no-such-image`). */
+  startImage(input: StartImageInput): Promise<StartImageResult>;
+  /**
+   * Deletes the image, without asking, and the logs of its starts. Refuses an
+   * image a VM runs, and one it cannot tell, the process list failing; in a
+   * profile, refuses an image that does not exist.
+   */
+  deleteImage(input: { image: string }): Promise<DeleteImageResult>;
+  /**
+   * Delete the logs of a deleted image's starts, for a caller that removed
+   * its directory itself. Logs the images directory still has an image for
+   * (one of the same name, or whose name makes the same file name) are kept.
+   */
+  deleteLaunchLogs(input: { image: string }): Promise<void>;
+  /** The processes running one of this Launcher's images. */
+  listProcesses(): Promise<ProcessListResult>;
+  /** Kills among the processes `listProcesses` sees. */
+  killProcess(input: KillProcessInput): Promise<KillProcessResult>;
+  /** The categories in the Launcher's order, and which is its default. */
+  listTemplateCategories(): Promise<TemplateCategoriesResult>;
+  /**
+   * The templates of a category, in the Launcher's order. Those it keeps on
+   * disk (`local`) are left out unless `includeLocal` asks for them: the
+   * Launcher keeps a copy of every template it downloads under the same name,
+   * so every template downloaded once would otherwise be listed twice. The
+   * templates the user made from an image are left out with them, since
+   * nothing in the listing tells the two apart.
+   */
+  listTemplates(input?: ListTemplatesInput): Promise<TemplateListResult>;
+  /** Refreshes the template list; in a profile, downloads its sources.list first. */
+  updateTemplates(): Promise<TemplateUpdateResult>;
 }
 
-async function runLauncherToolCommand(
-  runner: LauncherCliRunner,
+// --- Running a command ----------------------------------------------------
+
+function configOf(options: PharoLauncherOptions): PharoLauncherConfig {
+  return options.config ?? loadPharoLauncherConfig();
+}
+
+async function runLauncherCommand(
   args: readonly string[],
   options: PharoLauncherOptions,
 ): Promise<LauncherCliResult> {
+  const runner = options.runner ?? runLauncherCli;
   const startTime = Date.now();
   try {
-    return await runner(args, runnerOptions(options));
+    return await runner(args, {
+      config: configOf(options),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    });
   } catch (error) {
     return {
       exitCode: null,
@@ -222,11 +233,10 @@ function runnerExceptionDiagnostic(
   const normalizedError = error instanceof Error ? error : new Error(String(error));
 
   try {
-    const invocation = buildLauncherCliInvocation(
-      args,
-      options.config ?? loadPharoLauncherConfig(),
+    return launcherInvocationFailureDiagnostic(
+      buildLauncherCliInvocation(args, configOf(options)),
+      normalizedError,
     );
-    return launcherInvocationFailureDiagnostic(invocation, normalizedError);
   } catch (contextError) {
     const contextMessage =
       contextError instanceof Error ? contextError.message : String(contextError);
@@ -242,85 +252,87 @@ function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+// --- Making an image -------------------------------------------------------
+
 type MadeImage =
   | { ok: true; image?: LauncherImage }
   | { ok: false; failure: MadeImageFailure };
 
 /**
  * Why a create or copy made no image, in a sentence. `said` is what the
- * Launcher said it did (`created X`, `copied X to Y`), and `newImageName` the
- * image it made, each written as the caller writes names.
+ * Launcher said it did (`created X`, `copied X to Y`), and `newImage` the
+ * image it made, each written as the caller writes names. Undefined for a
+ * template or category the Launcher did not know, which a caller says its own
+ * way.
  */
 export function madeImageFailureText(
   failure: MadeImageFailure,
   said: string,
-  newImageName: string,
-): string {
-  if (failure.kind === "not-opened") {
-    return sentenceWithMessage(
-      `Pharo Launcher made ${newImageName} but cannot open it`,
-      failure.message,
-    );
+  newImage: string,
+): string | undefined {
+  switch (failure.kind) {
+    case "not-opened":
+      return sentenceWithMessage(
+        `Pharo Launcher made ${newImage} but cannot open it`,
+        failure.diagnostic,
+      );
+    case "not-listed": {
+      const lacks = failure.notAnImage
+        ? `${failure.notAnImage.directory} ${whatItLacks(failure.notAnImage)}`
+        : `${failure.directory} does not exist`;
+      return `Pharo Launcher said it ${said}, but ${lacks} after ${Math.round(failure.waitedMs / 1000)} s.`;
+    }
+    default:
+      return undefined;
   }
-
-  const lacks = failure.notAnImage
-    ? `${failure.notAnImage.directory} ${whatItLacks(failure.notAnImage)}`
-    : `${failure.directory} does not exist`;
-  return `Pharo Launcher said it ${said}, but ${lacks} after ${failure.seconds} s.`;
 }
 
 /**
  * Whether the Launcher can list the image a create or copy made, and open it,
  * polled until it can or the time is up.
  *
- * In profile mode, where the server wrote the images directory itself, listed
- * is the directory holding the image under the exact new name (the Launcher
- * makes `baseDirectory / targetName`). Outside a profile the directory read
- * from the settings can be wrong, so only the Launcher is asked: `image info`
- * finds the image by its name, ignoring case. Either way, opened is `image
- * info` exiting 0, which still catches a meta-inf.ston it cannot read.
+ * In profile mode, where this package wrote the images directory itself,
+ * listed is the directory holding the image under the exact new name (the
+ * Launcher makes `baseDirectory / targetName`). Outside a profile the
+ * directory read from the settings can be wrong, so only the Launcher is
+ * asked: `image info` finds the image by its name, ignoring case. Either way,
+ * opened is `image info` exiting 0, which still catches a meta-inf.ston it
+ * cannot read.
  */
 async function verifyMadeImage(
-  runner: LauncherCliRunner,
-  newImageName: string,
-  config: PharoLauncherConfig,
+  newImage: string,
   options: PharoLauncherOptions,
 ): Promise<MadeImage> {
+  const config = configOf(options);
   const imagesDir = resolveImagesDirectory(config).path;
-  const timeoutMs =
-    options.imageCopyVerificationTimeoutMs ?? imageCopyVerificationTimeoutMs;
+  const timeoutMs = options.imageCopyVerificationTimeoutMs ?? imageCopyVerificationTimeoutMs;
   const pollMs = options.imageCopyVerificationPollMs ?? imageCopyVerificationPollMs;
   const wait = options.sleep ?? sleep;
   const deadline = Date.now() + timeoutMs;
-  const seconds = Math.round(timeoutMs / 1000);
 
   while (true) {
-    const listed = readImageDirectory(imagesDir, newImageName);
+    const listed = readImageDirectory(imagesDir, newImage);
     let failure: MadeImageFailure;
     if (config.profile && listed.kind !== "image") {
       failure =
         listed.kind === "missing"
-          ? { kind: "not-listed", directory: listed.directory, seconds }
+          ? { kind: "not-listed", directory: listed.directory, waitedMs: timeoutMs }
           : {
               kind: "not-listed",
               directory: listed.notAnImage.directory,
               notAnImage: listed.notAnImage,
-              seconds,
+              waitedMs: timeoutMs,
             };
     } else {
-      const info = await runLauncherToolCommand(
-        runner,
-        ["image", "info", newImageName],
-        options,
-      );
+      const info = await runLauncherCommand(["image", "info", newImage], options);
       if (info.exitCode === 0 && !info.timedOut) {
-        const made = readImageDirectory(imagesDir, newImageName);
+        const made = readImageDirectory(imagesDir, newImage);
         return {
           ok: true,
           ...(made.kind === "image" ? { image: readLauncherImage(made.image) } : {}),
         };
       }
-      failure = { kind: "not-opened", message: launcherMessage(info) };
+      failure = { kind: "not-opened", diagnostic: launcherMessage(info) };
     }
 
     const remainingMs = deadline - Date.now();
@@ -337,120 +349,166 @@ async function verifyMadeImage(
  * call succeeds and `command.timedOut` stays true; when it is not, it fails
  * as the timeout it is.
  */
-function madeImageResult(
-  normalized: LauncherCommandResult,
-  made: MadeImage,
-  timedOut: boolean,
+async function madeImageCommand(
+  args: string[],
+  newImage: string,
   said: string,
-  newImageName: string,
-): MadeImageResult {
-  const { data: _data, diagnostic, action, ...rest } = normalized;
-  if (made.ok) {
-    return { ...rest, ok: true, data: made.image ? { image: made.image } : {} };
+  options: PharoLauncherOptions,
+): Promise<MadeImageResult> {
+  const result = await runLauncherCommand(args, options);
+  const { data: _data, ...normalized } = normalizeLauncherResult(args, result);
+
+  // A command that exited non-zero refused: there is nothing to check.
+  if (!normalized.ok && !result.timedOut) {
+    const refusal = launcherRefusal(result);
+    if (refusal === "unknown-category" && hasNoTemplates(configOf(options))) {
+      return { ...normalized, ...noTemplates() };
+    }
+    return refusal ? { ...normalized, failure: { kind: refusal } } : normalized;
   }
 
-  return timedOut
-    ? {
-        ...rest,
-        ...(diagnostic === undefined ? {} : { diagnostic }),
-        ...(action === undefined ? {} : { action }),
-      }
+  const made = await verifyMadeImage(newImage, options);
+  if (made.ok) {
+    // What a command that outlived the call wrote is no failure's.
+    const { diagnostic: _diagnostic, action: _action, ...ran } = normalized;
+    return { ...ran, ok: true, ...(made.image ? { data: { image: made.image } } : {}) };
+  }
+  return result.timedOut
+    ? normalized
     : {
-        ...rest,
+        ...normalized,
         ok: false,
-        diagnostic: madeImageFailureText(made.failure, said, newImageName),
+        diagnostic: madeImageFailureText(made.failure, said, newImage),
         failure: made.failure,
       };
 }
 
-async function madeImageCommand(
-  toolName: "pharo_launcher_image_copy" | "pharo_launcher_image_create",
-  args: string[],
-  newImageName: string | undefined,
-  said: string,
-  options: PharoLauncherOptions,
-): Promise<{
-  result: MadeImageResult;
-  config: PharoLauncherConfig;
-}> {
-  const runner = options.runner ?? runLauncherCli;
-  const config = options.config ?? loadPharoLauncherConfig();
-  const commandOptions = { ...options, config };
-  const result = await runLauncherToolCommand(runner, args, commandOptions);
-  const normalized = normalizeToolResult(toolName, args, result, commandOptions);
+// --- What a call refuses before running anything -----------------------------
 
-  // A command that exited non-zero refused: there is nothing to check.
-  if (!newImageName || !(normalized.ok || result.timedOut)) {
-    const { data: _data, ...refused } = normalized;
-    return { result: refused, config };
+/** What `ok: false` reports for a call refused before any Launcher command ran. */
+function refused<F>(failure: F, diagnostic: string, action?: string) {
+  return { ok: false as const, failure, diagnostic, ...(action ? { action } : {}) };
+}
+
+function noSuchImageDiagnostic(image: string, imagesDir: string, notAnImage?: NotAnImage): string {
+  return notAnImage
+    ? `There is no image ${image} in ${imagesDir}: its directory ${whatItLacks(notAnImage)}`
+    : `There is no image ${image} in ${imagesDir}`;
+}
+
+/**
+ * In a profile, where this package wrote the images directory itself, an
+ * image a call names that is not there. Outside one the directory comes from
+ * settings that can be wrong, so the Launcher's answer is the answer.
+ */
+function missingImage(image: string, options: PharoLauncherOptions) {
+  const config = configOf(options);
+  if (!config.profile) {
+    return undefined;
   }
+  const imagesDir = resolveImagesDirectory(config).path;
+  const scan = scanImages(imagesDir);
+  if (findByName(scan.images, image)) {
+    return undefined;
+  }
+  const notAnImage = findByName(scan.notImages, image);
+  const failure: NoSuchImage = { kind: "no-such-image", image, ...(notAnImage ? { notAnImage } : {}) };
+  return refused(failure, noSuchImageDiagnostic(image, imagesDir, notAnImage));
+}
 
-  const made = await verifyMadeImage(runner, newImageName, config, commandOptions);
+/** In a profile, a new name an image has already, in any case. */
+function takenName(newImage: string, options: PharoLauncherOptions) {
+  const config = configOf(options);
+  if (!config.profile) {
+    return undefined;
+  }
+  const imagesDir = resolveImagesDirectory(config).path;
+  const taken = findByName(scanImages(imagesDir).images, newImage);
+  if (!taken) {
+    return undefined;
+  }
+  const failure: NameTaken = { kind: "name-taken", image: taken.name };
+  return refused(
+    failure,
+    `There is already an image ${taken.name} in ${imagesDir}`,
+    "Pick another name, or delete that image first.",
+  );
+}
+
+/** Whether a profile has no template sources yet, which only an update fetches. */
+function hasNoTemplates(config: PharoLauncherConfig): boolean {
+  const sourcesPath = profileTemplateSourcesFile(config);
+  if (sourcesPath === undefined) {
+    return false;
+  }
+  try {
+    return fs.readFileSync(sourcesPath, "utf8").trim().length === 0;
+  } catch {
+    return true;
+  }
+}
+
+function noTemplates() {
   return {
-    result: madeImageResult(normalized, made, result.timedOut, said, newImageName),
-    config,
+    ok: false as const,
+    failure: { kind: "no-templates" as const },
+    diagnostic: "This profile has no templates yet",
+    action: "Update the templates first.",
   };
 }
 
-export async function imageCopyResult(
-  args: string[],
+async function createImage(
+  input: CreateImageInput,
   options: PharoLauncherOptions,
 ): Promise<MadeImageResult> {
-  const imageName = args[2];
-  const newImageName = args[3];
-  const { result, config } = await madeImageCommand(
-    "pharo_launcher_image_copy",
+  const args = commandArgs.createImage(input);
+  const taken = takenName(input.image, options);
+  if (taken) {
+    return taken;
+  }
+  return madeImageCommand(args, input.image, `created ${input.image}`, options);
+}
+
+async function copyImage(
+  input: CopyImageInput,
+  options: PharoLauncherOptions,
+): Promise<MadeImageResult> {
+  const args = commandArgs.copyImage(input);
+  const refused = missingImage(input.image, options) ?? takenName(input.newImage, options);
+  if (refused) {
+    return refused;
+  }
+  const result = await madeImageCommand(
     args,
-    newImageName,
-    `copied ${imageName} to ${newImageName}`,
+    input.newImage,
+    `copied ${input.image} to ${input.newImage}`,
     options,
   );
 
   // A #vmManager path still naming the source, which only an image the
-  // Launcher launched has and which `image copy` renames already.
-  if (result.ok && imageName && newImageName) {
-    repairCopiedImageMetadata(config, imageName, newImageName);
+  // Launcher launched has and which `image copy` renames already. The source
+  // is named as its directory spells it, which a name in another case finds.
+  // A repair that fails leaves the copy as the Launcher made it, which opens.
+  if (result.ok) {
+    const config = configOf(options);
+    const source = config.profile
+      ? (findByName(scanImages(resolveImagesDirectory(config).path).images, input.image)?.name ??
+        input.image)
+      : input.image;
+    try {
+      repairCopiedImageMetadata(config, source, input.newImage);
+    } catch {
+      // As the Launcher made it.
+    }
   }
 
   return result;
 }
 
-export async function imageCreateResult(
-  args: string[],
-  options: PharoLauncherOptions,
-): Promise<MadeImageResult> {
-  const newImageName = args.at(-1);
-  const { result } = await madeImageCommand(
-    "pharo_launcher_image_create",
-    args,
-    newImageName,
-    `created ${newImageName}`,
-    options,
-  );
+// --- The templates ------------------------------------------------------------
 
-  return result;
-}
-
-/**
- * What a template update did to the profile's sources.list: downloaded it
- * where there was none (`created`), replaced it with a newer one
- * (`updated`), found it current (`already_present`), kept it when the
- * download failed (`kept`), or failed with none to keep (`failed`).
- */
-interface TemplateSourcesBootstrap {
-  ok: boolean;
-  action: "not_applicable" | "already_present" | "created" | "updated" | "kept" | "failed";
-  path?: string;
-  url?: string;
-  bytes?: number;
-  diagnostic?: string;
-  error?: string;
-}
-
-function profileTemplateSourcesFile(
-  config: PharoLauncherConfig | undefined,
-): string | undefined {
-  return config?.profile
+function profileTemplateSourcesFile(config: PharoLauncherConfig): string | undefined {
+  return config.profile
     ? path.join(config.profile.templateSourcesDir, templateSourcesFileName)
     : undefined;
 }
@@ -464,8 +522,11 @@ function nonEmptyFile(filePath: string): boolean {
   }
 }
 
+/** As long as a Launcher command may run: the list is small, a stalled server is not. */
+const templateSourcesFetchTimeoutMs = 30_000;
+
 async function defaultFetchTemplateSources(url: string): Promise<string> {
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(templateSourcesFetchTimeoutMs) });
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
   }
@@ -480,27 +541,20 @@ async function defaultFetchTemplateSources(url: string): Promise<string> {
  * move with each Pharo release. A download that fails keeps the copy there
  * is, which still lists templates offline.
  */
-async function ensureProfileTemplateSourcesBootstrap(
-  config: PharoLauncherConfig | undefined,
+async function refreshProfileTemplateSources(
+  sourcesPath: string,
   options: PharoLauncherOptions,
-): Promise<TemplateSourcesBootstrap> {
-  const sourcesPath = profileTemplateSourcesFile(config);
-  if (!sourcesPath) {
-    return { ok: true, action: "not_applicable" };
-  }
-
+): Promise<TemplateSources> {
   const present = nonEmptyFile(sourcesPath);
   const url = options.templateSourcesUrl ?? defaultTemplateSourcesUrl;
   try {
-    const fetchTemplateSources =
-      options.fetchTemplateSources ?? defaultFetchTemplateSources;
+    const fetchTemplateSources = options.fetchTemplateSources ?? defaultFetchTemplateSources;
     const body = await fetchTemplateSources(url);
     if (body.trim().length === 0) {
       throw new Error("downloaded template source list was empty");
     }
-    const bytes = Buffer.byteLength(body, "utf8");
     if (present && fs.readFileSync(sourcesPath, "utf8") === body) {
-      return { ok: true, action: "already_present", path: sourcesPath, url, bytes };
+      return { kind: "unchanged", path: sourcesPath, url };
     }
 
     fs.mkdirSync(path.dirname(sourcesPath), { recursive: true });
@@ -508,399 +562,105 @@ async function ensureProfileTemplateSourcesBootstrap(
     fs.writeFileSync(tempPath, body, "utf8");
     fs.renameSync(tempPath, sourcesPath);
 
-    return { ok: true, action: present ? "updated" : "created", path: sourcesPath, url, bytes };
+    return { kind: present ? "updated" : "created", path: sourcesPath, url };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (present) {
-      return {
-        ok: true,
-        action: "kept",
-        path: sourcesPath,
-        url,
-        bytes: fs.statSync(sourcesPath).size,
-        error: message,
-      };
-    }
-    return {
-      ok: false,
-      action: "failed",
-      path: sourcesPath,
-      url,
-      diagnostic:
-        `Refreshed the template list, but this profile still has no template ` +
-        `sources: downloading ${url} failed (${message}).`,
-      error: message,
-    };
+    return { kind: present ? "kept" : "failed", path: sourcesPath, url, diagnostic: message };
   }
 }
 
-/** What a template update reports beyond the command it ran. */
-export interface TemplateUpdateResult extends LauncherCommandResult {
-  templateSourcesBootstrap?: Awaited<
-    ReturnType<typeof ensureProfileTemplateSourcesBootstrap>
-  >;
-  templateSourcesProbe?: LauncherCommandResult;
-}
-
-export async function templateUpdateResult(
-  args: string[],
-  options: PharoLauncherOptions,
-): Promise<TemplateUpdateResult> {
-  const runner = options.runner ?? runLauncherCli;
-  const config = options.config ?? loadPharoLauncherConfig();
-  const commandOptions = {
-    ...options,
-    config,
-  };
-  const result = await runLauncherToolCommand(runner, args, commandOptions);
-  const normalized = normalizeToolResult(
-    "pharo_launcher_template_update",
-    args,
-    result,
-    commandOptions,
-  );
-
-  if (!normalized.ok) {
+/**
+ * Outside a profile, the Launcher's own `template update`. In a profile that
+ * command is not run: it updates the sources.list among the Launcher's user
+ * files, whatever the profile's configuration says, so it would change the
+ * user's Launcher and race with any other profile's update. The profile's
+ * sources.list is downloaded instead, then the Launcher is asked to read it.
+ */
+async function updateTemplates(options: PharoLauncherOptions): Promise<TemplateUpdateResult> {
+  const sourcesPath = profileTemplateSourcesFile(configOf(options));
+  if (sourcesPath === undefined) {
+    const args = commandArgs.updateTemplates();
+    const { data: _data, ...normalized } = normalizeLauncherResult(
+      args,
+      await runLauncherCommand(args, options),
+    );
     return normalized;
   }
 
-  const bootstrap = await ensureProfileTemplateSourcesBootstrap(
-    config,
-    commandOptions,
-  );
-  if (!bootstrap.ok) {
+  const sources = await refreshProfileTemplateSources(sourcesPath, options);
+  if (sources.kind === "failed") {
     return {
-      ...normalized,
       ok: false,
-      diagnostic: bootstrap.diagnostic,
-      action: `Update the templates again, or put a sources.list in ${path.dirname(
-        bootstrap.path ?? "",
-      )}.`,
-      templateSourcesBootstrap: bootstrap,
+      diagnostic:
+        "This profile has no template sources: downloading " +
+        `${sources.url} failed (${sources.diagnostic})`,
+      action: `Update the templates again, or put a sources.list in ${path.dirname(sourcesPath)}.`,
+      sources,
     };
   }
 
-  if (bootstrap.action === "not_applicable") {
-    return {
-      ...normalized,
-      templateSourcesBootstrap: bootstrap,
-    };
-  }
+  // The Launcher reads the list it was given, which it may not understand.
+  const probeArgs = commandArgs.listTemplates({});
+  const probe = await runLauncherCommand(probeArgs, options);
+  const { data: _data, ...probed } = normalizeLauncherResult(probeArgs, probe);
+  return probed.ok
+    ? { ...probed, sources }
+    : {
+        ...probed,
+        diagnostic: sentenceWithMessage(
+          "Pharo Launcher cannot list the templates of this profile's sources.list",
+          launcherMessage(probe),
+        ),
+        sources,
+      };
+}
 
-  const probeArgs = ["template", "list", "--ston"];
-  const probe = await runLauncherToolCommand(runner, probeArgs, commandOptions);
-  const probeResult = normalizeToolResult(
-    "pharo_launcher_template_list",
-    probeArgs,
-    probe,
-    commandOptions,
+async function listTemplateCategories(
+  options: PharoLauncherOptions,
+): Promise<TemplateCategoriesResult> {
+  const args = commandArgs.listTemplateCategories();
+  const { data, defaultCategory, ...normalized } = normalizeLauncherResult(
+    args,
+    await runLauncherCommand(args, options),
   );
-  if (!probeResult.ok) {
-    return {
-      ...normalized,
-      ok: false,
-      diagnostic: sentenceWithMessage(
-        "Refreshed the template list, but Pharo Launcher still cannot list templates",
-        launcherMessage(probe),
-      ),
-      templateSourcesBootstrap: bootstrap,
-      templateSourcesProbe: probeResult,
-    };
+  return normalized.ok
+    ? {
+        ...normalized,
+        data: {
+          categories: (data as string[] | undefined) ?? [],
+          ...(defaultCategory ? { defaultCategory } : {}),
+        },
+      }
+    : normalized;
+}
+
+async function listTemplates(
+  input: ListTemplatesInput,
+  options: PharoLauncherOptions,
+): Promise<TemplateListResult> {
+  const args = commandArgs.listTemplates(input);
+  const result = await runLauncherCommand(args, options);
+  const { data, ...normalized } = normalizeLauncherResult(args, result);
+  if (!normalized.ok) {
+    if (result.timedOut || launcherRefusal(result) !== "unknown-category") {
+      return normalized;
+    }
+    return hasNoTemplates(configOf(options))
+      ? { ...normalized, ...noTemplates() }
+      : { ...normalized, failure: { kind: "unknown-category" } };
   }
 
+  const templates = (data as LauncherTemplate[] | undefined) ?? [];
   return {
     ...normalized,
-    templateSourcesBootstrap: bootstrap,
-    templateSourcesProbe: probeResult,
+    data: {
+      templates:
+        input.includeLocal === true ? templates : templates.filter((template) => !template.local),
+    },
   };
 }
 
-/** A delete, and once the Launcher deleted the image, the logs of its starts. */
-export async function imageDeleteResult(
-  args: string[],
-  options: PharoLauncherOptions,
-): Promise<LauncherCommandResult> {
-  const runner = options.runner ?? runLauncherCli;
-  const config = options.config ?? loadPharoLauncherConfig();
-  const commandOptions = { ...options, config };
-  const result = await runLauncherToolCommand(runner, args, commandOptions);
-  const normalized = normalizeToolResult(
-    "pharo_launcher_image_delete",
-    args,
-    result,
-    commandOptions,
-  );
-  const imageName = args.at(-1);
-  if (normalized.ok && imageName) {
-    deleteImageLaunchLogs(config, imageName);
-  }
-  return normalized;
-}
-
-function deleteImageLaunchLogs(config: PharoLauncherConfig, imageName: string): void {
-  removeLaunchLogs(
-    launchLogsDirectory(config),
-    resolveImagesDirectory(config).path,
-    imageName,
-  );
-}
-
-export async function runCommand(
-  toolName: string,
-  args: string[],
-  options: PharoLauncherOptions,
-): Promise<LauncherCommandResult> {
-  if (toolName === "pharo_launcher_image_copy") {
-    return imageCopyResult(args, options);
-  }
-  if (toolName === "pharo_launcher_image_create") {
-    return imageCreateResult(args, options);
-  }
-  if (toolName === "pharo_launcher_template_update") {
-    return templateUpdateResult(args, options);
-  }
-  if (toolName === "pharo_launcher_image_delete") {
-    return imageDeleteResult(args, options);
-  }
-
-  if (toolName.startsWith("pharo_launcher_process_")) {
-    return normalizeToolResult(
-      toolName,
-      args,
-      await runProcessCommand(args, options),
-      options,
-    );
-  }
-
-  const runner = options.runner ?? runLauncherCli;
-  const result = await runLauncherToolCommand(runner, args, options);
-  return normalizeToolResult(toolName, args, result, options);
-}
-
-function nativeProcessOptions(
-  options: PharoLauncherOptions,
-): RunNativeProcessToolOptions {
-  return {
-    ...options.nativeProcess,
-    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-  };
-}
-
-/**
- * The process tools, always on the native process list: the Launcher's own
- * shortens a path over 75 characters, so nothing could be matched in it.
- *
- * In profile mode they see the VMs running one of the profile's images, so a
- * caller in an isolated profile can neither list nor kill the user's own.
- * Outside a profile they see every Pharo VM on the machine, as on 0.4.1.
- */
-function runProcessCommand(
-  args: string[],
-  options: PharoLauncherOptions,
-): Promise<LauncherCliResult> {
-  const config = options.config ?? loadPharoLauncherConfig();
-  const nativeOptions = nativeProcessOptions(options);
-  return runNativeProcessTool(
-    args,
-    nativeOptions,
-    config.profile
-      ? imagesProcessScope(
-          resolveImagesDirectory(config).path,
-          nativeOptions.platform,
-        )
-      : undefined,
-  );
-}
-
-type ImageProcesses = { processes: LauncherProcess[] } | { failure: string };
-
-/** The VMs running these images, or why the process list failed. */
-async function processesRunning(
-  images: readonly ImageEntry[],
-  options: PharoLauncherOptions,
-): Promise<ImageProcesses> {
-  if (images.length === 0) {
-    return { processes: [] };
-  }
-
-  const nativeOptions = nativeProcessOptions(options);
-  try {
-    return {
-      processes: processesOfImages(
-        images,
-        await listNativeProcesses(nativeOptions),
-        nativeOptions.platform,
-      ),
-    };
-  } catch (error) {
-    return { failure: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-function imageWithPids(
-  entry: ImageEntry,
-  running: ImageProcesses,
-): LauncherImage {
-  const image = readLauncherImage(entry);
-  if ("failure" in running) {
-    return image;
-  }
-
-  const pids = running.processes
-    .filter((process) => process.imageName === entry.name)
-    .map((process) => process.pid)
-    .sort((left, right) => left - right);
-  return { ...image, pids };
-}
-
-/**
- * This Launcher's images, read from its images directory, each with whether
- * it runs. No Launcher call, in every mode.
- */
-export async function listImagesResult(
-  input: unknown,
-  options: PharoLauncherOptions,
-): Promise<LauncherImageList> {
-  const nameFilter = optionalString(argumentsObject(input), "nameFilter");
-  const imagesDir = resolveImagesDirectory(
-    options.config ?? loadPharoLauncherConfig(),
-  ).path;
-  const scan = scanImages(imagesDir);
-  const images = filterByName(scan.images, nameFilter);
-  const running = await processesRunning(images, options);
-
-  return {
-    imagesDir,
-    images: images.map((entry) => imageWithPids(entry, running)),
-    notImages: filterByName(scan.notImages, nameFilter),
-    ...("failure" in running ? { processListFailure: running.failure } : {}),
-  };
-}
-
-/** One image of this Launcher, found as every tool finds it. */
-export async function imageInfoResult(
-  input: unknown,
-  options: PharoLauncherOptions,
-): Promise<LauncherImageInfo> {
-  const imageName = requiredString(argumentsObject(input), "imageName");
-  const imagesDir = resolveImagesDirectory(
-    options.config ?? loadPharoLauncherConfig(),
-  ).path;
-  const scan = scanImages(imagesDir);
-  const entry = findByName(scan.images, imageName);
-  if (!entry) {
-    const notAnImage = findByName(scan.notImages, imageName);
-    return { found: false, imagesDir, ...(notAnImage ? { notAnImage } : {}) };
-  }
-
-  const running = await processesRunning([entry], options);
-  return {
-    found: true,
-    imagesDir,
-    image: imageWithPids(entry, running),
-    ...("failure" in running ? { processListFailure: running.failure } : {}),
-  };
-}
-
-/**
- * What every call takes beside its own arguments: whether its result carries
- * what the Launcher wrote, as `raw`.
- */
-export interface LauncherTableOptions {
-  includeRaw?: boolean;
-}
-
-export interface ImageCreateInput extends LauncherTableOptions {
-  templateName: string;
-  newImageName: string;
-  templateCategory?: string;
-  dev?: boolean;
-}
-
-export interface ImageStartInput extends LauncherTableOptions {
-  imageName: string;
-  /** Relative to the calling process's working directory. */
-  script?: string;
-  detached?: boolean;
-  /** Profile mode only: PharoLauncher's own image launch has no display mode. */
-  displayMode?: "headless" | "interactive";
-}
-
-/**
- * What this package does, named as what it does.
- *
- * Every call builds its arguments through the same catalog the MCP tools use,
- * so the two cannot disagree about what `image create` takes. The types are
- * the thing a caller gets here and does not get over a protocol.
- */
-export interface PharoLauncher {
-  describeConfig(): PharoLauncherConfigReport;
-  listImages(
-    input?: { nameFilter?: string } & LauncherTableOptions,
-  ): Promise<LauncherImageList>;
-  imageInfo(
-    input: { imageName: string } & LauncherTableOptions,
-  ): Promise<LauncherImageInfo>;
-  /**
-   * Its `data` is `{ image?: LauncherImage }`, the image when the images
-   * directory holds it, and `failure` says why a command that exited 0 made
-   * none.
-   */
-  createImage(input: ImageCreateInput): Promise<MadeImageResult>;
-  /** Its `data` and `failure` are as `createImage`'s. */
-  copyImage(
-    input: { imageName: string; newImageName: string } & LauncherTableOptions,
-  ): Promise<MadeImageResult>;
-  startImage(input: ImageStartInput): Promise<LauncherCommandResult>;
-  /** Deletes the logs of the image's starts too. */
-  deleteImage(
-    input: { imageName: string } & LauncherTableOptions,
-  ): Promise<LauncherCommandResult>;
-  /**
-   * Delete the logs of a deleted image's starts, for a caller that removed
-   * its directory itself. Logs the images directory still has an image for
-   * (one of the same name, or whose name makes the same file name) are kept.
-   */
-  deleteLaunchLogs(input: { imageName: string }): void;
-  listProcesses(
-    input?: LauncherTableOptions,
-  ): Promise<LauncherCommandResult<LauncherProcess[]>>;
-  killProcess(
-    input: ({ pid: number | string } | { imageName: string }) &
-      LauncherTableOptions,
-  ): Promise<LauncherCommandResult>;
-  /** The categories in the Launcher's order, and which is its default. */
-  listTemplateCategories(
-    input?: LauncherTableOptions,
-  ): Promise<TemplateCategoriesResult>;
-  /**
-   * The templates of a category, in the Launcher's order. Those it keeps on
-   * disk (`local`) are left out unless `includeLocal` asks for them: the
-   * Launcher keeps a copy of every template it downloads under the same name,
-   * in a category of its own (`Templates`), so every template downloaded once
-   * would otherwise be listed under one name in two categories. Naming a
-   * category does not change it, since the copies are in a category too. The
-   * templates the user made from an
-   * image are left out too: the Launcher keeps them in the same category, of
-   * the same class, so nothing tells them from its copies.
-   */
-  listTemplates(
-    input?: { templateCategory?: string; includeLocal?: boolean } & LauncherTableOptions,
-  ): Promise<LauncherCommandResult<LauncherTemplate[]>>;
-  updateTemplates(input?: LauncherTableOptions): Promise<TemplateUpdateResult>;
-  copyImageBetweenProfiles(
-    input: unknown,
-  ): ReturnType<typeof copyImageBetweenProfiles>;
-}
-
-export interface OpenPharoLauncherOptions extends PharoLauncherOptions {
-  /**
-   * Resolve the installation and the profile from this environment rather
-   * than from `process.env`, which is how a caller scopes a call to a profile
-   * without a process of its own.
-   */
-  env?: NodeJS.ProcessEnv;
-}
+// --- Starting and deleting -------------------------------------------------------
 
 /** The longest path anything under this directory already has. */
 function longestDescendantLength(directory: string): number | undefined {
@@ -930,13 +690,8 @@ function longestDescendantLength(directory: string): number | undefined {
  * Starting it anyway reports a missing symbol in a file that is present and
  * correct, which is a long way from the profile root being too deep.
  */
-function assertLauncherModulePathsFit(
-  config: PharoLauncherConfig | undefined,
-): void {
-  // Resolved the way runCommand resolves it: a launcher opened with no
-  // arguments has no config until a call loads one, and the profile this
-  // check is about lives in it.
-  const vmsDirectory = (config ?? loadPharoLauncherConfig())?.profile?.vmsDir;
+function assertLauncherModulePathsFit(config: PharoLauncherConfig): void {
+  const vmsDirectory = config.profile?.vmsDir;
   if (vmsDirectory === undefined) {
     return;
   }
@@ -947,67 +702,256 @@ function assertLauncherModulePathsFit(
   }
 }
 
-export function openPharoLauncher(
-  options: OpenPharoLauncherOptions = {},
-): PharoLauncher {
-  const { env, ...rest } = options;
-  const config =
-    options.config ??
-    (env ? loadPharoLauncherConfig({ ...process.env, ...env }) : undefined);
-  const resolved: PharoLauncherOptions = {
-    ...rest,
-    ...(config ? { config } : {}),
-  };
+async function startImage(
+  input: StartImageInput,
+  options: PharoLauncherOptions,
+): Promise<StartImageResult> {
+  const args = commandArgs.startImage(input);
+  const config = configOf(options);
+  if (!config.profile && input.displayMode !== undefined && input.displayMode !== null) {
+    throw new InvalidInputError(
+      "displayMode applies in a profile only: Pharo Launcher's own image launch has no display mode",
+    );
+  }
+  const missing = missingImage(input.image, options);
+  if (missing) {
+    return missing;
+  }
+  assertLauncherModulePathsFit(config);
+  const result = await runLauncherCommand(args, options);
+  const { data: _data, ...normalized } = normalizeLauncherResult(args, result);
+  const launch =
+    result.launch?.by === "launcher" && !result.launch.pid && !result.launch.logs
+      ? { ...result.launch, output: { stdout: result.stdout, stderr: result.stderr } }
+      : result.launch;
+  return launch ? { ...normalized, launch } : normalized;
+}
 
-  async function command<T>(
-    toolName: string,
-    input: unknown,
-  ): Promise<LauncherCommandResult<T>> {
-    const args = buildLauncherCommandArgs(toolName, input ?? {});
-    if (!args) {
-      throw new ToolInputError(`Unknown launcher command: ${toolName}`);
+function deleteImageLaunchLogs(config: PharoLauncherConfig, image: string): void {
+  removeLaunchLogs(launchLogsDirectory(config), resolveImagesDirectory(config).path, image);
+}
+
+/**
+ * A delete, and once the Launcher deleted the image, the logs of its starts.
+ * Never under a running VM: in every mode, an image the reader finds is
+ * checked against the process list first.
+ */
+async function deleteImage(
+  input: { image: string },
+  options: PharoLauncherOptions,
+): Promise<DeleteImageResult> {
+  const args = commandArgs.deleteImage(input);
+  const info = await imageInfo(input, options);
+  if (info.kind === "image") {
+    const name = info.image.name;
+    if (info.processListFailure !== undefined) {
+      return refused(
+        { kind: "process-list-failed" as const, diagnostic: info.processListFailure },
+        `Cannot tell whether ${name} runs, so it was not deleted: ${info.processListFailure}`,
+      );
     }
-
-    return (await runCommand(
-      toolName,
-      args,
-      commandResultOptions(input ?? {}, resolved),
-    )) as LauncherCommandResult<T>;
+    const pids = info.image.pids ?? [];
+    if (pids.length > 0) {
+      return refused(
+        { kind: "image-running" as const, pids },
+        `Image ${name} runs as ${pids.length === 1 ? "pid" : "pids"} ${pids.join(", ")}`,
+        "Stop it, then delete it.",
+      );
+    }
+  } else if (configOf(options).profile) {
+    const failure: NoSuchImage = {
+      kind: "no-such-image",
+      image: input.image,
+      ...(info.kind === "not-an-image" ? { notAnImage: info.notAnImage } : {}),
+    };
+    return refused(
+      failure,
+      noSuchImageDiagnostic(input.image, info.imagesDir, failure.notAnImage),
+    );
   }
 
+  const result = await runLauncherCommand(args, options);
+  const { data: _data, ...normalized } = normalizeLauncherResult(args, result);
+  if (normalized.ok) {
+    deleteImageLaunchLogs(configOf(options), input.image);
+  }
+  return normalized;
+}
+
+// --- The processes ----------------------------------------------------------------
+
+function nativeProcessOptions(options: PharoLauncherOptions): RunNativeProcessToolOptions {
   return {
-    describeConfig: () => getPharoLauncherConfigReport(resolved.config),
-    listImages: async (input) => listImagesResult(input ?? {}, resolved),
-    imageInfo: async (input) => imageInfoResult(input, resolved),
-    createImage: (input) => command("pharo_launcher_image_create", input),
-    copyImage: (input) => command("pharo_launcher_image_copy", input),
-    // A function that answers a promise refuses with one, not with a throw.
-    startImage: async (input) => {
-      assertLauncherModulePathsFit(resolved.config);
-      return command("pharo_launcher_image_start", input);
-    },
-    deleteImage: (input) => command("pharo_launcher_image_delete", input),
-    deleteLaunchLogs: (input) =>
-      deleteImageLaunchLogs(
-        resolved.config ?? loadPharoLauncherConfig(),
-        requiredString(argumentsObject(input), "imageName"),
-      ),
-    listProcesses: (input) => command("pharo_launcher_process_list", input),
-    killProcess: (input) => command("pharo_launcher_process_kill", input),
-    listTemplateCategories: (input) =>
-      command("pharo_launcher_template_category_list", input) as Promise<
-        TemplateCategoriesResult
-      >,
-    listTemplates: async (input) => {
-      const result = await command<LauncherTemplate[]>("pharo_launcher_template_list", input);
-      return input?.includeLocal === true || result.data === undefined
-        ? result
-        : { ...result, data: result.data.filter((template) => !template.local) };
-    },
-    updateTemplates: (input) =>
-      command("pharo_launcher_template_update", input) as Promise<
-        TemplateUpdateResult
-      >,
-    copyImageBetweenProfiles: (input) => copyImageBetweenProfiles(input),
+    ...options.nativeProcess,
+    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   };
 }
+
+/**
+ * The process commands, always on the native process list: the Launcher's own
+ * shortens a path over 75 characters, so nothing could be matched in it. They
+ * see the VMs running one of this Launcher's images, in a profile as outside
+ * one, so a call can neither list nor kill a VM it has no image for.
+ */
+function runProcessCommand(
+  args: string[],
+  options: PharoLauncherOptions,
+): Promise<LauncherCliResult> {
+  const nativeOptions = nativeProcessOptions(options);
+  return runNativeProcessTool(
+    args,
+    nativeOptions,
+    imagesProcessScope(resolveImagesDirectory(configOf(options)).path, nativeOptions.platform),
+  );
+}
+
+async function listProcesses(options: PharoLauncherOptions): Promise<ProcessListResult> {
+  const args = commandArgs.listProcesses();
+  const { data, ...normalized } = normalizeLauncherResult(
+    args,
+    await runProcessCommand(args, options),
+  );
+  // The scope names each process as its image: every one has both.
+  return normalized.ok
+    ? { ...normalized, data: { processes: (data as LauncherProcess[] | undefined) ?? [] } }
+    : normalized;
+}
+
+async function killProcess(
+  input: KillProcessInput,
+  options: PharoLauncherOptions,
+): Promise<KillProcessResult> {
+  const args = commandArgs.killProcess(input);
+  const result = await runProcessCommand(args, options);
+  const { data: _data, ...normalized } = normalizeLauncherResult(args, result);
+  if (result.kill) {
+    return { ...normalized, data: result.kill };
+  }
+  switch (result.processFailure) {
+    case "no-match":
+      return { ...normalized, failure: { kind: "no-such-process" } };
+    case "list-failed":
+      return {
+        ...normalized,
+        failure: { kind: "process-list-failed", diagnostic: normalized.diagnostic ?? result.stderr },
+      };
+    default:
+      return normalized;
+  }
+}
+
+// --- The images on disk ------------------------------------------------------
+
+type ImageProcesses = { processes: LauncherProcess[] } | { failure: string };
+
+/** The VMs running these images, or why the process list failed. */
+async function processesRunning(
+  images: readonly ImageEntry[],
+  options: PharoLauncherOptions,
+): Promise<ImageProcesses> {
+  if (images.length === 0) {
+    return { processes: [] };
+  }
+
+  const nativeOptions = nativeProcessOptions(options);
+  try {
+    return {
+      processes: processesOfImages(
+        images,
+        await listNativeProcesses(nativeOptions),
+        nativeOptions.platform,
+      ),
+    };
+  } catch (error) {
+    return { failure: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function imageWithPids(entry: ImageEntry, running: ImageProcesses): LauncherImage {
+  const image = readLauncherImage(entry);
+  if ("failure" in running) {
+    return image;
+  }
+
+  const pids = running.processes
+    .filter((process) => process.imageName === entry.name)
+    .map((process) => process.pid)
+    .sort((left, right) => left - right);
+  return { ...image, pids };
+}
+
+/**
+ * This Launcher's images, read from its images directory, each with whether
+ * it runs. No Launcher call, in every mode.
+ */
+async function listImages(
+  input: { nameFilter?: string },
+  options: PharoLauncherOptions,
+): Promise<LauncherImageList> {
+  const nameFilter = optionalString(inputObject(input), "nameFilter");
+  const imagesDir = resolveImagesDirectory(configOf(options)).path;
+  const scan = scanImages(imagesDir);
+  const images = filterByName(scan.images, nameFilter);
+  const running = await processesRunning(images, options);
+
+  return {
+    imagesDir,
+    images: images.map((entry) => imageWithPids(entry, running)),
+    notImages: filterByName(scan.notImages, nameFilter),
+    ...("failure" in running ? { processListFailure: running.failure } : {}),
+  };
+}
+
+/** One image of this Launcher, found as every call finds it. */
+async function imageInfo(
+  input: { image: string },
+  options: PharoLauncherOptions,
+): Promise<LauncherImageInfo> {
+  const image = requiredImageName(inputObject(input), "image");
+  const imagesDir = resolveImagesDirectory(configOf(options)).path;
+  const scan = scanImages(imagesDir);
+  const entry = findByName(scan.images, image);
+  if (!entry) {
+    const notAnImage = findByName(scan.notImages, image);
+    return notAnImage
+      ? { kind: "not-an-image", imagesDir, notAnImage }
+      : { kind: "missing", imagesDir };
+  }
+
+  const running = await processesRunning([entry], options);
+  return {
+    kind: "image",
+    imagesDir,
+    image: imageWithPids(entry, running),
+    ...("failure" in running ? { processListFailure: running.failure } : {}),
+  };
+}
+
+// --- Opening it ----------------------------------------------------------------
+
+/**
+ * The launcher on a config, resolved once: from `options.config`, else from
+ * the command's variables. A function that answers a promise refuses with
+ * one, not with a throw.
+ */
+export function openLauncher(options: PharoLauncherOptions = {}): PharoLauncher {
+  const resolved: PharoLauncherOptions = { ...options, config: configOf(options) };
+  const config = resolved.config!;
+
+  return {
+    listImages: async (input) => listImages(input ?? {}, resolved),
+    imageInfo: async (input) => imageInfo(input, resolved),
+    createImage: async (input) => createImage(input, resolved),
+    copyImage: async (input) => copyImage(input, resolved),
+    startImage: async (input) => startImage(input, resolved),
+    deleteImage: async (input) => deleteImage(input, resolved),
+    deleteLaunchLogs: async (input) =>
+      deleteImageLaunchLogs(config, requiredImageName(inputObject(input), "image")),
+    listProcesses: async () => listProcesses(resolved),
+    killProcess: async (input) => killProcess(input, resolved),
+    listTemplateCategories: async () => listTemplateCategories(resolved),
+    listTemplates: async (input) => listTemplates(input ?? {}, resolved),
+    updateTemplates: async () => updateTemplates(resolved),
+  };
+}
+

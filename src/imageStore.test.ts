@@ -165,7 +165,7 @@ describe("the reader", () => {
     expect(readLauncherImage(entry!)).toEqual({
       name: "base",
       imagePath: path.join(imagesDir, "base", "base.image"),
-      pharoVersion: "140",
+      pharoVersion: "14.0",
       architecture: "64",
       template: { name: nextStable, url: nextStableUrl },
       modified: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/),
@@ -191,7 +191,7 @@ describe("the reader", () => {
 
     expect(image).toMatchObject({
       name: "gui",
-      pharoVersion: "130",
+      pharoVersion: "13.0",
       architecture: "64",
       vmId: "130-x64",
       // A launch configuration has a #name too: 'Default'.
