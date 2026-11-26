@@ -173,7 +173,7 @@ export async function firstTemplate(
   const availableVersions = localPharoVersions(profile);
   expectOk("template update", await launcher.updateTemplates());
 
-  const templates = expectOk("template list", await launcher.listTemplates()).data ?? [];
+  const templates = expectOk("template list", await launcher.listTemplates()).data?.templates ?? [];
   const named = templates.filter(
     (template): template is LauncherTemplate & { name: string } =>
       typeof template.name === "string" && template.name.length > 0,

@@ -15,7 +15,7 @@ import path from "node:path";
 import type { PharoLauncherConfig } from "./config.js";
 import type { LauncherImage, LauncherProcess, NotAnImage } from "./models.js";
 import { launcherUserFilesLocation } from "./platform.js";
-import type { NativeProcessScope } from "./processTools.js";
+import type { NativeProcess, NativeProcessScope } from "./processTools.js";
 import {
   firstObjectOpen,
   objectFields,
@@ -380,15 +380,16 @@ function asArchitecture(value: string | undefined): "64" | "32" | undefined {
   return value === "64" || value === "32" ? value : undefined;
 }
 
-/**
- * The full pass, for one image: what its meta-inf.ston, its pharo.version and
- * its header say. A missing or unreadable file leaves its fields out.
- */
 /** The Pharo version as Pharo says it: "140" is 14.0 and "61" is 6.1; anything else as it is. */
 export function pharoVersionText(raw: string | undefined): string | undefined {
   return raw !== undefined && /^\d{2,3}$/.test(raw) ? `${raw.slice(0, -1)}.${raw.slice(-1)}` : raw;
 }
 
+/**
+ * The full pass, for one image: what its meta-inf.ston, its pharo.version and
+ * its header say. A missing or unreadable file leaves its fields out, and
+ * `pids` is left out: no process is listed.
+ */
 export function readLauncherImage(entry: ImageEntry): LauncherImage {
   const metaInfSource = readTextFile(path.join(entry.directory, "meta-inf.ston"));
   const metaInf = metaInfSource === undefined ? {} : readMetaInf(metaInfSource);
@@ -467,7 +468,7 @@ function realPath(filePath: string): string | undefined {
  */
 export function processesOfImages(
   images: readonly ImageEntry[],
-  processes: readonly LauncherProcess[],
+  processes: readonly NativeProcess[],
   platform: NodeJS.Platform = process.platform,
 ): LauncherProcess[] {
   if (processes.length === 0 || images.length === 0) {
@@ -501,7 +502,7 @@ export function processesOfImages(
     })
     .sort(
       (left, right) =>
-        compareCodePoints(left.imageName ?? "", right.imageName ?? "") ||
+        compareCodePoints(left.imageName, right.imageName) ||
         left.pid - right.pid,
     );
 }

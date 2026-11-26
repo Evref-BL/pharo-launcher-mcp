@@ -80,8 +80,15 @@ export function normalizeLauncherResult(
 ): LauncherCommandResult<unknown> & { defaultCategory?: string } {
   const command = commandRun(result);
   if (result.exitCode !== 0 || result.timedOut) {
-    // A command's own output is its diagnostic: nothing here rewrites it.
-    return { ok: false, ...(failedOutputDiagnostic(result, defaultDiagnosticTailLength) ?? {}), command };
+    // A command's own output is its diagnostic: nothing here rewrites it. One
+    // that wrote nothing is said by how it ended.
+    return {
+      ok: false,
+      diagnostic:
+        failedOutputDiagnostic(result, defaultDiagnosticTailLength)?.diagnostic ??
+        launcherMessage(result),
+      command,
+    };
   }
 
   // A native process list hands over its records: nothing to read back.

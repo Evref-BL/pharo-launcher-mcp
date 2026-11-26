@@ -13,11 +13,12 @@ wrap a subcommand until something asks it to.
 
 Checking the installation is not a tool, because a caller doing it is not yet
 speaking MCP. The executable answers `--health`, `--version-check`,
-`--validate-installation` and `--probe-images` and exits, which is what a
-preflight needs.
+`--validate-installation` and `--probe-images` and exits, 0 when the check
+holds, which is what a preflight needs; `--help` lists them.
 
 A tool takes only the arguments its schema names. Any other is refused, and the
-answer names those it takes.
+answer names those it takes. An argument given as `null`, which some clients
+send for one they do not use, is left out.
 
 ## Configuration
 
@@ -61,7 +62,7 @@ with the file it lacks.
 `image_start` does.
 
 `image_create` and `image_copy` check that the
-Launcher can list the new image and open it, polling for up to 30 s after the
+Launcher can list the new image and open it, polling for about 30 s after the
 command, and also after a command that outlived the call's timeout, since the
 Launcher goes on and makes the image. In profile mode, listed means the images
 directory holds it under the exact new name; outside a profile only the
@@ -69,23 +70,35 @@ Launcher's `image info` is asked. A successful Launcher exit is not enough, and
 a failed check is an error that says which check failed.
 
 In profile mode, where the server wrote the images directory itself, a name it
-does not find is refused before any Launcher call (`image_info`,
-`image_start`, `image_delete`, and `image_copy`'s source), and so is a new name
-an image already has, in any case. Outside a profile those names go to the
-Launcher, whose answer is the answer.
+does not find is refused before any Launcher call (`image_start`,
+`image_delete`, and `image_copy`'s source), and so is a new name an image
+already has, in any case (`image_create`, `image_copy`). Outside a profile
+those names go to the Launcher, whose answer is the answer.
+
+A name is an image's, never a path: one holding `/` or `\`, or starting with a
+dot, is refused in every mode, since the Launcher puts an image at
+`<images>/<name>` and no listing shows a hidden one.
 
 `image_start` supports:
 
-- `displayMode: "headless"` or `"interactive"`, in profile mode only.
-  PharoLauncher's own `image launch` has no display mode, so outside profile
-  mode the launch is refused rather than started with the mode dropped.
+- `displayMode: "headless"`, the default, or `"interactive"`, in profile mode
+  only. PharoLauncher's own `image launch` has no display mode, so outside
+  profile mode the launch is refused rather than started with the mode
+  dropped. A headless image with no `script` has nothing to do, and quits.
 - `detached: true` to leave the image running: the answer names its pid and
-  its log files. Otherwise the call waits for the image to quit, and stops it
-  when the call's time is up: 30 s for the server. The logs
-  directory keeps the logs of an image's last three starts, so those a
-  failed start names outlive two more. In profile mode, from a logs directory
-  inside the state root, a detached start also removes the logs of images the
-  profile no longer holds.
+  its log files. Otherwise the call waits for the image to quit, 30 s at most
+  for the server. In a profile, where the server runs the VM itself, it then
+  stops the image. Outside one the call stops waiting, and the Launcher's
+  command and the image it started go on: `process_list` shows the image.
+- A detached start writes the image's output to two log files: in the
+  profile's logs directory, else in this package's directory among the user's
+  logs (`~/Library/Logs/pharo-launcher-mcp` on macOS,
+  `%LOCALAPPDATA%\pharo-launcher-mcp\logs` on Windows, and on Linux
+  `$XDG_STATE_HOME/pharo-launcher-mcp/logs`, else
+  `~/.local/state/pharo-launcher-mcp/logs`). It keeps the logs of the image's
+  last three detached starts, so those a failed start names outlive two more.
+  In profile mode, from a logs directory inside the state root, it also
+  removes the logs of images the profile no longer holds.
 - `script` for a launch script passed to Launcher, or evaluated by the profile
   VM launch path. A relative path is read from the server's working directory,
   not from the image's or Launcher's. A headless image given no script has
@@ -113,9 +126,10 @@ The categories come in the Launcher's order, with the one it marks as its
 default. A template list names templates only: a name is what
 `image_create` takes.
 
-In profile mode, `template_update` also downloads the active
-profile's source list, keeping the one there when the download fails, and
-probes `template list`.
+In profile mode, `template_update` downloads the active profile's source list
+instead, keeping the one there when the download fails, and probes
+`template list`: the Launcher's own `template update` writes among the
+Launcher's user files, whatever the profile says.
 
 ## Process Tools
 
@@ -138,15 +152,31 @@ A pid, a whole number, stops that process alone. An image stops every process
 running it: an image launched more than once has more than one. The answer comes
 once every killed process is gone, or says which one still runs 10 s later.
 
-Prefer the PID returned by a prior detached launch when cleaning up a launch
-you own.
+To stop a start you made, in a profile, kill the pid its detached start
+answered: the server ran the VM itself, so that pid is the VM's. Outside a
+profile that pid is the Launcher's own command; take the VM's pid from
+`process_list` or `image_info`.
 
 ## The library
 
 The tools answer text. The library's functions answer objects, which a program
-reads instead: `listImages` answers `{ imagesDir, images, notImages,
-processListFailure? }` and `imageInfo` `{ found, imagesDir, image? }`. Its
-calls take the tools' arguments, named the same way.
+reads instead. Its calls take the tools' arguments, named the same way, and
+refuse what the tools refuse, as typed failures the tools render. Two things
+are the tools' own: `process_kill` waits up to 10 s for each VM it killed to
+exit, and `template_list` lists the templates the Launcher keeps on disk.
+
+`openPharoLauncher` takes `profile` (`{ stateRoot, name? }`, a relative
+`stateRoot` resolved once, from the working directory), `launcherDir`, where
+the Launcher is installed, found as the command finds it when left out, and
+`timeoutMs`, how long a call waits for a Launcher command: 30 s. A command
+still running then goes on, and the call answers with `command.timedOut`; a
+create or copy still checks for its image. Only a VM a profile's waited
+start runs itself is stopped.
+
+`listImages` answers `{ imagesDir, images, notImages, processListFailure? }`.
+`imageInfo` answers `{ kind: "image", imagesDir, image, processListFailure? }`,
+`{ kind: "not-an-image", imagesDir, notAnImage }` or `{ kind: "missing",
+imagesDir }`.
 
 A call that runs a Launcher command answers a `LauncherCommandResult`:
 
@@ -154,9 +184,9 @@ A call that runs a Launcher command answers a `LauncherCommandResult`:
 {
   ok: boolean;
   data?: T;
-  diagnostic?: string;
+  diagnostic?: string; // there whenever ok is false
   action?: string;
-  command: {
+  command?: {          // absent when the call refused before running a command
     durationMs: number;
     exitCode: number | null;
     signal?: NodeJS.Signals;
@@ -166,28 +196,53 @@ A call that runs a Launcher command answers a `LauncherCommandResult`:
 }
 ```
 
-Use `ok` and `data` for program flow; `diagnostic` says why a call failed, and
-`action` what to do about it, when something can be done. Each call types its
-own `data`:
+Use `ok` and `data` for program flow. Where a call has `failure`, its `kind`
+says why the call did nothing, for a program to switch on; `diagnostic` says it
+in words, and `action` what to do about it, when something can be done. Each
+call types its own result:
 
-- `createImage` and `copyImage`: `{ image?: LauncherImage }`, the image when the
-  images directory holds it, and `failure` saying why it made none: a template
-  or category the Launcher does not know, or an image never listed or never
-  opened after a command that exited 0.
+- `createImage` and `copyImage`: `data` is `{ image?: LauncherImage }`, the
+  image when the images directory holds it. `failure` is `name-taken`, or for
+  a copy's source `no-such-image`, in a profile; `no-templates`, a profile
+  that has no template sources yet; `unknown-template` or `unknown-category`,
+  refused by the Launcher; `not-listed` or `not-opened`, an image never listed
+  or never opened after a command that exited 0.
 - `startImage`: no data, and `launch`, what it ran, including a run a signal
-  ended, which has `command.signal` and no exit code.
-- `killProcess`: `{ killed, failures }`, the pids it killed and those it could
-  not, each with why.
-- `listProcesses`: the processes; `listTemplateCategories` the categories, with
-  `defaultCategory`; `listTemplates` the templates, with `failure` when the
-  category does not exist.
+  ended, which has `command.signal` and no exit code. `failure` is
+  `no-such-image`, in a profile.
+- `deleteImage`: no data. `failure` is `image-running`, with its `pids`;
+  `process-list-failed`, when whether it runs cannot be told; or
+  `no-such-image`, in a profile.
+- `killProcess`: `data` is `{ killed, failures }`, the pids it killed and
+  those it could not, each with its `diagnostic`. `failure` is
+  `no-such-process`, when no VM of this Launcher's images has the pid or runs
+  the image, or `process-list-failed`.
+- `listProcesses`: `data` is `{ processes }`.
+- `listTemplateCategories`: `data` is `{ categories, defaultCategory? }`.
+- `listTemplates`: `data` is `{ templates }`. `failure` is `unknown-category`,
+  or `no-templates` in a profile that has none yet.
 - `updateTemplates`: no data, and `sources`, what it did to a profile's
   sources.list.
-- `deleteImage`: no data.
+- `deleteLaunchLogs({ image })`: deletes the logs of a deleted image's
+  detached starts, for a program that removed its directory itself.
 
-`copyImageBetweenProfiles` copies the files and runs nothing. It answers `{ ok,
-failure?, image, newImage, sourceProfile, destinationProfile, source,
-destination, diagnostic?, action? }`, `failure` saying which check refused.
+An input a call cannot run with (a required argument left out, a value of the
+wrong type, an image name that is a path or starts with a dot, a
+`displayMode` outside a profile)
+rejects the call's promise with an `InvalidInputError` before anything runs.
+`ProfileTooDeepError`, one of them, says that a profile's VM directory is too
+deep for the VM to load its modules. An argument given as `null` is taken as
+left out.
+
+`copyImageBetweenProfiles`, a function of its own, copies the files and runs
+nothing. It answers `{ ok, data?, failure?, diagnostic?, action?,
+sourceProfile, destinationProfile, source, destination }`: `data` is `{ image
+}` as `copyImage`'s, and `source` and `destination` are each `{ directory,
+imagePath }`.
+
+`readImageDirectory`, `readLauncherImage` and
+`repairCopiedImageMetadataInDirectory` read and repair an image directory, for
+a program that copies or renames one itself.
 
 `listTemplates` leaves out the templates the Launcher keeps on disk unless
 given `includeLocal: true`, as the tool is: the Launcher keeps a copy of every

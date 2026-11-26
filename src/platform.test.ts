@@ -111,7 +111,7 @@ describe("launcher module path budget", () => {
     expect(budget.ok).toBe(false);
     expect(budget.over).toBe(1);
     expect(launcherModulePathBudgetMessage(budget)).toContain(
-      "Shorten the profile root by at least 1 characters",
+      "Shorten the path to that directory by at least 1 characters",
     );
   });
 

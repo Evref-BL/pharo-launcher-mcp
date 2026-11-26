@@ -5,12 +5,17 @@ import { describe, expect, it } from "vitest";
 import type {
   CopyBetweenProfilesInput,
   CopyBetweenProfilesResult,
+  CopyBetweenProfilesFailure,
   CopyImageInput,
   CreateImageInput,
-  CrossProfileCopyFailure,
+  DeleteImageFailure,
+  DeleteImageResult,
   ImageDirectory,
   ImageEntry,
+  ImageLocation,
+  ImageMetadataRepairInput,
   ImageMetadataRepairResult,
+  KillProcessFailure,
   KillProcessInput,
   KillProcessResult,
   LauncherCommandResult,
@@ -26,11 +31,15 @@ import type {
   MadeImageFailure,
   MadeImageResult,
   MissingProfilePath,
+  NameTaken,
+  NoSuchImage,
+  NoTemplates,
   NotAnImage,
   OpenPharoLauncherOptions,
   PharoLauncher,
-  PharoLauncherConfigReport,
+  ProcessListResult,
   ProfileLocation,
+  ResolvedProfile,
   StartImageInput,
   StartImageResult,
   TemplateCategoriesResult,
@@ -74,12 +83,17 @@ function sourceFor(distPath: string): string {
 type LibraryTypes = [
   CopyBetweenProfilesInput,
   CopyBetweenProfilesResult,
+  CopyBetweenProfilesFailure,
   CopyImageInput,
   CreateImageInput,
-  CrossProfileCopyFailure,
+  DeleteImageFailure,
+  DeleteImageResult,
   ImageDirectory,
   ImageEntry,
+  ImageLocation,
+  ImageMetadataRepairInput,
   ImageMetadataRepairResult,
+  KillProcessFailure,
   KillProcessInput,
   KillProcessResult,
   LauncherCommandResult,
@@ -95,11 +109,15 @@ type LibraryTypes = [
   MadeImageFailure,
   MadeImageResult,
   MissingProfilePath,
+  NameTaken,
+  NoSuchImage,
+  NoTemplates,
   NotAnImage,
   OpenPharoLauncherOptions,
   PharoLauncher,
-  PharoLauncherConfigReport,
+  ProcessListResult,
   ProfileLocation,
+  ResolvedProfile,
   StartImageInput,
   StartImageResult,
   TemplateCategoriesResult,
@@ -108,12 +126,18 @@ type LibraryTypes = [
   TemplateUpdateResult,
 ];
 
+// A profile is located by one or the other, never both.
+// @ts-expect-error
+const both: ProfileLocation = { stateRoot: "/p", imagesDir: "/p/images" };
+void both;
+
 describe("package exports", () => {
   it("exports these values, and no other", () => {
     // Each is a promise after 1.0: a new one is added here on purpose.
     expect(Object.keys(library).sort()).toEqual([
+      "InvalidInputError",
       "ProfileTooDeepError",
-      "ToolInputError",
+      "copyImageBetweenProfiles",
       "openPharoLauncher",
       "readImageDirectory",
       "readLauncherImage",
@@ -130,7 +154,7 @@ describe("package exports", () => {
     expect(manifest.types).toBe("./dist/library.d.ts");
   });
 
-  it("exports a subpath for every file a consumer may import", () => {
+  it("points every subpath at a file the build makes", () => {
     for (const [subpath, target] of Object.entries(manifest.exports)) {
       if (subpath === "./package.json") {
         continue;

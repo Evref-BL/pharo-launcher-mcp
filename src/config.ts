@@ -6,6 +6,8 @@ import {
   joinPlatformPath,
   launcherPlatformDefaults,
   launcherUserFilesLocation,
+  normalizedPath,
+  userLogsDirectory,
 } from "./platform.js";
 
 export type PharoLauncherInstallationSource =
@@ -50,6 +52,8 @@ export interface PharoLauncherConfig {
    * read outside a profile, where the images directory comes from there.
    */
   launcherUserFilesDir?: string;
+  /** Where detached starts write their logs outside a profile. */
+  userLogsDir?: string;
   profile?: PharoLauncherProfileConfig;
   discovery?: PharoLauncherInstallationDiscovery;
 }
@@ -254,11 +258,42 @@ function discoverLauncherInstallation(
   };
 }
 
+/**
+ * The variables that name a path, each read as `normalizedPath` reads one.
+ * Not the Launcher configuration's, which a profile reads from its own
+ * launcher directory when it is relative.
+ */
+const pathVariables = [
+  "PHARO_LAUNCHER_DIR",
+  "PHARO_LAUNCHER_VM",
+  "PHARO_LAUNCHER_IMAGE",
+  "PHARO_LAUNCHER_SCRIPT",
+  "PHARO_LAUNCHER_MCP_STATE_ROOT",
+  "PHARO_LAUNCHER_MCP_LAUNCHER_IMAGE",
+  "PHARO_LAUNCHER_MCP_IMAGES_DIR",
+  "PHARO_LAUNCHER_MCP_VMS_DIR",
+  "PHARO_LAUNCHER_MCP_TEMPLATE_SOURCES_DIR",
+  "PHARO_LAUNCHER_MCP_INIT_SCRIPTS_DIR",
+  "PHARO_LAUNCHER_MCP_LOGS_DIR",
+] as const;
+
+function withNormalizedPaths(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): NodeJS.ProcessEnv {
+  const normalized = { ...env };
+  for (const name of pathVariables) {
+    const value = env[name];
+    if (value) {
+      normalized[name] = normalizedPath(value, platform);
+    }
+  }
+  return normalized;
+}
+
 export function loadPharoLauncherConfig(
-  env: NodeJS.ProcessEnv = process.env,
+  givenEnv: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
   options: LoadPharoLauncherConfigOptions = {},
 ): PharoLauncherConfig {
+  const env = withNormalizedPaths(givenEnv, platform);
   const discovery = discoverLauncherInstallation(env, platform, options);
   const launcherDir = discovery.selected.launcherDir;
   const launcherVm = discovery.selected.launcherVm;
@@ -271,6 +306,7 @@ export function loadPharoLauncherConfig(
     platform,
   );
   const launcherUserFilesDir = launcherUserFilesLocation(env, platform);
+  const userLogsDir = userLogsDirectory(env, platform);
 
   return {
     launcherDir,
@@ -282,6 +318,7 @@ export function loadPharoLauncherConfig(
       : {}),
     ...(launcherConfiguration ? { launcherConfiguration } : {}),
     ...(launcherUserFilesDir ? { launcherUserFilesDir } : {}),
+    ...(userLogsDir ? { userLogsDir } : {}),
     ...(profile ? { profile } : {}),
     discovery,
   };
@@ -304,7 +341,7 @@ export interface LauncherSettings {
 }
 
 /** Where the system keeps a user's files: what the defaults are found from. */
-const systemLocations = ["HOME", "USERPROFILE", "LOCALAPPDATA"] as const;
+const systemLocations = ["HOME", "USERPROFILE", "LOCALAPPDATA", "XDG_STATE_HOME"] as const;
 
 /** The config of these settings, found as the command finds its variables'. */
 export function configForSettings(

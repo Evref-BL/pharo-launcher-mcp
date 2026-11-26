@@ -3,28 +3,27 @@
  * the way MCP's own tools answer. A summary sentence, `Warning: …` lines,
  * `key: value` lines, then indented lists.
  *
- * The library keeps its typed objects for its callers; nothing here reaches
- * them. So every text that names a tool is here, and so is
- * every check made before a call: in profile mode, where this server wrote the
- * images directory itself, a check refuses on its own; outside a profile the
- * directory comes from settings that can be wrong, so a name the reader does
- * not find goes to the Launcher, whose answer is the answer.
+ * The library decides, and refuses what it refuses; this renders what it
+ * answered, in sentences that name the tools to call next. A caller of the
+ * library gets the same refusals as `failure` kinds.
  */
 import fs from "node:fs";
 import path from "node:path";
 import {
   commandArgs,
   inputObject,
+  InvalidInputError,
   optionalString,
   requiredString,
-  ToolInputError,
 } from "./commandCatalog.js";
 import type { PharoLauncherConfig } from "./config.js";
 import {
+  copyImageBetweenProfiles,
   profileLabel,
   type CopyBetweenProfilesInput,
   type CopyBetweenProfilesResult,
 } from "./crossProfileCopy.js";
+import { getPharoLauncherConfigReport } from "./discovery.js";
 import { findByName, scanImages, whatItLacks } from "./imageStore.js";
 import {
   madeImageFailureText,
@@ -37,6 +36,7 @@ import { isLauncherInvocationFailure } from "./launcherCli.js";
 import type {
   KillProcessResult,
   LauncherCommandResult,
+  LauncherCommandRun,
   LauncherImage,
   LauncherProcess,
   MadeImageResult,
@@ -192,7 +192,7 @@ function launcherFailureText(
   result: LauncherCommandResult<unknown>,
   context: AnswerContext,
 ): string {
-  if (result.command.timedOut) {
+  if (result.command?.timedOut) {
     return `Pharo Launcher did not finish ${operation} within ${callSeconds(context.options)} s.`;
   }
   if (isLauncherInvocationFailure(result.diagnostic)) {
@@ -202,9 +202,9 @@ function launcherFailureText(
   return sentenceWithMessage(
     `Pharo Launcher could not ${operation}`,
     result.diagnostic ??
-      (result.command.signal
+      (result.command?.signal
         ? `it was killed by signal ${result.command.signal}`
-        : `it exited with ${result.command.exitCode ?? "no exit code"}`),
+        : `it exited with ${result.command?.exitCode ?? "no exit code"}`),
   );
 }
 
@@ -227,25 +227,10 @@ function takenNameText(image: { name: string }, imagesDir: string): string {
   );
 }
 
-function noTemplatesYet(config: PharoLauncherConfig): boolean {
-  if (!config.profile) {
-    return false;
-  }
-
-  try {
-    return (
-      fs.readFileSync(path.join(config.profile.templateSourcesDir, "sources.list"), "utf8").trim()
-        .length === 0
-    );
-  } catch {
-    return true;
-  }
-}
-
 const noTemplatesYetText = "There are no templates yet: call template_update first.";
 
 function timedOutWarning(result: LauncherCommandResult<unknown>, context: AnswerContext): string | undefined {
-  return result.command.timedOut
+  return result.command?.timedOut
     ? `Warning: Pharo Launcher needed more than the call's ${callSeconds(context.options)} s, but finished.`
     : undefined;
 }
@@ -269,15 +254,21 @@ function madeImageFailure(
     return failure(text);
   }
 
+  switch (result.failure?.kind) {
+    case "name-taken":
+      return failure(takenNameText({ name: result.failure.image }, context.imagesDir));
+    case "no-such-image":
+      return failure(noImageText(result.failure.image, context.imagesDir, result.failure.notAnImage));
+    case "no-templates":
+      return failure(noTemplatesYetText);
+  }
   if (result.failure?.kind === "unknown-category") {
-    return noTemplatesYet(context.config)
-      ? failure(noTemplatesYetText)
-      : failure(
-          followedBy(
-            launcherFailureText(operation, result, context),
-            "template_category_list says which categories there are.",
-          ),
-        );
+    return failure(
+      followedBy(
+        launcherFailureText(operation, result, context),
+        "template_category_list says which categories there are.",
+      ),
+    );
   }
   if (result.failure?.kind === "unknown-template") {
     return failure(
@@ -302,7 +293,7 @@ function imageAttributes(image: LauncherImage): Array<[string, string | undefine
 }
 
 const answerConfig: Answer = async (context) => {
-  const report = context.launcher.describeConfig();
+  const report = getPharoLauncherConfigReport(context.config);
   const launcherDir = path.resolve(report.launcherDir.path);
   const imagesDir = report.imagesDir;
   const profile = report.profile;
@@ -369,7 +360,7 @@ const answerImageList: Answer = async (context, input) => {
   ]);
 };
 
-function runsText(image: LauncherImage): string {
+function runsText(image: Pick<LauncherImage, "pids">): string {
   const pids = image.pids ?? [];
   return pids.length === 1 ? `runs as pid ${pids[0]}` : `runs as pids ${pids.join(", ")}`;
 }
@@ -377,8 +368,10 @@ function runsText(image: LauncherImage): string {
 const answerImageInfo: Answer = async (context, input) => {
   const imageName = requiredString(input, "image");
   const info = await context.launcher.imageInfo({ image: imageName });
-  if (!info.found) {
-    return failure(noImageText(imageName, info.imagesDir, info.notAnImage));
+  if (info.kind !== "image") {
+    return failure(
+      noImageText(imageName, info.imagesDir, info.kind === "not-an-image" ? info.notAnImage : undefined),
+    );
   }
 
   const image = info.image;
@@ -423,13 +416,6 @@ const answerImageCreate: Answer = async (context, input) => {
   commandArgs.createImage(input);
   const newImageName = requiredString(input, "image");
   const templateName = optionalString(input, "template");
-  if (context.config.profile) {
-    const taken = findByName(scanImages(context.imagesDir).images, newImageName);
-    if (taken) {
-      return failure(takenNameText(taken, context.imagesDir));
-    }
-  }
-
   const result = await context.launcher.createImage(input as unknown as CreateImageInput);
   if (!result.ok) {
     const name = inlineValue(newImageName);
@@ -450,17 +436,6 @@ const answerImageCopy: Answer = async (context, input) => {
   commandArgs.copyImage(input);
   const imageName = requiredString(input, "image");
   const newImageName = requiredString(input, "newImage");
-  if (context.config.profile) {
-    const scan = scanImages(context.imagesDir);
-    if (!findByName(scan.images, imageName)) {
-      return failure(noImageText(imageName, context.imagesDir, findByName(scan.notImages, imageName)));
-    }
-    const taken = findByName(scan.images, newImageName);
-    if (taken) {
-      return failure(takenNameText(taken, context.imagesDir));
-    }
-  }
-
   const result = await context.launcher.copyImage({ image: imageName, newImage: newImageName });
   if (!result.ok) {
     const copied = `${inlineValue(imageName)} to ${inlineValue(newImageName)}`;
@@ -484,45 +459,40 @@ const answerImageCopy: Answer = async (context, input) => {
 const answerImageDelete: Answer = async (context, input) => {
   commandArgs.deleteImage(input);
   const imageName = requiredString(input, "image");
-  const info = await context.launcher.imageInfo({ image: imageName });
-  let name = inlineValue(imageName);
-  if (info.found) {
-    name = inlineValue(info.image.name);
-    if (info.processListFailure !== undefined) {
-      return failure(
-        `Cannot tell whether ${name} runs (${clause(info.processListFailure)}), so it was not deleted.`,
-      );
-    }
-    if ((info.image.pids?.length ?? 0) > 0) {
-      return failure(
-        `Image ${name} ${runsText(info.image)}: stop it with process_kill, then delete it.`,
-      );
-    }
-  } else if (context.config.profile) {
-    return failure(noImageText(imageName, info.imagesDir, info.notAnImage));
-  }
-
+  const name = inlineValue(findByName(scanImages(context.imagesDir).images, imageName)?.name ?? imageName);
   const result = await context.launcher.deleteImage({ image: imageName });
+  switch (result.failure?.kind) {
+    case "process-list-failed":
+      return failure(
+        `Cannot tell whether ${name} runs (${clause(result.failure.diagnostic)}), so it was not deleted.`,
+      );
+    case "image-running":
+      return failure(
+        `Image ${name} ${runsText({ pids: result.failure.pids })}: stop it with process_kill, then delete it.`,
+      );
+    case "no-such-image":
+      return failure(noImageText(imageName, context.imagesDir, result.failure.notAnImage));
+  }
   return result.ok
     ? textResult([`Deleted image ${name}.`])
     : failure(launcherFailureText(`delete image ${name}`, result, context));
 };
 
 /** How a start the call waited for ended: past the call's time, by a signal, or with an exit code. */
-function endedText(name: string, command: LauncherCommandResult["command"], seconds: number): string {
-  if (command.timedOut) {
+function endedText(name: string, command: LauncherCommandRun | undefined, seconds: number): string {
+  if (command?.timedOut) {
     return (
       `${name} did not quit within ${seconds} s and was stopped: a start that is not ` +
       "detached lasts as long as the call. Pass detached: true to leave it running."
     );
   }
-  return command.signal
+  return command?.signal
     ? `${name} was killed by signal ${command.signal}.`
-    : `${name} quit with exit code ${command.exitCode}.`;
+    : `${name} quit with exit code ${command?.exitCode}.`;
 }
 
-function endedWell(command: LauncherCommandResult["command"]): boolean {
-  return !command.timedOut && !command.signal && command.exitCode === 0;
+function endedWell(command: LauncherCommandRun | undefined): boolean {
+  return command !== undefined && !command.timedOut && !command.signal && command.exitCode === 0;
 }
 
 const answerImageStart: Answer = async (context, input) => {
@@ -530,13 +500,11 @@ const answerImageStart: Answer = async (context, input) => {
   const imageName = requiredString(input, "image");
   const detached = input.detached === true;
   const hasScript = input.script !== undefined;
-  const scan = scanImages(context.imagesDir);
-  const entry = findByName(scan.images, imageName);
-  if (context.config.profile && !entry) {
-    return failure(noImageText(imageName, context.imagesDir, findByName(scan.notImages, imageName)));
-  }
-
+  const entry = findByName(scanImages(context.imagesDir).images, imageName);
   const result = await context.launcher.startImage(input as unknown as StartImageInput);
+  if (result.failure?.kind === "no-such-image") {
+    return failure(noImageText(imageName, context.imagesDir, result.failure.notAnImage));
+  }
   const name = inlineValue(entry?.name ?? imageName);
   // What ran, once something ran: none for a launch refused before it.
   const launch = result.launch;
@@ -575,10 +543,11 @@ const answerImageStart: Answer = async (context, input) => {
 
   // Outside a profile the Launcher's exit code is the image's only when the
   // reader knows the image; a timeout or a signal ended the Launcher.
-  if (launch?.by === "launcher" && !detached && entry && !result.command.timedOut && !result.command.signal) {
+  const command = result.command;
+  if (launch?.by === "launcher" && !detached && entry && command && !command.timedOut && !command.signal) {
     return textResult(
-      [`${name} quit with exit code ${result.command.exitCode}.`, ...outputTails(launch.output)],
-      result.command.exitCode !== 0,
+      [`${name} quit with exit code ${command.exitCode}.`, ...outputTails(launch.output)],
+      command.exitCode !== 0,
     );
   }
 
@@ -600,22 +569,21 @@ const answerImageStart: Answer = async (context, input) => {
  * this server's own stateRoot only, so another's is said by what it holds.
  */
 function profilePathAdvice(result: CopyBetweenProfilesResult): string {
-  const missing = result.missingProfilePaths ?? [];
+  const missing = result.failure?.kind === "profile-path-missing" ? result.failure.paths : [];
   return missing.some((each) => each.field === "stateRoot" || !each.given)
     ? " Give as stateRoot the directory that holds the profile's images/ directory, " +
         "or the images directory itself as imagesDir; config prints this server's own stateRoot."
     : "";
 }
 
-const answerCopyBetweenProfiles: Answer = async (context, input) => {
-  const result = await context.launcher.copyImageBetweenProfiles(
-    input as unknown as CopyBetweenProfilesInput,
-  );
-  const source = inlineValue(result.image);
-  const destination = inlineValue(result.newImage);
+const answerCopyBetweenProfiles: Answer = async (_context, input) => {
+  const request = input as unknown as CopyBetweenProfilesInput;
+  const result = await copyImageBetweenProfiles(request);
+  const source = inlineValue(request.image);
+  const destination = inlineValue(request.newImage);
   const from = profileLabel(result.sourceProfile);
   const to = profileLabel(result.destinationProfile);
-  const renamed = result.newImage === result.image ? "" : ` as ${destination}`;
+  const renamed = request.newImage === request.image ? "" : ` as ${destination}`;
   if (result.ok) {
     return textResult([
       `Copied image ${source} from ${from} to ${to}${renamed}.`,
@@ -624,13 +592,22 @@ const answerCopyBetweenProfiles: Answer = async (context, input) => {
   }
 
   const diagnostic = clause(result.diagnostic ?? "it failed");
-  switch (result.failure) {
+  switch (result.failure?.kind) {
     case "profile-path-missing":
       return failure(`Cannot copy image ${source}: ${result.diagnostic}${profilePathAdvice(result)}`);
-    case "source-missing":
-    case "source-image-missing":
-    case "source-metadata-missing":
+    case "no-such-image":
+      return failure(
+        result.failure.notAnImage
+          ? `Cannot copy image ${source}: ${diagnostic}.`
+          : `Cannot copy image ${source}: there is no image ${source} in ${result.sourceProfile.imagesDir}.`,
+      );
+    case "no-metadata":
       return failure(`Cannot copy image ${source}: ${diagnostic}.`);
+    case "name-taken":
+      return failure(
+        `Cannot copy image ${source} to ${to}: it has an image ${inlineValue(result.failure.image)} ` +
+          "already. Pick another newImage, or delete that image first.",
+      );
     case "destination-exists":
       return failure(
         `Cannot copy image ${source} to ${result.destination.directory}: that path ` +
@@ -647,7 +624,9 @@ const answerCopyBetweenProfiles: Answer = async (context, input) => {
     default:
       return failure(
         sentenceWithMessage(`Cannot copy image ${source} to ${to}`, result.diagnostic ?? "it failed"),
-        result.leftBehind !== undefined && `It left ${result.leftBehind} behind.`,
+        result.failure?.kind === "exception" &&
+          result.failure.leftBehind !== undefined &&
+          `It left ${result.failure.leftBehind} behind.`,
       );
   }
 };
@@ -660,7 +639,7 @@ type ScopedProcesses = { processes: LauncherProcess[] } | { failure: string };
 async function scopedProcesses(context: AnswerContext): Promise<ScopedProcesses> {
   const result = await context.launcher.listProcesses();
   return result.ok
-    ? { processes: result.data ?? [] }
+    ? { processes: result.data?.processes ?? [] }
     : { failure: result.diagnostic ?? "the process list failed" };
 }
 
@@ -685,7 +664,7 @@ const answerProcessList: Answer = async (context) => {
     ...entries(
       "processes",
       scoped.processes.map((process) => ({
-        name: process.imageName ?? "",
+        name: process.imageName,
         attributes: [["pid", String(process.pid)]],
       })),
     ),
@@ -717,7 +696,7 @@ async function stillRunning(pids: readonly number[], options: CallToolOptions): 
 /** What a kill that failed said. */
 function killMessage(pid: number, result: KillProcessResult): string {
   const failed = result.data?.failures.find((each) => each.pid === pid);
-  return clause(failed?.message ?? result.diagnostic ?? `it exited with ${result.command.exitCode}`);
+  return clause(failed?.diagnostic ?? result.diagnostic ?? `it exited with ${result.command?.exitCode}`);
 }
 
 const answerProcessKill: Answer = async (context, input) => {
@@ -766,7 +745,7 @@ const answerProcessKill: Answer = async (context, input) => {
   const stopped = killed.filter((each) => !remaining.includes(each));
   failures.push(...remaining.map((each) => `pid ${each} still runs ${seconds} s after being killed`));
 
-  const name = inlineValue(targets[0]!.imageName ?? "");
+  const name = inlineValue(targets[0]!.imageName);
   const killedClause =
     stopped.length === 0
       ? undefined
@@ -784,15 +763,16 @@ const answerTemplateCategoryList: Answer = async (context) => {
     return failure(launcherFailureText("list template categories", result, context));
   }
 
-  const categories = result.data ?? [];
+  const categories = result.data?.categories ?? [];
+  const defaultCategory = result.data?.defaultCategory;
   const count = categories.length;
   if (count === 0) {
     return textResult(["No template categories."]);
   }
 
   return textResult([
-    result.defaultCategory
-      ? `${count} template ${plural(count, "category", "categories")}; ${result.defaultCategory} is the default.`
+    defaultCategory
+      ? `${count} template ${plural(count, "category", "categories")}; ${defaultCategory} is the default.`
       : `${count} template ${plural(count, "category", "categories")}.`,
     "categories:",
     ...categories.map((category) => `  ${category}`),
@@ -808,18 +788,21 @@ const answerTemplateList: Answer = async (context, input) => {
     includeLocal: true,
   });
   if (!result.ok) {
+    if (result.failure?.kind === "no-templates") {
+      return failure(noTemplatesYetText);
+    }
     if (result.failure?.kind === "unknown-category") {
-      return noTemplatesYet(context.config)
-        ? failure(noTemplatesYetText)
-        : failure(
-            `There is no template category ${category ?? ""}. template_category_list lists them.`,
-          );
+      return failure(
+        category === undefined
+          ? "Pharo Launcher's default template category does not exist. template_category_list lists those there are."
+          : `There is no template category ${inlineValue(category)}. template_category_list lists them.`,
+      );
     }
 
     return failure(launcherFailureText("list templates", result, context));
   }
 
-  const names = (result.data ?? []).map((template) => template.name ?? "");
+  const names = (result.data?.templates ?? []).map((template) => template.name ?? "");
   const where = category ?? "the default category";
   if (names.length === 0) {
     return textResult([`No templates in ${where}.`]);
@@ -837,26 +820,28 @@ const answerTemplateUpdate: Answer = async (context) => {
   const sources = result.sources;
   if (result.ok) {
     return textResult([
-      sources?.outcome === "created"
-        ? `Refreshed the template list, and downloaded this profile's sources.list from ${sources.url}.`
-        : sources?.outcome === "updated"
-          ? `Refreshed the template list, and updated this profile's sources.list from ${sources.url}.`
-          : sources?.outcome === "kept"
-            ? `Refreshed the template list, but kept this profile's sources.list: downloading ${sources.url} failed (${clause(sources.error ?? "")}).`
-            : "Refreshed the template list.",
+      sources === undefined
+        ? "Refreshed the template list."
+        : sources.kind === "created"
+          ? `Downloaded this profile's sources.list from ${sources.url}.`
+          : sources.kind === "updated"
+            ? `Updated this profile's sources.list from ${sources.url}.`
+            : sources.kind === "kept"
+              ? `Kept this profile's sources.list: downloading ${sources.url} failed (${clause(sources.diagnostic ?? "")}).`
+              : `This profile's sources.list is the one at ${sources.url} already.`,
     ]);
   }
 
-  if (sources?.outcome === "failed") {
+  if (sources?.kind === "failed") {
     return failure(
-      "Refreshed the template list, but this profile still has no template sources: " +
-        `downloading ${sources.url} failed (${clause(sources.error ?? "")}). ` +
+      "This profile has no template sources: " +
+        `downloading ${sources.url} failed (${clause(sources.diagnostic ?? "")}). ` +
         `Call template_update again, or put a sources.list in ${path.dirname(sources.path)}.`,
     );
   }
-  // The Launcher refreshed it, and then could not list the templates.
+  // The profile has its list, which the Launcher could not read.
   if (sources !== undefined && result.diagnostic) {
-    return failure(result.diagnostic);
+    return failure(`${clause(result.diagnostic)}.`);
   }
 
   return failure(launcherFailureText("refresh the template list", result, context));
@@ -879,16 +864,22 @@ export const toolAnswers: Readonly<Record<string, Answer>> = {
   template_update: answerTemplateUpdate,
 };
 
-/** Only the arguments a tool's schema names; any other is refused. */
+/**
+ * Only the arguments a tool's schema names; any other is refused. One given
+ * as `null`, which some clients send for an argument they do not use, is left
+ * out.
+ */
 export function toolArguments(
   schema: { properties?: Record<string, unknown> },
   argumentsValue: unknown,
 ): Record<string, unknown> {
-  const given = inputObject(argumentsValue);
+  const given = Object.fromEntries(
+    Object.entries(inputObject(argumentsValue)).filter(([, value]) => value !== null),
+  );
   const named = new Set(Object.keys(schema.properties ?? {}));
   const unknown = Object.keys(given).filter((key) => !named.has(key));
   if (unknown.length > 0) {
-    throw new ToolInputError(`${unknown.join(", ")} ${unknown.length === 1 ? "is" : "are"} not accepted here`);
+    throw new InvalidInputError(`${unknown.join(", ")} ${unknown.length === 1 ? "is" : "are"} not accepted here`);
   }
   return Object.fromEntries(
     Object.keys(schema.properties ?? {})
@@ -901,7 +892,7 @@ export function toolArguments(
 export function invalidArgumentsText(
   toolName: string,
   schema: { properties?: Record<string, unknown> },
-  error: ToolInputError,
+  error: InvalidInputError,
 ): string {
   const properties = Object.keys(schema.properties ?? {});
   return (

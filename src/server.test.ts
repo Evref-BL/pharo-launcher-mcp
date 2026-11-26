@@ -151,7 +151,7 @@ describe("the server", () => {
       image_delete:
         "Delete an image, its directory and the logs of its starts. Nothing asks for a confirmation. A running image is refused: stop it first with process_kill.",
       image_start:
-        "Start an image, optionally with a script for it to run. Unless detached, the call waits for the image to quit, and stops it when the call's time is up.",
+        "Start an image, optionally with a script for it to run. Unless detached, the call waits for the image to quit. When the call's time is up, a profile's image is stopped; outside a profile the call stops waiting, and the image goes on.",
       process_list:
         "List the Pharo processes running an image of this Launcher, by image and pid.",
       process_kill:
@@ -428,6 +428,16 @@ describe("image_list", () => {
     expect(result.isError).toBe(true);
     expect(text(result)).toBe(
       "Invalid arguments for image_list. bogus is not accepted here. It takes nameFilter.",
+    );
+  });
+
+  it("takes a null argument as left out", async () => {
+    const { config, images } = inProfile();
+    writeImage(images, "base", nextStableImage);
+    const options = { config, runner: unusedRunner, nativeProcess: processes() };
+
+    expect(text(await callTool("image_list", { nameFilter: null }, options))).toBe(
+      text(await callTool("image_list", {}, options)),
     );
   });
 
@@ -1220,7 +1230,10 @@ describe("image_start", () => {
     );
 
     expect(result.isError).toBe(true);
-    expect(text(result)).toMatch(/^displayMode needs a scoped launcher profile\. /);
+    expect(text(result)).toBe(
+      "Invalid arguments for image_start. displayMode applies in a profile only: Pharo " +
+        "Launcher's own image launch has no display mode. It takes image, script, detached, displayMode.",
+    );
   });
 });
 
@@ -1272,8 +1285,15 @@ describe("image_copy_between_profiles", () => {
     expect(text(await copy(source, destination, "no-image"))).toBe(
       `Cannot copy image no-image: ${path.join(source, "images", "no-image")} holds no no-image.image.`,
     );
+    expect(text(await copy(source, destination, "gone"))).toBe(
+      `Cannot copy image gone: there is no image gone in ${path.join(source, "images")}.`,
+    );
     expect(text(await copy(source, destination))).toBe(
-      `Cannot copy image pricing to ${path.join(destination, "images", "pricing")}: that path already exists, and a copy never replaces it. Pick another newImage, or remove it first.`,
+      `Cannot copy image pricing to ${destination}: it has an image pricing already. Pick another newImage, or delete that image first.`,
+    );
+    fs.mkdirSync(path.join(destination, "images", "not-yet"));
+    expect(text(await copy(source, destination, "pricing", "not-yet"))).toBe(
+      `Cannot copy image pricing to ${path.join(destination, "images", "not-yet")}: that path already exists, and a copy never replaces it. Pick another newImage, or remove it first.`,
     );
   });
 
@@ -1524,10 +1544,16 @@ describe("the process tools", () => {
     expect(text(nothing)).toBe("Could not kill pid 71513: kill EPERM.");
   });
 
-  it("take one target, and a pid only as a number", async () => {
+  it("take one target, and a pid as a whole number or its digits", async () => {
     const { config } = inProfile();
     const answer = async (input: Record<string, unknown>) =>
-      text(await callTool("process_kill", input, { config, runner: unusedRunner }));
+      text(
+        await callTool("process_kill", input, {
+          config,
+          runner: unusedRunner,
+          nativeProcess: processes(),
+        }),
+      );
 
     expect(await answer({ pid: 1, image: "x" })).toBe(
       "Invalid arguments for process_kill. Give pid or image, not both. It takes image, pid.",
@@ -1538,6 +1564,10 @@ describe("the process tools", () => {
     expect(await answer({ pid: "stuck" })).toBe(
       "Invalid arguments for process_kill. pid must be a process id, a whole number. It takes image, pid.",
     );
+    expect(await answer({ pid: 1.5 })).toBe(
+      "Invalid arguments for process_kill. pid must be a process id, a whole number. It takes image, pid.",
+    );
+    expect(await answer({ pid: "999999" })).toMatch(/^No process of an image in .+ has pid 999999\./);
   });
 });
 
@@ -1661,8 +1691,8 @@ describe("the templates", () => {
 
   it("refresh the list, and download the profile's sources each time", async () => {
     const { profile, config } = inProfile();
-    const { runner, calls } = recording((args) =>
-      args[1] === "update" ? exited(0) : exited(0, "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13'}]"),
+    const { runner, calls } = recording(() =>
+      exited(0, "OrderedCollection[PhLRemoteTemplate{#name:'Pharo 13'}]"),
     );
     const sources = path.join(profile.templateSourcesDir, "sources.list");
     const update = (fetched: () => Promise<string>) =>
@@ -1676,25 +1706,28 @@ describe("the templates", () => {
     });
 
     expect(text(downloaded)).toBe(
-      "Refreshed the template list, and downloaded this profile's sources.list from https://files.pharo.org/pharo-launcher/sources.list.",
+      "Downloaded this profile's sources.list from https://files.pharo.org/pharo-launcher/sources.list.",
     );
-    expect(text(refreshed)).toBe("Refreshed the template list.");
+    expect(text(refreshed)).toBe(
+      "This profile's sources.list is the one at https://files.pharo.org/pharo-launcher/sources.list already.",
+    );
     expect(text(updated)).toBe(
-      "Refreshed the template list, and updated this profile's sources.list from https://files.pharo.org/pharo-launcher/sources.list.",
+      "Updated this profile's sources.list from https://files.pharo.org/pharo-launcher/sources.list.",
     );
     expect(kept.isError).toBeFalsy();
     expect(text(kept)).toBe(
-      "Refreshed the template list, but kept this profile's sources.list: downloading https://files.pharo.org/pharo-launcher/sources.list failed (getaddrinfo ENOTFOUND files.pharo.org).",
+      "Kept this profile's sources.list: downloading https://files.pharo.org/pharo-launcher/sources.list failed (getaddrinfo ENOTFOUND files.pharo.org).",
     );
     expect(fs.readFileSync(sources, "utf8")).toBe("Pharo 14.0 - 64bit (stable)");
-    expect(calls).toEqual(Array(4).fill([["template", "update"], ["template", "list", "--ston"]]).flat());
+    // The Launcher's own update writes among its user files, not the profile's.
+    expect(calls).toEqual(Array(4).fill(["template", "list", "--ston"]));
   });
 
   it("say why the refresh is not done", async () => {
     const { profile, config } = inProfile();
     const failedDownload = await callTool("template_update", {}, {
       config,
-      runner: recording().runner,
+      runner: unusedRunner,
       fetchTemplateSources: async () => {
         throw new Error("HTTP 503 Service Unavailable");
       },
@@ -1704,21 +1737,19 @@ describe("the templates", () => {
     const probe = await callTool("template_update", {}, {
       config,
       fetchTemplateSources: async () => "a source",
-      runner: recording((args) =>
-        args[1] === "update" ? exited(0) : exited(1, "", "Image template category 'x' not found."),
-      ).runner,
+      runner: recording(() => exited(1, "", "Image template category 'x' not found.")).runner,
     });
     const launcher = await callTool("template_update", {}, {
-      config,
+      config: outsideProfile().config,
       runner: recording(() => exited(1, "", "no network")).runner,
     });
 
     expect(failedDownload.isError).toBe(true);
     expect(text(failedDownload)).toBe(
-      `Refreshed the template list, but this profile still has no template sources: downloading https://files.pharo.org/pharo-launcher/sources.list failed (HTTP 503 Service Unavailable). Call template_update again, or put a sources.list in ${profile.templateSourcesDir}.`,
+      `This profile has no template sources: downloading https://files.pharo.org/pharo-launcher/sources.list failed (HTTP 503 Service Unavailable). Call template_update again, or put a sources.list in ${profile.templateSourcesDir}.`,
     );
     expect(text(probe)).toBe(
-      "Refreshed the template list, but Pharo Launcher still cannot list templates: Image template category 'x' not found.",
+      "Pharo Launcher cannot list the templates of this profile's sources.list: Image template category 'x' not found.",
     );
     expect(text(launcher)).toBe("Pharo Launcher could not refresh the template list: no network.");
   });

@@ -1,13 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ToolInputError } from "./commandCatalog.js";
+import { InvalidInputError, validImageName } from "./commandCatalog.js";
 import { repairCopiedImageMetadataInDirectory } from "./imageMetadata.js";
+import {
+  findByName,
+  readImageDirectory,
+  readLauncherImage,
+  scanImages,
+  whatItLacks,
+} from "./imageStore.js";
+import type { LauncherImage, NameTaken, NoSuchImage } from "./models.js";
 
 /**
  * An images directory: the one a profile keeps under its `stateRoot`, or one
  * given as it is, such as the user's own Launcher's.
  */
-export type ProfileLocation = { stateRoot: string } | { imagesDir: string };
+export type ProfileLocation =
+  | { stateRoot: string; imagesDir?: never }
+  | { imagesDir: string; stateRoot?: never };
 
 export interface CopyBetweenProfilesInput {
   sourceProfile: ProfileLocation;
@@ -27,24 +37,26 @@ export interface MissingProfilePath {
   given: boolean;
 }
 
-/** Why a copy between profiles failed, so a caller need not read its text. */
-export type CrossProfileCopyFailure =
-  /** A profile path does not exist; `missingProfilePaths` names each. */
-  | "profile-path-missing"
-  /** The source image's directory does not exist. */
-  | "source-missing"
-  /** It holds no `<image>.image`. */
-  | "source-image-missing"
-  /** It holds no meta-inf.ston. */
-  | "source-metadata-missing"
-  /** The copy's directory exists already, and is never replaced. */
-  | "destination-exists"
-  /** The temporary copy did not check out, and was removed. */
-  | "preflight"
-  /** The copy, moved in place, did not check out, and was left there. */
-  | "post-move"
-  /** Copying threw. */
-  | "exception";
+/**
+ * Why a copy between profiles made no copy: a profile path that does not
+ * exist (`profile-path-missing`, each named in `paths`); a source that is not
+ * an image (`no-such-image`) or has no meta-inf.ston (`no-metadata`); a new
+ * name an image of the destination has already, in any case (`name-taken`),
+ * or a directory of that exact name that is not one (`destination-exists`),
+ * which a copy never replaces; a copy that did not check out, removed
+ * (`preflight`) or left in place once moved there (`post-move`); or copying
+ * threw (`exception`), leaving behind a temporary directory it could not
+ * remove (`leftBehind`).
+ */
+export type CopyBetweenProfilesFailure =
+  | { kind: "profile-path-missing"; paths: MissingProfilePath[] }
+  | NoSuchImage
+  | { kind: "no-metadata" }
+  | NameTaken
+  | { kind: "destination-exists" }
+  | { kind: "preflight" }
+  | { kind: "post-move" }
+  | { kind: "exception"; leftBehind?: string };
 
 /** A profile as the copy read it. */
 export interface ResolvedProfile {
@@ -52,29 +64,35 @@ export interface ResolvedProfile {
   imagesDir: string;
 }
 
+/** An image's directory, and its image file. */
+export interface ImageLocation {
+  directory: string;
+  imagePath: string;
+}
+
+/**
+ * A copy between profiles, answered as `copyImage` answers: its `data` is the
+ * copy, read from its new directory.
+ */
 export interface CopyBetweenProfilesResult {
   ok: boolean;
-  failure?: CrossProfileCopyFailure;
-  image: string;
-  newImage: string;
-  sourceProfile: ResolvedProfile;
-  destinationProfile: ResolvedProfile;
-  /** The source image's directory. */
-  source: string;
-  /** The copy's directory, and its image file. */
-  destination: { directory: string; imagePath: string };
-  missingProfilePaths?: MissingProfilePath[];
-  /** Why it failed. */
+  data?: { image: LauncherImage };
+  failure?: CopyBetweenProfilesFailure;
+  /** Why it failed; there whenever `ok` is false. */
   diagnostic?: string;
   /** What to do about it. */
   action?: string;
-  /** A temporary directory a failed copy could not remove. */
-  leftBehind?: string;
+  sourceProfile: ResolvedProfile;
+  destinationProfile: ResolvedProfile;
+  /** The source image, where it was found. */
+  source: ImageLocation;
+  /** The copy, where it goes. */
+  destination: ImageLocation;
 }
 
 function inputObject(input: unknown, label: string): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new ToolInputError(`${label} must be an object`);
+    throw new InvalidInputError(`${label} must be an object`);
   }
 
   return input as Record<string, unknown>;
@@ -83,41 +101,37 @@ function inputObject(input: unknown, label: string): Record<string, unknown> {
 function requiredString(input: Record<string, unknown>, key: string): string {
   const value = input[key];
   if (typeof value !== "string" || value.length === 0) {
-    throw new ToolInputError(`${key} is required`);
+    throw new InvalidInputError(`${key} is required`);
   }
 
   return value;
 }
 
-function validateImageName(value: string, key: string): void {
-  if (value === "." || value === ".." || /[\\/]/.test(value)) {
-    throw new ToolInputError(`${key} must be a launcher image name, not a path`);
-  }
-}
-
 function absolutePath(value: unknown, key: string): string {
   if (typeof value !== "string" || value.length === 0) {
-    throw new ToolInputError(`${key} must be a non-empty string`);
+    throw new InvalidInputError(`${key} must be a non-empty string`);
   }
   if (!path.isAbsolute(value)) {
-    throw new ToolInputError(`${key} must be an absolute path`);
+    throw new InvalidInputError(`${key} must be an absolute path`);
   }
 
   return path.resolve(value);
 }
 
-/** A profile given by its stateRoot or its imagesDir, one of the two. */
+/** A profile given by its stateRoot or its imagesDir, one of the two; `null` is left out. */
 export function resolveProfileLocation(
   input: unknown,
   label: "sourceProfile" | "destinationProfile",
 ): ResolvedProfile {
-  const object = inputObject(input, label);
+  const object = Object.fromEntries(
+    Object.entries(inputObject(input, label)).filter(([, value]) => value !== null),
+  );
   const unknown = Object.keys(object).filter((key) => key !== "stateRoot" && key !== "imagesDir");
   if (unknown.length > 0) {
-    throw new ToolInputError(`${label} takes stateRoot or imagesDir, not ${unknown.join(", ")}`);
+    throw new InvalidInputError(`${label} takes stateRoot or imagesDir, not ${unknown.join(", ")}`);
   }
   if ((object.stateRoot === undefined) === (object.imagesDir === undefined)) {
-    throw new ToolInputError(`${label} takes stateRoot or imagesDir, one of the two`);
+    throw new InvalidInputError(`${label} takes stateRoot or imagesDir, one of the two`);
   }
 
   if (object.stateRoot !== undefined) {
@@ -136,10 +150,8 @@ interface CopyRequest {
 
 function parseCopyRequest(input: unknown): CopyRequest {
   const object = inputObject(input, "arguments");
-  const image = requiredString(object, "image");
-  const newImage = requiredString(object, "newImage");
-  validateImageName(image, "image");
-  validateImageName(newImage, "newImage");
+  const image = validImageName(requiredString(object, "image"), "image");
+  const newImage = validImageName(requiredString(object, "newImage"), "newImage");
 
   return {
     sourceProfile: resolveProfileLocation(object.sourceProfile, "sourceProfile"),
@@ -373,6 +385,9 @@ function copyProblem(directory: string, image: string, newImage: string): string
   if (pathKind(path.join(directory, `${newImage}.image`)) !== "file") {
     return `it holds no ${newImage}.image`;
   }
+  if (pathKind(path.join(directory, `${newImage}.changes`)) !== "file") {
+    return `it holds no ${newImage}.changes`;
+  }
   if (pathKind(metadataFile) !== "file") {
     return "it holds no meta-inf.ston";
   }
@@ -395,27 +410,36 @@ function copyProblem(directory: string, image: string, newImage: string): string
 }
 
 /**
- * Copy an image from one images directory to another, renamed when asked: to
- * a temporary directory beside the destination, checked, then moved in place
- * and checked again. An existing image is never replaced.
+ * Copy an image from one images directory to another, renamed when asked,
+ * such as from the user's own Launcher into a profile. Nothing runs: the
+ * files are copied to a temporary directory beside the destination, checked,
+ * then moved in place and checked again. An existing image is never replaced.
+ * The source is found as every call finds an image: exactly, else ignoring
+ * case.
  */
-export async function copyImageBetweenProfiles(input: unknown): Promise<CopyBetweenProfilesResult> {
+export async function copyImageBetweenProfiles(
+  input: CopyBetweenProfilesInput,
+): Promise<CopyBetweenProfilesResult> {
   const request = parseCopyRequest(input);
-  const source = path.join(request.sourceProfile.imagesDir, request.image);
+  const sourceScan = scanImages(request.sourceProfile.imagesDir);
+  const sourceEntry = findByName(sourceScan.images, request.image);
+  const sourceName = sourceEntry?.name ?? request.image;
+  const sourceDirectory = path.join(request.sourceProfile.imagesDir, sourceName);
   const destinationDirectory = path.join(request.destinationProfile.imagesDir, request.newImage);
   const base = {
-    image: request.image,
-    newImage: request.newImage,
     sourceProfile: request.sourceProfile,
     destinationProfile: request.destinationProfile,
-    source,
+    source: {
+      directory: sourceDirectory,
+      imagePath: path.join(sourceDirectory, `${sourceName}.image`),
+    },
     destination: {
       directory: destinationDirectory,
       imagePath: path.join(destinationDirectory, `${request.newImage}.image`),
     },
   };
   const failed = (
-    failure: CrossProfileCopyFailure,
+    failure: CopyBetweenProfilesFailure,
     diagnostic: string,
     action?: string,
   ): CopyBetweenProfilesResult => ({
@@ -431,24 +455,35 @@ export async function copyImageBetweenProfiles(input: unknown): Promise<CopyBetw
     ...missingProfilePaths(request.destinationProfile, "destinationProfile"),
   ];
   if (missing.length > 0) {
-    return {
-      ...failed("profile-path-missing", missingProfilePathsText(request, missing)),
-      missingProfilePaths: missing,
-    };
+    return failed(
+      { kind: "profile-path-missing", paths: missing },
+      missingProfilePathsText(request, missing),
+    );
   }
 
-  if (pathKind(source) !== "directory") {
-    return failed("source-missing", `${source} does not exist`);
+  if (!sourceEntry) {
+    const notAnImage = findByName(sourceScan.notImages, request.image);
+    return failed(
+      { kind: "no-such-image", image: request.image, ...(notAnImage ? { notAnImage } : {}) },
+      notAnImage
+        ? `${notAnImage.directory} ${whatItLacks(notAnImage)}`
+        : `There is no image ${request.image} in ${request.sourceProfile.imagesDir}`,
+    );
   }
-  if (pathKind(path.join(source, `${request.image}.image`)) !== "file") {
-    return failed("source-image-missing", `${source} holds no ${request.image}.image`);
+  if (pathKind(path.join(sourceDirectory, "meta-inf.ston")) !== "file") {
+    return failed({ kind: "no-metadata" }, `${sourceDirectory} holds no meta-inf.ston`);
   }
-  if (pathKind(path.join(source, "meta-inf.ston")) !== "file") {
-    return failed("source-metadata-missing", `${source} holds no meta-inf.ston`);
+  const taken = findByName(scanImages(request.destinationProfile.imagesDir).images, request.newImage);
+  if (taken) {
+    return failed(
+      { kind: "name-taken", image: taken.name },
+      `There is already an image ${taken.name} in ${request.destinationProfile.imagesDir}`,
+      "Copy under another newImage, or delete that image first.",
+    );
   }
   if (pathKind(destinationDirectory) !== "missing") {
     return failed(
-      "destination-exists",
+      { kind: "destination-exists" },
       `${destinationDirectory} already exists, and a copy never replaces it`,
       "Copy under another newImage, or remove that directory first.",
     );
@@ -460,41 +495,49 @@ export async function copyImageBetweenProfiles(input: unknown): Promise<CopyBetw
       request.destinationProfile.imagesDir,
       request.newImage,
     );
-    fs.cpSync(source, temporaryDirectory, {
+    fs.cpSync(sourceDirectory, temporaryDirectory, {
       recursive: true,
       errorOnExist: true,
       force: false,
       preserveTimestamps: true,
     });
-    renameCopiedCompanionFile(temporaryDirectory, request.image, request.newImage, ".image");
-    renameCopiedCompanionFile(temporaryDirectory, request.image, request.newImage, ".changes");
-    repairCopiedImageMetadataInDirectory(temporaryDirectory, request.image, request.newImage);
+    renameCopiedCompanionFile(temporaryDirectory, sourceName, request.newImage, ".image");
+    renameCopiedCompanionFile(temporaryDirectory, sourceName, request.newImage, ".changes");
+    repairCopiedImageMetadataInDirectory({
+      directory: temporaryDirectory,
+      image: sourceName,
+      newImage: request.newImage,
+    });
 
-    const preflight = copyProblem(temporaryDirectory, request.image, request.newImage);
+    const preflight = copyProblem(temporaryDirectory, sourceName, request.newImage);
     if (preflight !== undefined) {
-      fs.rmSync(temporaryDirectory, { recursive: true, force: true });
-      return failed("preflight", preflight);
+      removeLeftovers(temporaryDirectory);
+      return failed({ kind: "preflight" }, preflight);
     }
 
     fs.renameSync(temporaryDirectory, destinationDirectory);
     temporaryDirectory = undefined;
-    const moved = copyProblem(destinationDirectory, request.image, request.newImage);
+    const moved = copyProblem(destinationDirectory, sourceName, request.newImage);
     if (moved !== undefined) {
-      return failed("post-move", moved, `Delete ${destinationDirectory} before copying again.`);
+      return failed({ kind: "post-move" }, moved, `Delete ${destinationDirectory} before copying again.`);
     }
 
-    return { ...base, ok: true };
+    const copied = readImageDirectory(request.destinationProfile.imagesDir, request.newImage);
+    return {
+      ...base,
+      ok: true,
+      ...(copied.kind === "image" ? { data: { image: readLauncherImage(copied.image) } } : {}),
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (temporaryDirectory !== undefined) {
       removeLeftovers(temporaryDirectory);
     }
-    return {
-      ...failed("exception", message),
-      ...(temporaryDirectory !== undefined && fs.existsSync(temporaryDirectory)
-        ? { leftBehind: temporaryDirectory }
-        : {}),
-    };
+    const leftBehind =
+      temporaryDirectory !== undefined && fs.existsSync(temporaryDirectory)
+        ? temporaryDirectory
+        : undefined;
+    return failed({ kind: "exception", ...(leftBehind ? { leftBehind } : {}) }, message);
   }
 }
 

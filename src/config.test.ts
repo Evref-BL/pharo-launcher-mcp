@@ -44,7 +44,7 @@ describe("loadPharoLauncherConfig", () => {
       PHARO_LAUNCHER_VM: "C:\\PL\\PharoConsole.exe",
       PHARO_LAUNCHER_IMAGE: "C:\\PL\\PharoLauncher.image",
       PHARO_LAUNCHER_SCRIPT: "C:\\PL\\pharo-launcher.cmd",
-    });
+    }, "win32");
 
     expect(config).toMatchObject({
       launcherDir: "C:\\PL",

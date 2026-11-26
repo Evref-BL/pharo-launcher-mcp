@@ -228,6 +228,27 @@ describe("buildLauncherCliInvocation", () => {
     expect(invocation.args).toEqual(["image", "list"]);
   });
 
+  // The config says which script runs the Launcher: a library caller's
+  // environment is not the command's.
+  it("runs the bundled script when the config names none, whatever the environment says", () => {
+    vi.stubEnv("PHARO_LAUNCHER_SCRIPT", process.execPath);
+    try {
+      const invocation = buildLauncherCliInvocation(
+        ["image", "list"],
+        launcherConfig({
+          launcherDir: "/missing",
+          launcherVm: "/missing/pharo",
+          launcherImage: "/missing/PharoLauncher.image",
+        }),
+      );
+
+      expect(invocation.command).not.toBe(process.execPath);
+      expect([invocation.command, ...invocation.args]).toContain(bundledLauncherScriptPath());
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("falls back to a headless direct VM invocation", () => {
     const invocation = buildLauncherCliInvocation(
       ["image", "list", "--ston"],
@@ -525,7 +546,7 @@ describe("buildLauncherCliInvocation", () => {
     }
   });
 
-  it("redirects detached launcher output to default log files without a profile", async () => {
+  it("redirects detached launcher output to the user's log directory without a profile", async () => {
     const stateRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pharo-launcher-mcp-detached-"),
     );
@@ -544,7 +565,8 @@ describe("buildLauncherCliInvocation", () => {
     if (process.platform !== "win32") {
       fs.chmodSync(scriptPath, 0o755);
     }
-    const logsDir = path.join(stateRoot, ".pharo-launcher-mcp", "logs");
+    // The user's logs directory, never the working directory.
+    const logsDir = path.join(stateRoot, "user-logs");
     fs.mkdirSync(logsDir, { recursive: true });
     const earlierStarts = ["2026-01-01T00-00-01-000Z", "2026-01-01T00-00-02-000Z", "2026-01-01T00-00-03-000Z"];
     for (const stamp of earlierStarts) {
@@ -565,6 +587,7 @@ describe("buildLauncherCliInvocation", () => {
             launcherVm: "unused",
             launcherImage: path.join(stateRoot, "PharoLauncher.image"),
             launcherScript: scriptPath,
+            userLogsDir: logsDir,
           }),
           timeoutMs: 2_000,
         },
@@ -1624,9 +1647,9 @@ describe("buildLauncherCliInvocation", () => {
   });
 
   // The standalone server's timeout is a fixed 30 s, and an image create
-  // still downloading its template outlives it. The timeout stops the shell
-  // running the VM, not the VM, which finishes the create.
-  it("lets a launcher command finish past the call's timeout", async () => {
+  // still downloading its template outlives it. The call answers at its
+  // timeout, and the VM goes on and finishes the create.
+  it("answers at the call's timeout, and lets a launcher command finish", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -1658,7 +1681,12 @@ describe("buildLauncherCliInvocation", () => {
         timeoutMs: 500,
       });
 
-      expect(result.timedOut).toBe(true);
+      expect(result).toMatchObject({ timedOut: true, exitCode: null });
+      expect(result.durationMs).toBeLessThan(1_500);
+      expect(fs.existsSync(createdPath)).toBe(false);
+      for (let waited = 0; !fs.existsSync(createdPath) && waited < 5_000; waited += 100) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
       expect(fs.existsSync(createdPath)).toBe(true);
     } finally {
       fs.rmSync(stateRoot, { recursive: true, force: true });

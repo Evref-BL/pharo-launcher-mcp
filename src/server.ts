@@ -5,7 +5,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { launcherCommandTools, ProfileTooDeepError, ToolInputError } from "./commandCatalog.js";
+import { launcherCommandTools, ProfileTooDeepError, InvalidInputError } from "./commandCatalog.js";
 import { loadPharoLauncherConfig } from "./config.js";
 import {
   failureResult,
@@ -111,7 +111,7 @@ export async function callTool(
     if (error instanceof ProfileTooDeepError) {
       return failureResult(error.message);
     }
-    if (error instanceof ToolInputError) {
+    if (error instanceof InvalidInputError) {
       return failureResult(invalidArgumentsText(name, tool.inputSchema, error));
     }
 

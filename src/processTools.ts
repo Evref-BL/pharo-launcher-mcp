@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import type { LauncherCliResult } from "./launcherCli.js";
-import type { LauncherProcess } from "./models.js";
 import {
   afterLeadingDigits,
   hasCaseInsensitiveSuffix,
@@ -18,7 +17,19 @@ interface WindowsProcessRecord {
   CommandLine?: string;
 }
 
-type PharoProcessRecord = LauncherProcess;
+/**
+ * A Pharo process of the machine, as its command line shows it: the image it
+ * names, when it names one, read from that line alone.
+ */
+export interface NativeProcess {
+  pid: number;
+  commandLine: string;
+  executablePath?: string;
+  imagePath?: string;
+  imageName?: string;
+}
+
+type PharoProcessRecord = NativeProcess;
 
 export interface NativeProcessToolCapability {
   platform: NodeJS.Platform;
@@ -47,11 +58,11 @@ export interface RunNativeProcessToolOptions {
  * image name stops among them.
  */
 export interface NativeProcessScope {
-  select(processes: readonly LauncherProcess[]): LauncherProcess[];
+  select(processes: readonly NativeProcess[]): NativeProcess[];
   imageTargets(
-    processes: readonly LauncherProcess[],
+    processes: readonly NativeProcess[],
     imageName: string,
-  ): LauncherProcess[];
+  ): NativeProcess[];
 }
 
 /** Every Pharo VM on the machine, an image named as its command line names it. */
@@ -115,8 +126,11 @@ function runProcessCommand(
   timeoutMs: number,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    // Under the C locale ps writes a non-ASCII byte as `M-CM-)`, and no image
+    // path matches a command line spelled so.
     const child = spawn(command, [...args], {
       windowsHide: true,
+      env: { ...process.env, LC_ALL: "C.UTF-8" },
     });
     let stdout = "";
     let stderr = "";
@@ -171,7 +185,9 @@ async function listWindowsPharoProcesses(
   timeoutMs: number,
   runCommand: NativeProcessCommandRunner,
 ): Promise<PharoProcessRecord[]> {
+  // Windows PowerShell writes in the console's code page unless told.
   const script = [
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;",
     "$processes = Get-CimInstance Win32_Process |",
     "Where-Object { $_.CommandLine -and $_.CommandLine -match '\\.image' -and ($_.Name -match 'Pharo|Squeak') } |",
     "Select-Object ProcessId, ExecutablePath, CommandLine;",
@@ -310,7 +326,7 @@ async function listNativePharoProcesses(
  */
 export async function listNativeProcesses(
   options: RunNativeProcessToolOptions = {},
-): Promise<LauncherProcess[]> {
+): Promise<NativeProcess[]> {
   return listNativePharoProcesses(
     nativeProcessToolCapability(options.platform),
     options.timeoutMs ?? 30_000,
@@ -320,7 +336,7 @@ export async function listNativeProcesses(
 
 interface KillFailure {
   pid: number;
-  message: string;
+  diagnostic: string;
 }
 
 /**
@@ -328,7 +344,7 @@ interface KillFailure {
  * (`ESRCH`) is stopped, which is what the kill was for.
  */
 function killEach(
-  targets: readonly LauncherProcess[],
+  targets: readonly NativeProcess[],
   killProcess: (pid: number) => void,
 ): { killed: number[]; failures: KillFailure[] } {
   const killed: number[] = [];
@@ -343,7 +359,7 @@ function killEach(
       } else {
         failures.push({
           pid,
-          message: error instanceof Error ? error.message : String(error),
+          diagnostic: error instanceof Error ? error.message : String(error),
         });
       }
     }
@@ -397,7 +413,7 @@ export async function runNativeProcessTool(
           ? processes.filter((process) => String(process.pid) === target)
           : scope.imageTargets(processes, target);
       if (targets.length === 0) {
-        return failed(`No matching Pharo process found for ${target}`);
+        return { ...failed(`No matching Pharo process found for ${target}`), processFailure: "no-match" };
       }
 
       const { killed, failures } = killEach(targets, killProcess);
@@ -405,7 +421,7 @@ export async function runNativeProcessTool(
         exitCode: failures.length === 0 ? 0 : 1,
         stdout: killed.map((pid) => `Killed ${pid}`).join("\n"),
         stderr: failures
-          .map(({ pid, message }) => `Could not kill pid ${pid}: ${message}`)
+          .map(({ pid, diagnostic }) => `Could not kill pid ${pid}: ${diagnostic}`)
           .join("\n"),
         durationMs: duration(startTime),
         timedOut: false,
@@ -416,6 +432,9 @@ export async function runNativeProcessTool(
 
     return failed(`Unsupported native process tool args: ${args.join(" ")}`);
   } catch (error) {
-    return failed(error instanceof Error ? error.message : String(error));
+    return {
+      ...failed(error instanceof Error ? error.message : String(error)),
+      processFailure: "list-failed",
+    };
   }
 }

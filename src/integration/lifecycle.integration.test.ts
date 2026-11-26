@@ -24,7 +24,7 @@ async function waitForProcess(
 
   while (Date.now() < deadline) {
     const listed = await liveLauncher(profile).listProcesses();
-    const process = listed.data?.find((item) => item.imageName === imageName);
+    const process = listed.data?.processes.find((item) => item.imageName === imageName);
     if (process) {
       return process;
     }
@@ -80,7 +80,7 @@ describe("PharoLauncher image lifecycle integration", () => {
         ),
       );
       const created = await launcher.imageInfo({ image });
-      if (!created.found) {
+      if (created.kind !== "image") {
         throw new Error(`${image} is not in ${images} after: ${createdText}`);
       }
       expect(created.image).toMatchObject({
@@ -129,7 +129,7 @@ describe("PharoLauncher image lifecycle integration", () => {
         `Copied image ${image} to ${copiedImageName}.`,
         `path: ${copyPath}`,
       ]);
-      expect((await launcher.imageInfo({ image: copiedImageName })).found).toBe(true);
+      expect((await launcher.imageInfo({ image: copiedImageName })).kind).toBe("image");
 
       const launchScript = path.join(
         profile.stateRoot,
@@ -191,7 +191,7 @@ describe("PharoLauncher image lifecycle integration", () => {
           await callLiveTool(profile, "image_delete", { image: copiedImageName }, options),
         ),
       ).toBe(`Deleted image ${copiedImageName}.`);
-      expect((await launcher.imageInfo({ image: copiedImageName })).found).toBe(false);
+      expect((await launcher.imageInfo({ image: copiedImageName })).kind).toBe("missing");
 
       expectOk("image delete source", await launcher.deleteImage({ image }));
       expect((await launcher.listImages()).images).toEqual([]);

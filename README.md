@@ -13,8 +13,7 @@ stopped or deleted.
 Requirements:
 
 - Node.js 22.12.0 or newer
-- Pharo Launcher installed on the host; the live tests run on Pharo Launcher
-  3.4.5
+- Pharo Launcher installed on the host
 
 ```sh
 npm install @evref-bl/pharo-launcher-mcp
@@ -37,9 +36,10 @@ Configure an MCP client to start the `pharo-launcher-mcp` command over stdio:
 
 `config` says which Launcher it found and where its images are; `image_list`
 reads them, and `template_list` asks the Launcher. Check the installation
-before connecting with `npx @evref-bl/pharo-launcher-mcp --health`; when the
-paths it found are wrong, set `PHARO_LAUNCHER_DIR`, `PHARO_LAUNCHER_VM` or
-`PHARO_LAUNCHER_IMAGE`.
+before connecting with `npx @evref-bl/pharo-launcher-mcp --health`, which exits
+1 when something is missing; when the paths it found are wrong, set
+`PHARO_LAUNCHER_DIR`, `PHARO_LAUNCHER_VM` or `PHARO_LAUNCHER_IMAGE`. `--help`
+lists the other checks.
 
 By default it drives the user's own Launcher and images. A **profile** gives it
 a Launcher image, images, VMs and templates of its own, for automation and
@@ -52,7 +52,8 @@ PHARO_LAUNCHER_MCP_PROFILE=isolated PHARO_LAUNCHER_MCP_STATE_ROOT=/path/to/profi
 The tools name what they act on, and ask for no confirmation. `process_kill`
 takes a pid or an image, and sees only the VMs running one of this Launcher's
 images; `image_delete` refuses an image a VM runs; `image_create` and
-`image_copy` check that the Launcher can open the image they made.
+`image_copy` check that the Launcher can open the image they made. An image's
+name is never a path.
 
 ## As a library
 
@@ -60,21 +61,36 @@ images; `image_delete` refuses an image a VM runs; `image_create` and
 import { openPharoLauncher } from "@evref-bl/pharo-launcher-mcp";
 
 const launcher = openPharoLauncher({ profile: { stateRoot: "/path/to/profile" } });
+await launcher.updateTemplates(); // a new profile has no templates yet
+// A template is named as listTemplates names it; the names change with Pharo's releases.
 const made = await launcher.createImage({ image: "task", template: "Pharo 14.0 - 64bit (stable)" });
-const started = await launcher.startImage({ image: "task", detached: true });
+if (!made.ok) throw new Error(made.diagnostic);
+await launcher.startImage({ image: "task", detached: true, displayMode: "interactive" });
 ```
 
 Without a profile it opens the user's own Launcher. Each call answers a typed
-object, which the MCP tools only render as text, and the types come with it.
-The library reads none of the command's `PHARO_LAUNCHER_*` variables: a program
+object, which the MCP tools render as text: what the library refuses, a
+running image's delete for one, the tools refuse. The types come with it. The
+library reads none of the command's `PHARO_LAUNCHER_*` variables: a program
 says what it wants.
 
 ## What is promised
 
-Semantic versioning covers the library's exports, the MCP tools' names and
-arguments, and the JSON the command prints for `--health`, `--version-check`,
-`--validate-installation` and `--probe-images`. The tools' answers are text for
-a model to read, and may be reworded in any release.
+Semantic versioning covers:
+
+- the library's exports and their types;
+- the MCP tools' names and arguments;
+- the command's options, the exit status of its checks, the `ok` field of the
+  JSON that `--health`, `--version-check` and `--validate-installation` print,
+  and the environment variables it reads.
+
+A minor release may add an optional field, a `failure` kind or a method of
+`PharoLauncher`. A program that switches over a `kind` keeps a default case,
+and one that implements `PharoLauncher`, as a test double does, implements the
+`Pick` of the methods it calls.
+
+The rest of what the checks print, and the tools' answers, are text for a
+person or a model to read, and may be reworded in any release.
 
 ## Documentation
 

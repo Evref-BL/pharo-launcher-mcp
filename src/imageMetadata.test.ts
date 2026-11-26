@@ -62,7 +62,7 @@ describe("repairCopiedImageMetadata", () => {
 
     expect(
       repairCopiedImageMetadata(config, "MCP12-2", "SmokeTarget"),
-    ).toMatchObject({ status: "repaired", metaInfPath });
+    ).toMatchObject({ kind: "repaired", metaInfPath });
     expect(fs.readFileSync(metaInfPath, "utf8")).toContain(
       "RelativePath [ 'SmokeTarget', 'SmokeTarget.image' ]",
     );
@@ -95,7 +95,7 @@ describe("repairCopiedImageMetadata", () => {
     );
 
     expect(repairCopiedImageMetadata(config, "Base", "Task")).toMatchObject({
-      status: "repaired",
+      kind: "repaired",
       metaInfPath,
     });
     const repaired = fs.readFileSync(metaInfPath, "utf8");
@@ -135,7 +135,7 @@ describe("repairCopiedImageMetadata", () => {
 
     expect(
       repairCopiedImageMetadata(config, sourceImageName, targetImageName),
-    ).toMatchObject({ status: "repaired", metaInfPath });
+    ).toMatchObject({ kind: "repaired", metaInfPath });
     const repaired = fs.readFileSync(metaInfPath, "utf8");
     expect(repaired).toContain(
       "RelativePath [ 'Task''s Target', 'Task''s Target.image' ]",
@@ -157,6 +157,6 @@ describe("repairCopiedImageMetadata", () => {
       "Target",
     );
 
-    expect(result).toMatchObject({ status: "skipped" });
+    expect(result).toMatchObject({ kind: "skipped" });
   });
 });

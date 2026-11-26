@@ -6,19 +6,24 @@ export interface LauncherCommandTool {
   inputSchema: Record<string, unknown>;
 }
 
-export class ToolInputError extends Error {
+/**
+ * An input a call cannot run with: a value of the wrong type, a required one
+ * left out, an image name that is a path. Thrown, or the promise rejected,
+ * before anything runs; its message says which.
+ */
+export class InvalidInputError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "ToolInputError";
+    this.name = "InvalidInputError";
   }
 }
 
 /**
  * A profile whose VM directory is too deep for the VM to load its own
- * modules. A `ToolInputError`, as it was before it had a class of its own, so
- * a caller that catches one catches it; its message says what to do.
+ * modules: the `stateRoot` the caller gave is the input at fault. Its message
+ * says what to do.
  */
-export class ProfileTooDeepError extends ToolInputError {
+export class ProfileTooDeepError extends InvalidInputError {
   constructor(message: string) {
     super(message);
     this.name = "ProfileTooDeepError";
@@ -57,17 +62,22 @@ export function inputObject(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
+/** An argument left out: absent, or `null`, which some clients send for one they do not use. */
+function absent(value: unknown): value is undefined | null {
+  return value === undefined || value === null;
+}
+
 export function optionalString(
   input: Record<string, unknown>,
   key: string,
 ): string | undefined {
   const value = input[key];
-  if (value === undefined) {
+  if (absent(value)) {
     return undefined;
   }
 
   if (typeof value !== "string" || value.length === 0) {
-    throw new ToolInputError(`${key} must be a non-empty string`);
+    throw new InvalidInputError(`${key} must be a non-empty string`);
   }
 
   return value;
@@ -79,10 +89,36 @@ export function requiredString(
 ): string {
   const value = optionalString(input, key);
   if (!value) {
-    throw new ToolInputError(`${key} is required`);
+    throw new InvalidInputError(`${key} is required`);
   }
 
   return value;
+}
+
+/**
+ * A name of an image, never a path: the Launcher puts an image at
+ * `<images>/<name>`, and a name holding a separator, or `.` or `..`, would put
+ * it somewhere else, outside a profile even. Nor does it start with a dot:
+ * the images directory's hidden entries are not read as images, so such an
+ * image could be made and never found again.
+ */
+export function validImageName(name: string, key: string): string {
+  if (name === "." || name === ".." || /[\\/]/.test(name)) {
+    throw new InvalidInputError(`${key} must be an image name, not a path`);
+  }
+  if (name.startsWith(".")) {
+    throw new InvalidInputError(`${key} must be an image name, which never starts with a dot`);
+  }
+  return name;
+}
+
+export function requiredImageName(input: Record<string, unknown>, key: string): string {
+  return validImageName(requiredString(input, key), key);
+}
+
+function optionalImageName(input: Record<string, unknown>, key: string): string | undefined {
+  const value = optionalString(input, key);
+  return value === undefined ? undefined : validImageName(value, key);
 }
 
 /** A path the caller named, read from the caller's working directory. */
@@ -94,13 +130,13 @@ function optionalPath(input: Record<string, unknown>, key: string): string | und
 /** A pid: a whole number, given as one or as its digits. */
 function optionalPid(input: Record<string, unknown>, key: string): number | undefined {
   const value = input[key];
-  if (value === undefined) {
+  if (absent(value)) {
     return undefined;
   }
 
   const pid = typeof value === "string" && /^\s*\d+\s*$/.test(value) ? Number(value) : value;
   if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0) {
-    throw new ToolInputError(`${key} must be a process id, a whole number`);
+    throw new InvalidInputError(`${key} must be a process id, a whole number`);
   }
 
   return pid;
@@ -108,12 +144,12 @@ function optionalPid(input: Record<string, unknown>, key: string): number | unde
 
 function optionalBoolean(input: Record<string, unknown>, key: string): boolean {
   const value = input[key];
-  if (value === undefined) {
+  if (absent(value)) {
     return false;
   }
 
   if (typeof value !== "boolean") {
-    throw new ToolInputError(`${key} must be a boolean`);
+    throw new InvalidInputError(`${key} must be a boolean`);
   }
 
   return value;
@@ -123,7 +159,7 @@ function optionalDisplayMode(
   input: Record<string, unknown>,
 ): "headless" | "interactive" | undefined {
   const value = input.displayMode;
-  if (value === undefined) {
+  if (absent(value)) {
     return undefined;
   }
 
@@ -131,7 +167,7 @@ function optionalDisplayMode(
     return value;
   }
 
-  throw new ToolInputError("displayMode must be headless or interactive");
+  throw new InvalidInputError("displayMode must be headless or interactive");
 }
 
 function addOption(args: string[], flag: string, value: string | undefined): void {
@@ -154,14 +190,14 @@ function createImageArgs(input: unknown): string[] {
   const args = ["image", "create", "--no-launch"];
   addOption(args, "--templateName", requiredString(object, "template"));
   addOption(args, "--templateCategory", optionalString(object, "category"));
-  args.push(requiredString(object, "image"));
+  args.push(requiredImageName(object, "image"));
   return args;
 }
 
 // Without --force PharoLauncher asks on standard input, and keeps asking: a
 // call has nobody there to answer. Calling it is the confirmation.
 function deleteImageArgs(input: unknown): string[] {
-  return ["image", "delete", "--force", requiredString(inputObject(input), "image")];
+  return ["image", "delete", "--force", requiredImageName(inputObject(input), "image")];
 }
 
 function startImageArgs(input: unknown): string[] {
@@ -171,13 +207,13 @@ function startImageArgs(input: unknown): string[] {
   addOption(args, "--script", optionalPath(object, "script"));
   addOption(args, "--displayMode", optionalDisplayMode(object));
   addFlag(args, "--detached", optionalBoolean(object, "detached"));
-  args.push(requiredString(object, "image"));
+  args.push(requiredImageName(object, "image"));
   return args;
 }
 
 function copyImageArgs(input: unknown): string[] {
   const object = inputObject(input);
-  return ["image", "copy", requiredString(object, "image"), requiredString(object, "newImage")];
+  return ["image", "copy", requiredImageName(object, "image"), requiredImageName(object, "newImage")];
 }
 
 // Never a Launcher command: the native process tools run it, and the flag
@@ -185,9 +221,9 @@ function copyImageArgs(input: unknown): string[] {
 function killProcessArgs(input: unknown): string[] {
   const object = inputObject(input);
   const pid = optionalPid(object, "pid");
-  const image = optionalString(object, "image");
+  const image = optionalImageName(object, "image");
   if (pid !== undefined && image !== undefined) {
-    throw new ToolInputError("Give pid or image, not both.");
+    throw new InvalidInputError("Give pid or image, not both.");
   }
   if (pid !== undefined) {
     return ["process", "kill", "--pid", String(pid)];
@@ -195,7 +231,7 @@ function killProcessArgs(input: unknown): string[] {
   if (image !== undefined) {
     return ["process", "kill", "--image", image];
   }
-  throw new ToolInputError("Give the pid or the image of the process to kill.");
+  throw new InvalidInputError("Give the pid or the image of the process to kill.");
 }
 
 // STON names every template whole; the table shortens a name past 75
@@ -209,7 +245,7 @@ function listTemplatesArgs(input: unknown): string[] {
 
 /**
  * The Launcher command each call runs, its arguments read from the call's
- * input. Each refuses an input it cannot run with a `ToolInputError`.
+ * input. Each refuses an input it cannot run with a `InvalidInputError`.
  */
 export const commandArgs = {
   createImage: createImageArgs,
@@ -275,8 +311,9 @@ export const launcherCommandTools: LauncherCommandTool[] = [
     name: "image_start",
     description:
       "Start an image, optionally with a script for it to run. Unless " +
-      "detached, the call waits for the image to quit, and stops it when the " +
-      "call's time is up.",
+      "detached, the call waits for the image to quit. When the call's time " +
+      "is up, a profile's image is stopped; outside a profile the call stops " +
+      "waiting, and the image goes on.",
     inputSchema: objectSchema(
       {
         image: imageSchema,

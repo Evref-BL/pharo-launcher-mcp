@@ -9,8 +9,56 @@ export interface LauncherPlatformDefaults {
   bundledScriptName: LauncherScriptName;
 }
 
-function homeDir(env: NodeJS.ProcessEnv): string | undefined {
-  return env.HOME ?? env.USERPROFILE;
+/**
+ * The user's home: on Windows `USERPROFILE`, as Pharo's own `FileLocator home`
+ * reads it, `HOME` being set there only by some shells; elsewhere `HOME`.
+ */
+function homeDir(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {
+  return platform === "win32" ? (env.USERPROFILE ?? env.HOME) : (env.HOME ?? env.USERPROFILE);
+}
+
+/**
+ * Where this package writes the logs of detached starts outside a profile: the
+ * platform's place for a user's application logs, never the working
+ * directory, which a client may set to `/`.
+ */
+export function userLogsDirectory(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  const paths = pathApi(platform);
+  if (platform === "win32" && env.LOCALAPPDATA) {
+    return paths.join(env.LOCALAPPDATA, "pharo-launcher-mcp", "logs");
+  }
+  if (platform !== "win32" && platform !== "darwin" && env.XDG_STATE_HOME) {
+    return paths.join(env.XDG_STATE_HOME, "pharo-launcher-mcp", "logs");
+  }
+  const home = homeDir(env, platform);
+  if (!home) {
+    return undefined;
+  }
+  if (platform === "darwin") {
+    return paths.join(home, "Library", "Logs", "pharo-launcher-mcp");
+  }
+  return platform === "win32"
+    ? paths.join(home, "AppData", "Local", "pharo-launcher-mcp", "logs")
+    : paths.join(home, ".local", "state", "pharo-launcher-mcp", "logs");
+}
+
+/**
+ * A path a caller gave, as every read of it takes it: a relative one from the
+ * working directory, once and for all, and an absolute one without the
+ * trailing separators that would hide a `.app` at its end.
+ */
+export function normalizedPath(value: string, platform: NodeJS.Platform = process.platform): string {
+  // The platform's rules: on POSIX a backslash is a character of a name.
+  const paths = pathApi(platform);
+  if (!paths.isAbsolute(value)) {
+    return path.resolve(value);
+  }
+  const normalized = paths.normalize(value);
+  const root = paths.parse(normalized).root;
+  return normalized.length > root.length ? normalized.replace(/[\\/]+$/, "") : normalized;
 }
 
 function pathApi(platform: NodeJS.Platform): path.PlatformPath {
@@ -55,7 +103,7 @@ export function defaultLauncherDir(
     }
   }
 
-  const home = homeDir(env);
+  const home = homeDir(env, platform);
 
   if (platform === "darwin" && home) {
     return paths.join(home, "Library", "Application Support", "Pharo Launcher");
@@ -128,7 +176,7 @@ export function launcherUserFilesLocation(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
 ): string | undefined {
-  const home = homeDir(env);
+  const home = homeDir(env, platform);
   if (!home) {
     return undefined;
   }
@@ -257,7 +305,7 @@ export function launcherModulePathBudgetMessage(
     `A module path may be at most ${budget.limit} characters and ${
       budget.measured ? "one there is" : "a downloaded VM would reach"
     } ${budget.longestModulePath}.`,
-    `Shorten the profile root by at least ${budget.over} characters.`,
+    `Shorten the path to that directory by at least ${budget.over} characters.`,
     "Loading one anyway fails as a missing symbol, not a missing file, which is why this is checked here.",
   ].join("\n");
 }

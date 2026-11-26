@@ -12,6 +12,7 @@
  * share it; it is matched ignoring case, as the Launcher finds images.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { PharoLauncherConfig } from "./config.js";
 
@@ -30,11 +31,16 @@ export interface LaunchLogPaths {
 const logFileName =
   /^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)-(.+)-launch\.(?:out|err)\.log$/;
 
-/** Where detached starts write: the profile's logs directory, else one in the working directory. */
+/**
+ * Where detached starts write: the profile's logs directory, else the user's
+ * logs directory for this package, else one under the system's temporary
+ * directory. Never the working directory, which a client may set to `/`.
+ */
 export function launchLogsDirectory(config: PharoLauncherConfig): string {
   return (
     config.profile?.logsDir ??
-    path.join(process.cwd(), ".pharo-launcher-mcp", "logs")
+    config.userLogsDir ??
+    path.join(os.tmpdir(), "pharo-launcher-mcp", "logs")
   );
 }
 

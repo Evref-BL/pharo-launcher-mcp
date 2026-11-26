@@ -25,7 +25,10 @@ when the caller has chosen to cross that boundary:
   images directory and the host's process list
 - `process_list`, which reads the host's process list
 
-They are non-mutating, but they still cross the live host boundary.
+They change no image and no process, but they cross the live host boundary,
+and in a profile a Launcher command first lays the profile out: it creates its
+directories, copies and patches the control image, and writes the Launcher's
+configuration.
 
 ## Status Signals
 
@@ -34,7 +37,9 @@ results instead, which carry status data for callers:
 
 - `ok`
 - `data`, each call's own
-- `diagnostic`, why it failed
+- `failure`, why it did nothing, as a `kind`
+- `diagnostic`, why it failed, in words
+- `action`, what to do about it
 - command `durationMs`
 - command `exitCode`
 - command `signal`, when one ended the command
@@ -55,19 +60,22 @@ The mutation hooks that can participate in cleanup are:
 The caller must pass either a recorded pid or an owned image. Ambiguous
 cleanup input is not allowed. It must never use these hooks against the user's
 source image, default profile, unrelated images, unrelated VMs, or a process
-that cannot be tied to the smoke run.
+that cannot be tied to the caller's live check.
 
 ## Timeout Boundary
 
 Every launcher call must have a bounded timeout supplied by the caller or by
 the server default. A timeout means the caller records the phase as failed,
-retains command metadata, and continues with owned cleanup. A timeout does not
-authorize broader host cleanup.
+retains command metadata, and continues with owned cleanup. The call answers at
+its timeout and a Launcher command still running goes on, so cleanup waits for
+it, or finds its VM with `process_list`, before deleting the profile. A
+timeout does not authorize broader host cleanup.
 
 ## Profile And Artifact Boundary
 
-A future isolated live check must use a disposable profile rooted by
-`PHARO_LAUNCHER_MCP_STATE_ROOT` or the explicit profile path variables:
+An isolated live check uses a disposable profile rooted by
+`PHARO_LAUNCHER_MCP_STATE_ROOT`, any of whose paths the explicit profile path
+variables may move:
 
 - `PHARO_LAUNCHER_MCP_LAUNCHER_IMAGE`
 - `PHARO_LAUNCHER_MCP_IMAGES_DIR`
@@ -79,13 +87,9 @@ A future isolated live check must use a disposable profile rooted by
 Retain the launcher logs, the library's results, image names, image paths,
 process pids, and timeout reasons before deleting disposable directories.
 
-## Follow-Up Policy
+## What The Caller Owns
 
-No launcher-side blocking hook gap is currently identified for caller-managed
-isolated live checks. pharo-launcher-mcp exposes the needed status, timeout,
-image delete, and process kill primitives. Callers still own higher-level
-ownership, approval, artifact retention, and idempotent cleanup policy.
-
-If a future caller needs one atomic cleanup/report command instead of composing
-the existing primitives, create a pharo-launcher-mcp follow-up work item. Do
-not bypass the safety gate with raw host commands.
+pharo-launcher-mcp gives the status, timeout, image delete, and process kill a
+caller-managed live check needs. The caller owns which images and processes are
+its own, approval, keeping artifacts, and cleanup that can run twice. It does
+not reach past them with raw host commands.

@@ -71,6 +71,13 @@ describe("cross-profile image copy", () => {
     expect(() => resolveProfileLocation(profile, "sourceProfile")).toThrow(message);
   });
 
+  it("takes a profile path given as null as left out", () => {
+    expect(resolveProfileLocation({ stateRoot: "/p/cache", imagesDir: null }, "sourceProfile")).toEqual({
+      stateRoot: path.resolve("/p/cache"),
+      imagesDir: path.join(path.resolve("/p/cache"), "images"),
+    });
+  });
+
   it("copies an image between profiles, renamed, and repairs its metadata", async () => {
     const sourceRoot = tempProfileRoot("source");
     const destinationRoot = tempProfileRoot("destination");
@@ -87,14 +94,21 @@ describe("cross-profile image copy", () => {
 
       expect(result).toEqual({
         ok: true,
-        image: "Base",
-        newImage: "Task",
+        data: {
+          image: expect.objectContaining({
+            name: "Task",
+            imagePath: path.join(destinationDirectory, "Task.image"),
+          }),
+        },
         sourceProfile: { stateRoot: sourceRoot, imagesDir: path.join(sourceRoot, "images") },
         destinationProfile: {
           stateRoot: destinationRoot,
           imagesDir: path.join(destinationRoot, "images"),
         },
-        source: imageDirectory(sourceRoot, "Base"),
+        source: {
+          directory: imageDirectory(sourceRoot, "Base"),
+          imagePath: path.join(imageDirectory(sourceRoot, "Base"), "Base.image"),
+        },
         destination: {
           directory: destinationDirectory,
           imagePath: path.join(destinationDirectory, "Task.image"),
@@ -133,8 +147,46 @@ describe("cross-profile image copy", () => {
     }
   });
 
+  it("finds the source as every call finds an image, ignoring case", async () => {
+    const sourceRoot = tempProfileRoot("user");
+    const destinationRoot = tempProfileRoot("destination");
+    try {
+      writeImage(sourceRoot, "Mine");
+
+      const result = await copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot },
+        destinationProfile: { stateRoot: destinationRoot },
+        image: "mine",
+        newImage: "Task",
+      });
+
+      expect(result).toMatchObject({ ok: true, source: { directory: imageDirectory(sourceRoot, "Mine") } });
+      expect(fs.readdirSync(imageDirectory(destinationRoot, "Task")).sort()).toEqual([
+        "Task.changes",
+        "Task.image",
+        "meta-inf.ston",
+      ]);
+    } finally {
+      removeProfileRoot(sourceRoot);
+      removeProfileRoot(destinationRoot);
+    }
+  });
+
   it("refuses an input that is not an object, with a rejected promise", async () => {
-    await expect(copyImageBetweenProfiles(undefined)).rejects.toThrow("arguments must be an object");
+    await expect(
+      copyImageBetweenProfiles(undefined as unknown as Parameters<typeof copyImageBetweenProfiles>[0]),
+    ).rejects.toThrow("arguments must be an object");
+  });
+
+  it.each(["../escape", "a/b", ".."])("refuses %s as a name, which is a path", async (newImage) => {
+    await expect(
+      copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: "/p" },
+        destinationProfile: { stateRoot: "/q" },
+        image: "Base",
+        newImage,
+      }),
+    ).rejects.toThrow("newImage must be an image name, not a path");
   });
 
   it("accepts launcher metadata without an image FileLocator during cross-profile copy", async () => {
@@ -267,7 +319,7 @@ describe("cross-profile image copy", () => {
 
       expect(result).toMatchObject({
         ok: false,
-        failure: "preflight",
+        failure: { kind: "preflight" },
         diagnostic: "its meta-inf.ston still names Base.image",
       });
       expect(fs.existsSync(imageDirectory(destinationRoot, "Task"))).toBe(false);
@@ -290,8 +342,8 @@ describe("cross-profile image copy", () => {
 
       expect(result).toMatchObject({
         ok: false,
-        failure: "source-missing",
-        diagnostic: `${imageDirectory(sourceRoot, "Missing")} does not exist`,
+        failure: { kind: "no-such-image", image: "Missing" },
+        diagnostic: `There is no image Missing in ${path.join(sourceRoot, "images")}`,
       });
       expect(fs.existsSync(imageDirectory(destinationRoot, "Task"))).toBe(false);
     } finally {
@@ -300,7 +352,7 @@ describe("cross-profile image copy", () => {
     }
   });
 
-  it("never replaces an image the destination has", async () => {
+  it("never replaces an image the destination has, in any case", async () => {
     const sourceRoot = tempProfileRoot("source");
     const destinationRoot = tempProfileRoot("destination");
     try {
@@ -311,12 +363,38 @@ describe("cross-profile image copy", () => {
         sourceProfile: { stateRoot: sourceRoot },
         destinationProfile: { stateRoot: destinationRoot },
         image: "Base",
+        newImage: "task",
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        failure: { kind: "name-taken", image: "Task" },
+        diagnostic: `There is already an image Task in ${path.join(destinationRoot, "images")}`,
+        action: "Copy under another newImage, or delete that image first.",
+      });
+    } finally {
+      removeProfileRoot(sourceRoot);
+      removeProfileRoot(destinationRoot);
+    }
+  });
+
+  it("never replaces a directory the destination has", async () => {
+    const sourceRoot = tempProfileRoot("source");
+    const destinationRoot = tempProfileRoot("destination");
+    try {
+      writeImage(sourceRoot, "Base");
+      fs.mkdirSync(imageDirectory(destinationRoot, "Task"));
+
+      const result = await copyImageBetweenProfiles({
+        sourceProfile: { stateRoot: sourceRoot },
+        destinationProfile: { stateRoot: destinationRoot },
+        image: "Base",
         newImage: "Task",
       });
 
       expect(result).toMatchObject({
         ok: false,
-        failure: "destination-exists",
+        failure: { kind: "destination-exists" },
         diagnostic: `${imageDirectory(destinationRoot, "Task")} already exists, and a copy never replaces it`,
         action: "Copy under another newImage, or remove that directory first.",
       });
@@ -333,6 +411,7 @@ describe("cross-profile image copy", () => {
       const sourceDirectory = imageDirectory(sourceRoot, "Base");
       fs.mkdirSync(sourceDirectory, { recursive: true });
       fs.writeFileSync(path.join(sourceDirectory, "Base.image"), "");
+      fs.writeFileSync(path.join(sourceDirectory, "Base.changes"), "");
       fs.writeFileSync(path.join(sourceDirectory, "meta-inf.ston"), "PhLImage {}");
 
       const result = await copyImageBetweenProfiles({
@@ -344,7 +423,7 @@ describe("cross-profile image copy", () => {
 
       expect(result).toMatchObject({
         ok: false,
-        failure: "preflight",
+        failure: { kind: "preflight" },
         diagnostic: "its meta-inf.ston does not name Task.image",
       });
       expect(fs.readdirSync(path.join(destinationRoot, "images"))).toEqual([]);
@@ -355,9 +434,10 @@ describe("cross-profile image copy", () => {
   });
 
   it.each([
-    ["source-image-missing", "Base.image"],
-    ["source-metadata-missing", "meta-inf.ston"],
-  ])("says %s when the source lacks %s", async (failure, missing) => {
+    [{ kind: "no-such-image", notAnImage: { hasImage: false, hasChanges: true } }, "Base.image"],
+    [{ kind: "no-such-image", notAnImage: { hasImage: true, hasChanges: false } }, "Base.changes"],
+    [{ kind: "no-metadata" }, "meta-inf.ston"],
+  ])("says %j when the source lacks %s", async (failure, missing) => {
     const sourceRoot = tempProfileRoot("source");
     const destinationRoot = tempProfileRoot("destination");
     try {
@@ -392,7 +472,7 @@ describe("cross-profile image copy", () => {
         newImage: "Task",
       });
 
-      expect(result).toMatchObject({ ok: false, failure: "exception" });
+      expect(result).toMatchObject({ ok: false, failure: { kind: "exception" } });
       expect(result.diagnostic).toBeDefined();
     } finally {
       removeProfileRoot(sourceRoot);
@@ -416,10 +496,12 @@ describe("cross-profile image copy", () => {
 
       expect(result).toMatchObject({
         ok: false,
-        failure: "profile-path-missing",
-        missingProfilePaths: [
-          { profile: "destinationProfile", field: "stateRoot", path: destinationRoot, given: true },
-        ],
+        failure: {
+          kind: "profile-path-missing",
+          paths: [
+            { profile: "destinationProfile", field: "stateRoot", path: destinationRoot, given: true },
+          ],
+        },
         diagnostic: `destinationProfile.stateRoot ${destinationRoot} does not exist.`,
       });
       expect(fs.existsSync(destinationRoot)).toBe(false);
@@ -445,15 +527,17 @@ describe("cross-profile image copy", () => {
 
       expect(result).toMatchObject({
         ok: false,
-        failure: "profile-path-missing",
-        missingProfilePaths: [
-          {
-            profile: "destinationProfile",
-            field: "imagesDir",
-            path: path.join(parent, "images"),
-            given: false,
-          },
-        ],
+        failure: {
+          kind: "profile-path-missing",
+          paths: [
+            {
+              profile: "destinationProfile",
+              field: "imagesDir",
+              path: path.join(parent, "images"),
+              given: false,
+            },
+          ],
+        },
         diagnostic: `destinationProfile.stateRoot ${parent} holds no images/ directory.`,
       });
       expect(fs.existsSync(path.join(parent, "images"))).toBe(false);
@@ -477,7 +561,7 @@ describe("cross-profile image copy", () => {
 
       expect(result).toMatchObject({
         ok: false,
-        failure: "profile-path-missing",
+        failure: { kind: "profile-path-missing" },
         diagnostic: `destinationProfile.imagesDir ${missing} does not exist.`,
       });
     } finally {

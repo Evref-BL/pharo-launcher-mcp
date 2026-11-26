@@ -1,9 +1,7 @@
 /**
  * The package's entry point: what a Node program calls to drive Pharo
- * Launcher, in its own process.
- *
- * Everything here is the semver promise. The MCP server is the
- * `pharo-launcher-mcp` command, not part of it.
+ * Launcher, in its own process. Everything it exports is under semantic
+ * versioning; the README says what else is.
  */
 import { configForSettings, type LauncherSettings } from "./config.js";
 import { openLauncher, type PharoLauncher } from "./launcher.js";
@@ -17,6 +15,9 @@ export type {
   StartImageInput,
 } from "./launcher.js";
 export type {
+  DeleteImageFailure,
+  DeleteImageResult,
+  KillProcessFailure,
   KillProcessResult,
   LauncherCommandResult,
   LauncherCommandRun,
@@ -28,23 +29,29 @@ export type {
   LauncherTemplate,
   MadeImageFailure,
   MadeImageResult,
+  NameTaken,
+  NoSuchImage,
+  NoTemplates,
   NotAnImage,
+  ProcessListResult,
   StartImageResult,
   TemplateCategoriesResult,
   TemplateListResult,
   TemplateSources,
   TemplateUpdateResult,
 } from "./models.js";
-export type {
-  CopyBetweenProfilesInput,
-  CopyBetweenProfilesResult,
-  CrossProfileCopyFailure,
-  MissingProfilePath,
-  ProfileLocation,
+export {
+  copyImageBetweenProfiles,
+  type CopyBetweenProfilesFailure,
+  type CopyBetweenProfilesInput,
+  type CopyBetweenProfilesResult,
+  type ImageLocation,
+  type MissingProfilePath,
+  type ProfileLocation,
+  type ResolvedProfile,
 } from "./crossProfileCopy.js";
-export type { PharoLauncherConfigReport } from "./discovery.js";
 export type { LauncherSettings } from "./config.js";
-export { ProfileTooDeepError, ToolInputError } from "./commandCatalog.js";
+export { InvalidInputError, ProfileTooDeepError } from "./commandCatalog.js";
 export {
   readImageDirectory,
   readLauncherImage,
@@ -53,11 +60,16 @@ export {
 } from "./imageStore.js";
 export {
   repairCopiedImageMetadataInDirectory,
+  type ImageMetadataRepairInput,
   type ImageMetadataRepairResult,
 } from "./imageMetadata.js";
 
 export interface OpenPharoLauncherOptions extends LauncherSettings {
-  /** How long a Launcher command may take before it is stopped; 30 s. */
+  /**
+   * How long a call waits for a Launcher command; 30 s. A command still
+   * running then goes on, and the call answers `command.timedOut`. Only a VM
+   * a profile's waited `startImage` runs itself is stopped.
+   */
   timeoutMs?: number;
 }
 

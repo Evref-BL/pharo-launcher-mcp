@@ -229,6 +229,31 @@ describe("PharoLauncher discovery", () => {
     expect(report.service).toBe("pharo-launcher-mcp");
   });
 
+  it("takes a new profile, whose Launcher image its first command copies, for healthy", () => {
+    const installation = tempLauncherConfig();
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pharo-launcher-mcp-profile-"));
+    tempDirs.push(stateRoot);
+    const profileImage = path.join(stateRoot, "launcher", "PharoLauncher.image");
+    const config = {
+      ...installation,
+      launcherImage: profileImage,
+      profile: {
+        name: "new",
+        stateRoot,
+        launcherImage: profileImage,
+        imagesDir: path.join(stateRoot, "images"),
+        vmsDir: path.join(stateRoot, "vms"),
+        templateSourcesDir: path.join(stateRoot, "templates"),
+        initScriptsDir: path.join(stateRoot, "init-scripts"),
+        logsDir: path.join(stateRoot, "logs"),
+      },
+    };
+
+    expect(getPharoLauncherHealth(config).ok).toBe(true);
+    fs.rmSync(installation.installationLauncherImage);
+    expect(getPharoLauncherHealth(config).ok).toBe(false);
+  });
+
   it("runs version through a harmless --version call", async () => {
     const calls: readonly string[][] = [];
     const runner: LauncherCliRunner = async (args) => {

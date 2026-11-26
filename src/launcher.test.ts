@@ -4,8 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LauncherCliRunner } from "./discovery.js";
 import type { LauncherCliResult } from "./launcherCli.js";
-import { ProfileTooDeepError, ToolInputError } from "./commandCatalog.js";
-import { openLauncher as openPharoLauncher, type PharoLauncher } from "./launcher.js";
+import { InvalidInputError, ProfileTooDeepError } from "./commandCatalog.js";
+import { configForSettings } from "./config.js";
+import { getPharoLauncherConfigReport } from "./discovery.js";
+import { openLauncher as openPharoLauncher, type PharoLauncher, type StartImageInput } from "./launcher.js";
+import * as library from "./library.js";
 import { openPharoLauncher as openLibrary } from "./library.js";
 import { launcherModulePathLimit } from "./platform.js";
 import { toolNames } from "./server.js";
@@ -32,9 +35,11 @@ function stdout(text: string): LauncherCliRunner {
 
 // The tool names exist because MCP needs strings. The functions exist because
 // a consumer in the same process does not. Neither list generates the other,
-// so this is what keeps them level.
-const functionForTool: Record<string, keyof PharoLauncher> = {
-  config: "describeConfig",
+// so this is what keeps them level. `config` says what the command found,
+// which a program that opened the library knows; the copy between profiles
+// needs no launcher, and is a function of its own.
+const functionForTool: Record<string, keyof PharoLauncher | "copyImageBetweenProfiles" | null> = {
+  config: null,
   image_copy_between_profiles: "copyImageBetweenProfiles",
   image_copy: "copyImage",
   image_create: "createImage",
@@ -56,7 +61,11 @@ describe("openPharoLauncher", () => {
     for (const name of toolNames) {
       const functionName = functionForTool[name];
       expect(functionName, `${name} has no library function`).toBeDefined();
-      expect(typeof launcher[functionName!]).toBe("function");
+      if (functionName === "copyImageBetweenProfiles") {
+        expect(typeof library.copyImageBetweenProfiles).toBe("function");
+      } else if (functionName !== null) {
+        expect(typeof launcher[functionName!]).toBe("function");
+      }
     }
 
     expect(Object.keys(functionForTool).sort()).toEqual([...toolNames].sort());
@@ -73,7 +82,7 @@ describe("openPharoLauncher", () => {
     const result = await launcher.listProcesses();
 
     expect(result.ok).toBe(true);
-    expect(result.data).toEqual([]);
+    expect(result.data).toEqual({ processes: [] });
     expect(result).not.toHaveProperty("content");
   });
 
@@ -116,27 +125,61 @@ describe("openPharoLauncher", () => {
     ).rejects.toThrow("Give pid or image, not both.");
   });
 
-  it("opens on a profile the program names, with no process of its own", () => {
-    const launcher = openLibrary({ profile: { stateRoot: "/tmp/isolated-profile", name: "isolated" } });
+  it("opens on a profile the program names, with no process of its own", async () => {
+    const stateRoot = path.resolve("/tmp/isolated-profile");
+    const launcher = openLibrary({ profile: { stateRoot, name: "isolated" } });
 
-    expect(launcher.describeConfig().profile).toMatchObject({
+    expect((await launcher.listImages()).imagesDir).toBe(path.join(stateRoot, "images"));
+    expect(configForSettings({ profile: { stateRoot, name: "isolated" } }).profile).toMatchObject({
       name: "isolated",
-      stateRoot: { path: "/tmp/isolated-profile" },
+      stateRoot,
     });
-    expect(launcher.describeConfig().imagesDir.path).toBe(path.resolve("/tmp/isolated-profile", "images"));
+  });
+
+  // Resolved once, from the working directory the program opened it in: the
+  // Launcher runs in its own directory, where a relative path means another
+  // place.
+  it("takes a relative stateRoot from the working directory", async () => {
+    const launcher = openLibrary({ profile: { stateRoot: "relative-profile" } });
+
+    expect((await launcher.listImages()).imagesDir).toBe(path.resolve("relative-profile", "images"));
+  });
+
+  it("finds an app bundle given with a trailing slash", () => {
+    const config = configForSettings(
+      { launcherDir: "/Applications/PharoLauncher.app/" },
+      { HOME: "/Users/ada" },
+      "darwin",
+    );
+
+    expect(config.launcherDir).toBe("/Applications/PharoLauncher.app");
+    expect(config.launcherVm).toBe("/Applications/PharoLauncher.app/Contents/MacOS/Pharo");
+  });
+
+  it("reads a backslash in a POSIX path as part of a name", () => {
+    const config = configForSettings({ profile: { stateRoot: "/tmp/a\\b" } }, { HOME: "/Users/ada" }, "darwin");
+
+    expect(config.profile?.stateRoot).toBe("/tmp/a\\b");
+    expect(config.profile?.imagesDir).toBe("/tmp/a\\b/images");
   });
 
   // They are the command's: a program that runs the library under a
   // command's environment gets what it asked for, not the command's profile.
-  it("reads none of the command's variables", () => {
+  it("reads none of the command's variables", async () => {
     vi.stubEnv("PHARO_LAUNCHER_MCP_PROFILE", "ambient");
     vi.stubEnv("PHARO_LAUNCHER_MCP_STATE_ROOT", "/tmp/ambient-profile");
+    vi.stubEnv("PHARO_LAUNCHER_SCRIPT", process.execPath);
     try {
-      expect(openLibrary().describeConfig().profile).toBeUndefined();
-      expect(openLibrary({ profile: { stateRoot: "/tmp/mine" } }).describeConfig().profile).toMatchObject({
+      expect(configForSettings({}).profile).toBeUndefined();
+      expect(getPharoLauncherConfigReport(configForSettings({})).launcherScript.source).not.toBe("env");
+      const mine = path.resolve("/tmp/mine");
+      expect(configForSettings({ profile: { stateRoot: mine } }).profile).toMatchObject({
         name: "default",
-        stateRoot: { path: "/tmp/mine" },
+        stateRoot: mine,
       });
+      expect((await openLibrary({ profile: { stateRoot: mine } }).listImages()).imagesDir).toBe(
+        path.join(mine, "images"),
+      );
     } finally {
       vi.unstubAllEnvs();
     }
@@ -182,9 +225,19 @@ function recordingRunner(
   };
 }
 
+// A call that runs a Launcher command turns any throw of its runner into a
+// failed result, so a runner that threw would go unnoticed when the answer
+// does not change: each call is kept, and a test that made one fails.
+const unexpectedLauncherCalls: string[] = [];
 const unusedRunner: LauncherCliRunner = async (args) => {
+  unexpectedLauncherCalls.push(args.join(" "));
   throw new Error(`the Launcher was called: ${args.join(" ")}`);
 };
+
+afterEach(() => {
+  const calls = unexpectedLauncherCalls.splice(0);
+  expect(calls, "a test that expects no Launcher call made one").toEqual([]);
+});
 
 const nextStable = "Pharo 14.0 - 64bit (next stable)";
 const nextStableUrl = "https://files.pharo.org/image/140/latest-64.zip";
@@ -231,17 +284,17 @@ describe("listImages and imageInfo", () => {
       ],
     });
     expect(await launcher.imageInfo({ image: "BASE" })).toEqual({
-      found: true,
+      kind: "image",
       imagesDir: path.resolve(profile.imagesDir),
       image: list.images[0],
     });
     expect(await launcher.imageInfo({ image: "pricing-backup" })).toEqual({
-      found: false,
+      kind: "not-an-image",
       imagesDir: path.resolve(profile.imagesDir),
       notAnImage: list.notImages[0],
     });
     expect(await launcher.imageInfo({ image: "releasecheck" })).toEqual({
-      found: false,
+      kind: "missing",
       imagesDir: path.resolve(profile.imagesDir),
     });
   });
@@ -288,7 +341,7 @@ describe("listImages and imageInfo", () => {
     expect(list.processListFailure).toBe("listing processes is not supported on freebsd");
     expect(list.images[0]).not.toHaveProperty("pids");
     expect(info).toMatchObject({
-      found: true,
+      kind: "image",
       processListFailure: "listing processes is not supported on freebsd",
     });
   });
@@ -331,15 +384,17 @@ describe("the process tools", () => {
     const byPid = await launcher.killProcess({ pid: 17880 });
     const byName = await launcher.killProcess({ image: "LatestMCP" });
 
-    expect(listed.data).toEqual([
-      {
-        pid: 71513,
-        commandLine: `/vms/140-x64/Pharo.app/Contents/MacOS/Pharo --headless ${stuck}`,
-        executablePath: "/vms/140-x64/Pharo.app/Contents/MacOS/Pharo",
-        imagePath: stuck,
-        imageName: "stuck",
-      },
-    ]);
+    expect(listed.data).toEqual({
+      processes: [
+        {
+          pid: 71513,
+          commandLine: `/vms/140-x64/Pharo.app/Contents/MacOS/Pharo --headless ${stuck}`,
+          executablePath: "/vms/140-x64/Pharo.app/Contents/MacOS/Pharo",
+          imagePath: stuck,
+          imageName: "stuck",
+        },
+      ],
+    });
     expect(byPid.ok).toBe(false);
     expect(byName.ok).toBe(false);
     expect(killed).toEqual([]);
@@ -359,8 +414,11 @@ describe("the process tools", () => {
       },
     });
 
-    expect(pids((await launcher.listProcesses()).data)).toEqual([71513]);
-    expect((await launcher.killProcess({ image: "LatestMCP" })).ok).toBe(false);
+    expect(pids((await launcher.listProcesses()).data?.processes)).toEqual([71513]);
+    expect(await launcher.killProcess({ image: "LatestMCP" })).toMatchObject({
+      ok: false,
+      failure: { kind: "no-such-process" },
+    });
     expect(await launcher.killProcess({ image: "stuck" })).toMatchObject({
       ok: true,
       data: { killed: [71513], failures: [] },
@@ -527,7 +585,7 @@ describe("createImage and copyImage", () => {
     expect(result).toMatchObject({
       ok: false,
       diagnostic: "Pharo Launcher made release-check but cannot open it: Cannot read meta-inf.ston.",
-      failure: { kind: "not-opened", message: "Cannot read meta-inf.ston" },
+      failure: { kind: "not-opened", diagnostic: "Cannot read meta-inf.ston" },
     });
     expect(result).not.toHaveProperty("data");
   });
@@ -557,7 +615,7 @@ describe("createImage and copyImage", () => {
       failure: {
         kind: "not-listed",
         directory: path.join(path.resolve(profile.imagesDir), "release-check"),
-        seconds: 30,
+        waitedMs: 30_000,
       },
     });
     expect(sleeps).toEqual(Array(30).fill(1_000));
@@ -596,7 +654,7 @@ describe("createImage and copyImage", () => {
         hasImage: true,
         hasChanges: false,
       },
-      seconds: 0,
+      waitedMs: 0,
     });
   });
 
@@ -692,6 +750,7 @@ describe("createImage and copyImage", () => {
 
   it("fails a copy whose image never appears", async () => {
     const profile = profileOnDisk();
+    writeImage(profile.imagesDir, "pricing");
     const { runner } = recordingRunner(() => exited(0));
     const launcher = openPharoLauncher({
       config: testConfig({ profile }),
@@ -722,14 +781,18 @@ describe("listTemplates", () => {
       "PhLLocalTemplate{#name:'mine'}]";
     const launcher = openPharoLauncher({ config: testConfig({ profile: profileOnDisk() }), runner: stdout(ston) });
 
-    expect((await launcher.listTemplates({ category: "Templates" })).data).toEqual([
-      { name: "Pharo 13.0 - 64bit (stable)", url: "https://files.pharo.org/image/130/latest-64.zip" },
-    ]);
-    expect((await launcher.listTemplates({ category: "Templates", includeLocal: true })).data).toEqual([
-      { name: "Pharo 14.0 - 64bit (next stable)", local: true },
-      { name: "Pharo 13.0 - 64bit (stable)", url: "https://files.pharo.org/image/130/latest-64.zip" },
-      { name: "mine", local: true },
-    ]);
+    expect((await launcher.listTemplates({ category: "Templates" })).data).toEqual({
+      templates: [
+        { name: "Pharo 13.0 - 64bit (stable)", url: "https://files.pharo.org/image/130/latest-64.zip" },
+      ],
+    });
+    expect((await launcher.listTemplates({ category: "Templates", includeLocal: true })).data).toEqual({
+      templates: [
+        { name: "Pharo 14.0 - 64bit (next stable)", local: true },
+        { name: "Pharo 13.0 - 64bit (stable)", url: "https://files.pharo.org/image/130/latest-64.zip" },
+        { name: "mine", local: true },
+      ],
+    });
   });
 });
 
@@ -751,8 +814,9 @@ describe("startImage", () => {
 
   // A VM there could not load its own modules, and would say a symbol is
   // missing from a file that is there.
-  it("refuses a profile too deep for its VM, as a ToolInputError of its own", async () => {
+  it("refuses a profile too deep for its VM, as an InvalidInputError of its own", async () => {
     const profile = profileOnDisk();
+    writeImage(profile.imagesDir, "release-check");
     const deep = {
       ...profile,
       vmsDir: path.join(profile.stateRoot, "v".repeat(launcherModulePathLimit)),
@@ -767,7 +831,7 @@ describe("startImage", () => {
       .catch((error: unknown) => error);
 
     expect(refusal).toBeInstanceOf(ProfileTooDeepError);
-    expect(refusal).toBeInstanceOf(ToolInputError);
+    expect(refusal).toBeInstanceOf(InvalidInputError);
     expect((refusal as Error).message).toContain(
       "The VM directory is too deep for Pharo to load its modules",
     );
@@ -820,33 +884,264 @@ describe("deleteImage and deleteLaunchLogs", () => {
     expect(taskLogs.filter((file) => fs.existsSync(file))).toEqual(taskLogs);
   });
 
-  it("deletes the logs of an image whose directory a caller removed itself, with no Launcher call", () => {
+  it("deletes the logs of an image whose directory a caller removed itself, with no Launcher call", async () => {
     const profile = profileOnDisk();
     const taskLogs = writeLogs(profile.logsDir, "task");
     const launcher = openPharoLauncher({ config: testConfig({ profile }), runner: unusedRunner });
 
-    launcher.deleteLaunchLogs({ image: "task" });
+    await launcher.deleteLaunchLogs({ image: "task" });
 
     expect(taskLogs.filter((file) => fs.existsSync(file))).toEqual([]);
   });
 
-  it("keeps the logs of an image the images directory still holds", () => {
+  it("keeps the logs of an image the images directory still holds", async () => {
     const profile = profileOnDisk();
     writeImage(profile.imagesDir, "task");
     const taskLogs = writeLogs(profile.logsDir, "task");
     const launcher = openPharoLauncher({ config: testConfig({ profile }), runner: unusedRunner });
 
-    launcher.deleteLaunchLogs({ image: "task" });
+    await launcher.deleteLaunchLogs({ image: "task" });
 
     expect(taskLogs.filter((file) => fs.existsSync(file))).toEqual(taskLogs);
   });
 
-  it("refuses a call that names no image", () => {
+  it("refuses a call that names no image", async () => {
     const launcher = openPharoLauncher({
       config: testConfig({ profile: profileOnDisk() }),
       runner: unusedRunner,
     });
 
-    expect(() => launcher.deleteLaunchLogs({} as { image: string })).toThrow(ToolInputError);
+    await expect(launcher.deleteLaunchLogs({} as { image: string })).rejects.toThrow(InvalidInputError);
+  });
+});
+
+describe("what the library refuses before running anything", () => {
+  function onProfile(running: string[] = []) {
+    const profile = profileOnDisk();
+    const launcher = openPharoLauncher({
+      config: testConfig({ profile }),
+      runner: unusedRunner,
+      nativeProcess: { platform: "darwin", runCommand: psRunner(running) },
+    });
+    return { profile, launcher };
+  }
+
+  it("a new name an image of the profile has, in any case", async () => {
+    const { profile, launcher } = onProfile();
+    writeImage(profile.imagesDir, "Pricing");
+    writeImage(profile.imagesDir, "base");
+
+    expect(await launcher.createImage({ image: "pricing", template: "Pharo 14.0 - 64bit" })).toMatchObject({
+      ok: false,
+      failure: { kind: "name-taken", image: "Pricing" },
+      diagnostic: `There is already an image Pricing in ${path.resolve(profile.imagesDir)}`,
+      action: "Pick another name, or delete that image first.",
+    });
+    expect(await launcher.copyImage({ image: "base", newImage: "PRICING" })).toMatchObject({
+      ok: false,
+      failure: { kind: "name-taken", image: "Pricing" },
+    });
+  });
+
+  it("an image the profile does not have, to copy or start", async () => {
+    const { profile, launcher } = onProfile();
+    writeImage(profile.imagesDir, "half", { changes: false });
+
+    expect(await launcher.copyImage({ image: "nowhere", newImage: "task" })).toMatchObject({
+      ok: false,
+      failure: { kind: "no-such-image", image: "nowhere" },
+      diagnostic: `There is no image nowhere in ${path.resolve(profile.imagesDir)}`,
+    });
+    const started = await launcher.startImage({ image: "half" });
+    expect(started).toMatchObject({
+      ok: false,
+      failure: { kind: "no-such-image", image: "half", notAnImage: { hasChanges: false } },
+    });
+    expect(started).not.toHaveProperty("command");
+  });
+
+  it("a delete of an image a VM runs, or of one it cannot tell", async () => {
+    const { profile, launcher } = onProfile();
+    const task = writeImage(profile.imagesDir, "task");
+    const running = openPharoLauncher({
+      config: testConfig({ profile }),
+      runner: unusedRunner,
+      nativeProcess: { platform: "darwin", runCommand: psRunner([`4242 /vms/140-x64/Pharo ${task}`]) },
+    });
+    const blind = openPharoLauncher({
+      config: testConfig({ profile }),
+      runner: unusedRunner,
+      nativeProcess: { platform: "freebsd" },
+    });
+
+    expect(await running.deleteImage({ image: "TASK" })).toMatchObject({
+      ok: false,
+      failure: { kind: "image-running", pids: [4242] },
+      diagnostic: "Image task runs as pid 4242",
+      action: "Stop it, then delete it.",
+    });
+    expect(await blind.deleteImage({ image: "task" })).toMatchObject({
+      ok: false,
+      failure: {
+        kind: "process-list-failed",
+        diagnostic: "listing processes is not supported on freebsd",
+      },
+    });
+    expect(await launcher.deleteImage({ image: "gone" })).toMatchObject({
+      ok: false,
+      failure: { kind: "no-such-image", image: "gone" },
+    });
+    expect(fs.existsSync(task)).toBe(true);
+  });
+
+  it("a kill when the process list fails", async () => {
+    const profile = profileOnDisk();
+    writeImage(profile.imagesDir, "task");
+    const blind = openPharoLauncher({
+      config: testConfig({ profile }),
+      runner: unusedRunner,
+      nativeProcess: { platform: "freebsd" },
+    });
+
+    expect(await blind.killProcess({ image: "task" })).toMatchObject({
+      ok: false,
+      failure: {
+        kind: "process-list-failed",
+        diagnostic: "listing processes is not supported on freebsd",
+      },
+    });
+  });
+
+  it("a delete of a running image outside a profile too", async () => {
+    const userFilesDir = temporary("pharo-launcher-mcp-user-files-");
+    const task = writeImage(path.join(userFilesDir, "images"), "task");
+    const launcher = openPharoLauncher({
+      config: testConfig({ userFilesDir }),
+      runner: unusedRunner,
+      nativeProcess: { platform: "linux", runCommand: psRunner([`77 /vms/pharo ${task}`]) },
+    });
+
+    expect(await launcher.deleteImage({ image: "task" })).toMatchObject({
+      ok: false,
+      failure: { kind: "image-running", pids: [77] },
+    });
+  });
+
+  it.each([
+    ["createImage", { image: "../escape", template: "Pharo 14.0 - 64bit" }, "image"],
+    ["copyImage", { image: "base", newImage: "a/b" }, "newImage"],
+    ["startImage", { image: ".." }, "image"],
+    ["deleteImage", { image: "C:\\Users\\me\\Pharo\\images\\x" }, "image"],
+    ["killProcess", { image: "x/../y" }, "image"],
+    ["imageInfo", { image: "/abs" }, "image"],
+  ] as const)("%s of a name that is a path", async (method, input, key) => {
+    const { launcher } = onProfile();
+    const call = launcher[method] as (input: unknown) => Promise<unknown>;
+
+    await expect(call(input)).rejects.toThrow(`${key} must be an image name, not a path`);
+  });
+
+  it.each([
+    ["createImage", { image: ".hidden", template: "Pharo 14.0 - 64bit" }, "image"],
+    ["copyImage", { image: "base", newImage: ".copy" }, "newImage"],
+    ["deleteImage", { image: ".hidden" }, "image"],
+  ] as const)("%s of a name starting with a dot, which no listing shows", async (method, input, key) => {
+    const { launcher } = onProfile();
+    const call = launcher[method] as (input: unknown) => Promise<unknown>;
+
+    await expect(call(input)).rejects.toThrow(`${key} must be an image name, which never starts with a dot`);
+  });
+
+  it("a display mode outside a profile, which the Launcher's own launch has not", async () => {
+    const launcher = openPharoLauncher({
+      config: testConfig({ userFilesDir: temporary("pharo-launcher-mcp-user-files-") }),
+      runner: unusedRunner,
+    });
+
+    await expect(launcher.startImage({ image: "task", displayMode: "interactive" })).rejects.toThrow(
+      InvalidInputError,
+    );
+  });
+
+  it("takes an argument given as null as left out", async () => {
+    const profile = profileOnDisk();
+    const { runner, calls } = recordingRunner(() => exited(0, "OrderedCollection[]"));
+    const launcher = openPharoLauncher({ config: testConfig({ profile }), runner });
+
+    const result = await launcher.listTemplates({ category: null } as unknown as { category?: string });
+
+    expect(result).toMatchObject({ ok: true, data: { templates: [] } });
+    expect(calls).toEqual([["template", "list", "--ston"]]);
+  });
+
+  it("takes a null display mode outside a profile as left out", async () => {
+    const { runner, calls } = recordingRunner(() => exited(0));
+    const launcher = openPharoLauncher({
+      config: testConfig({ userFilesDir: temporary("pharo-launcher-mcp-user-files-") }),
+      runner,
+    });
+
+    await launcher.startImage({ image: "task", displayMode: null } as unknown as StartImageInput);
+
+    expect(calls).toEqual([["image", "launch", "task"]]);
+  });
+});
+
+describe("what a failure says", () => {
+  it("says no templates yet when a profile has none and the Launcher knows no category", async () => {
+    const profile = profileOnDisk();
+    const launcher = openPharoLauncher({
+      config: testConfig({ profile }),
+      runner: async () =>
+        exited(1, "", "NotFound: Official distributions not found, please enter a correct category name"),
+    });
+
+    expect(await launcher.createImage({ image: "task", template: "Pharo 14.0 - 64bit" })).toMatchObject({
+      ok: false,
+      failure: { kind: "no-templates" },
+      diagnostic: "This profile has no templates yet",
+      action: "Update the templates first.",
+    });
+    fs.mkdirSync(profile.templateSourcesDir, { recursive: true });
+    fs.writeFileSync(path.join(profile.templateSourcesDir, "sources.list"), "OrderedCollection [ ]");
+    expect((await launcher.listTemplates({})).failure).toEqual({ kind: "unknown-category" });
+  });
+
+  it("says how a command ended that wrote nothing", async () => {
+    const launcher = openPharoLauncher({
+      config: testConfig({ userFilesDir: temporary("pharo-launcher-mcp-user-files-") }),
+      runner: async () => exited(3),
+    });
+
+    expect(await launcher.listTemplateCategories()).toMatchObject({
+      ok: false,
+      diagnostic: "it exited with 3",
+    });
+  });
+
+  it("says nothing failed of a create that outlived the call but made its image", async () => {
+    const profile = profileOnDisk();
+    const launcher = openPharoLauncher({
+      config: testConfig({ profile }),
+      runner: async (args) => {
+        if (args[1] === "create") {
+          writeImage(profile.imagesDir, "task");
+          return {
+            exitCode: null,
+            stdout: "Creating the local Pharo image...",
+            stderr: "",
+            durationMs: 30_000,
+            timedOut: true,
+          };
+        }
+        return exited(0);
+      },
+      imageCopyVerificationTimeoutMs: 0,
+    });
+
+    const result = await launcher.createImage({ image: "task", template: "Pharo 14.0 - 64bit" });
+
+    expect(result).toMatchObject({ ok: true, command: { timedOut: true }, data: { image: { name: "task" } } });
+    expect(result).not.toHaveProperty("diagnostic");
   });
 });

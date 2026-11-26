@@ -152,10 +152,10 @@ async function main() {
   // Asked of the package rather than reimplemented, and asked through the
   // discovery the command uses, its variables included: `defaultLauncherDir`
   // answers ~/Library/Application Support/Pharo Launcher on macOS, where a
-  // standard install is /Applications/PharoLauncher.app, and describeConfig
-  // is what resolves that.
-  const { openLauncher } = await import(path.join(repoRoot, "dist", "launcher.js"));
-  const discovered = openLauncher().describeConfig();
+  // standard install is /Applications/PharoLauncher.app, and the config
+  // report is what resolves that.
+  const { getPharoLauncherConfigReport } = await import(path.join(repoRoot, "dist", "discovery.js"));
+  const discovered = getPharoLauncherConfigReport();
 
   const stateRoot = path.resolve(
     options.stateRoot ??

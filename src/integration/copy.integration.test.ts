@@ -58,8 +58,8 @@ describe("PharoLauncher image copy integration", () => {
       // Listed and opened on the first look: no poll for the 30 s.
       const startedAt = Date.now();
       const created = expectOk("image create", await launcher.createImage(createInput(image)));
-      expect(Date.now() - startedAt).toBeLessThan(created.command.durationMs + verificationTimeoutMs);
-      expect(created.command.timedOut).toBe(false);
+      expect(Date.now() - startedAt).toBeLessThan(created.command!.durationMs + verificationTimeoutMs);
+      expect(created.command!.timedOut).toBe(false);
       expect(created.data).toMatchObject({
         image: {
           name: image,
@@ -99,7 +99,7 @@ describe("PharoLauncher image copy integration", () => {
       expect(filtered.images.map((image) => image.name)).toEqual([image, longerName]);
 
       const info = await launcher.imageInfo({ image: copiedImageName });
-      expect(info).toMatchObject({ found: true, image: { name: copiedImageName } });
+      expect(info).toMatchObject({ kind: "image", image: { name: copiedImageName } });
     },
     900_000,
   );

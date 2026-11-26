@@ -20,11 +20,8 @@ import {
 } from "./launchLogs.js";
 import { ensureLauncherPatches } from "./launcherPatches.js";
 import { resolveLauncherScript } from "./launcherScript.js";
-import type {
-  LauncherImage,
-  LauncherLaunchReport,
-  LauncherProcess,
-} from "./models.js";
+import type { LauncherImage, LauncherLaunchReport } from "./models.js";
+import type { NativeProcess } from "./processTools.js";
 import { launcherMessage, sentenceWithMessage } from "./resultNormalizer.js";
 import { compactTokenText } from "./textTokens.js";
 import {
@@ -50,9 +47,11 @@ export interface LauncherCliResult {
   timedOut: boolean;
   timeoutReason?: string;
   /** The processes a native process list saw, or a kill aimed at. */
-  processes?: LauncherProcess[];
+  processes?: NativeProcess[];
   /** The pids a kill killed, and those it could not. */
-  kill?: { killed: number[]; failures: Array<{ pid: number; message: string }> };
+  kill?: { killed: number[]; failures: Array<{ pid: number; diagnostic: string }> };
+  /** Why a native process command did nothing: no process matched, or the list failed. */
+  processFailure?: "no-match" | "list-failed";
   /** What an image start ran, once it ran something. */
   launch?: LauncherLaunchReport;
 }
@@ -430,7 +429,7 @@ export function buildLauncherCliInvocation(
   const env = launcherEnvironment(config);
   const launcherScript =
     config.launcherScript ??
-    (options.resolveScript ?? (() => resolveLauncherScript({})))(config);
+    (options.resolveScript ?? (() => resolveLauncherScript({ env: {} })))(config);
 
   if (launcherScript) {
     const commandAndArgs = scriptCommandAndArgs(
@@ -503,10 +502,20 @@ function validateInvocationSetup(
   }
 }
 
+/**
+ * What a command that outlives the call's timeout is left to: a VM the call
+ * runs itself is stopped; a Launcher command goes on, as a create still
+ * downloading its template has an image to make, and the call answers
+ * without it. Its output holds the pipes, so waiting for them would wait for
+ * the command however long it runs.
+ */
+type OnTimeout = "stop" | "leave";
+
 function runInvocation(
   invocation: LauncherCliInvocation,
   timeoutMs: number,
   startTime: number,
+  onTimeout: OnTimeout = "leave",
 ): Promise<LauncherCliResult> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
@@ -553,7 +562,19 @@ function runInvocation(
     const timeout = setTimeout(() => {
       timedOut = true;
       timeoutReason = `PharoLauncher CLI timed out after ${timeoutMs}ms`;
-      child.kill();
+      if (onTimeout === "stop") {
+        child.kill();
+        return;
+      }
+      // Its output is still read, and dropped, so it never blocks writing.
+      resolve({
+        exitCode: null,
+        stdout,
+        stderr,
+        durationMs: Date.now() - startTime,
+        timedOut,
+        timeoutReason,
+      });
     }, timeoutMs);
 
     stdoutStream.setEncoding("utf8");
@@ -1044,7 +1065,7 @@ async function runProfileScopedImageLaunch(
     return runDetachedProfileImageLaunch(plan, config, startTime);
   }
 
-  const result = await runInvocation(plan.invocation, timeoutMs, startTime);
+  const result = await runInvocation(plan.invocation, timeoutMs, startTime, "stop");
   return {
     ...result,
     ...(ran(result)
