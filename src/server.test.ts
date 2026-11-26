@@ -9,7 +9,7 @@ import type { LauncherCliRunner } from "./discovery.js";
 import type { LauncherCliResult } from "./launcherCli.js";
 import type { LauncherLaunchReport } from "./models.js";
 import type { CallToolOptions } from "./launcher.js";
-import { callTool, createServer, toolNames } from "./server.js";
+import { callTool as serverCallTool, createServer, toolNames } from "./server.js";
 import {
   cliMetaInf,
   psRunner,
@@ -93,6 +93,16 @@ function recording(answer: (args: readonly string[]) => LauncherCliResult = () =
 const unusedRunner: LauncherCliRunner = async (args) => {
   throw new Error(`the Launcher was called: ${args.join(" ")}`);
 };
+
+/**
+ * A tool on a host where no VM runs, unless a test says what runs: the host's
+ * own process list is not the test's, and on Windows it takes seconds.
+ */
+function callTool(
+  ...[name, args, options]: Parameters<typeof serverCallTool>
+): ReturnType<typeof serverCallTool> {
+  return serverCallTool(name, args, { nativeProcess: processes(), ...options });
+}
 
 function processes(lines: readonly string[] = [], extra: CallToolOptions["nativeProcess"] = {}) {
   return { platform: "linux" as const, runCommand: psRunner(lines), ...extra };
