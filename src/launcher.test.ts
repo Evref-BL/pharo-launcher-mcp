@@ -7,7 +7,7 @@ import type { LauncherCliResult } from "./launcherCli.js";
 import { InvalidInputError, ProfileTooDeepError } from "./commandCatalog.js";
 import { configForSettings } from "./config.js";
 import { getPharoLauncherConfigReport } from "./discovery.js";
-import { openLauncher as openPharoLauncher, type PharoLauncher, type StartImageInput } from "./launcher.js";
+import { openLauncher, type PharoLauncher, type StartImageInput } from "./launcher.js";
 import * as library from "./library.js";
 import { openPharoLauncher as openLibrary } from "./library.js";
 import { launcherModulePathLimit } from "./platform.js";
@@ -22,6 +22,14 @@ import {
   testConfig,
   writeImage,
 } from "./testing/images.js";
+
+/**
+ * The library on a host where no VM runs, unless a test says what runs: the
+ * host's own process list is not the test's, and on Windows it takes seconds.
+ */
+function openPharoLauncher(options: Parameters<typeof openLauncher>[0] = {}): PharoLauncher {
+  return openLauncher({ nativeProcess: { platform: "linux", runCommand: psRunner([]) }, ...options });
+}
 
 function stdout(text: string): LauncherCliRunner {
   return async () => ({
