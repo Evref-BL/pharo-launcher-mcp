@@ -1,8 +1,10 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/client";
+import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PharoLauncherConfig, PharoLauncherProfileConfig } from "./config.js";
 import type { LauncherCliRunner } from "./discovery.js";
@@ -1791,5 +1793,43 @@ describe("arguments", () => {
 
     expect(result.isError).toBe(true);
     expect(text(result)).toBe(`There is no tool ${name}.`);
+  });
+});
+
+describe("the stdio server", () => {
+  it("serves a host that speaks 2026-07-28: it discovers the server and lists its tools without a handshake", async () => {
+    // Built by `npm run check` before the tests run.
+    const entry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+    const child = spawn(process.execPath, [entry], { stdio: ["pipe", "pipe", "ignore"] });
+    const answers = new Map<number, (message: Record<string, unknown>) => void>();
+    let buffer = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      buffer += chunk;
+      let end: number;
+      while ((end = buffer.indexOf("\n")) >= 0) {
+        const message = JSON.parse(buffer.slice(0, end)) as { id: number };
+        buffer = buffer.slice(end + 1);
+        answers.get(message.id)?.(message);
+      }
+    });
+    const _meta = {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientInfo": { name: "probe", version: "0.0.0" },
+      "io.modelcontextprotocol/clientCapabilities": {},
+    };
+    const request = (id: number, method: string) =>
+      new Promise<Record<string, any>>((resolve) => {
+        answers.set(id, resolve);
+        child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params: { _meta } })}\n`);
+      });
+    try {
+      const discovered = await request(1, "server/discover");
+      expect(discovered.result.supportedVersions).toContain("2026-07-28");
+      const listed = await request(2, "tools/list");
+      expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(toolNames);
+    } finally {
+      child.stdin.end();
+      child.kill();
+    }
   });
 });

@@ -1,10 +1,6 @@
 import { createRequire } from "node:module";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { Server, type Tool } from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { launcherCommandTools, ProfileTooDeepError, InvalidInputError } from "./commandCatalog.js";
 import { loadPharoLauncherConfig } from "./config.js";
 import {
@@ -132,20 +128,20 @@ export function createServer(): Server {
     },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...tools],
+  // The tool table is JSON, which its `as const` and catalog types do not say.
+  server.setRequestHandler("tools/list", async () => ({
+    tools: [...tools] as Tool[],
   }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) =>
+  server.setRequestHandler("tools/call", async (request) =>
     callTool(request.params.name, request.params.arguments ?? {}),
   );
 
   return server;
 }
 
+/** Serves over stdio, in the protocol era the host's first message asks for. */
 export async function startStdioServer(): Promise<void> {
-  const server = createServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  serveStdio(() => createServer());
 }
 
